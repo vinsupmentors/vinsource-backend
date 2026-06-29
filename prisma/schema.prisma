@@ -1,0 +1,2424 @@
+// Prisma Schema — Enterprise HRMS
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  HR
+  MANAGER
+  EMPLOYEE
+  STUDENT
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  ON_PROBATION
+  RESIGNED
+  TERMINATED
+  ON_LEAVE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  HOLIDAY
+  WEEKEND
+  ON_LEAVE
+}
+
+enum CheckInMethod {
+  WEB
+  GPS
+  QR
+  BIOMETRIC
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  ESCALATED
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  EARNED
+  MATERNITY
+  PATERNITY
+  COMPENSATORY
+  LOSS_OF_PAY
+  UNPAID
+}
+
+enum PayrollStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  LOCKED
+  PAID
+}
+
+enum NotificationType {
+  LEAVE_REQUEST
+  LEAVE_APPROVED
+  LEAVE_REJECTED
+  ATTENDANCE_CORRECTION
+  EXPENSE_CLAIM
+  NEW_EMPLOYEE
+  RESIGNATION
+  ONBOARDING_SUBMITTED
+  ONBOARDING_APPROVED
+  ONBOARDING_DOCUMENT_READY
+  RESIGNATION_SUBMITTED
+  RESIGNATION_APPROVED
+  EXIT_CLEARANCE_SUBMITTED
+  EXIT_CLEARANCE_COMPLETED
+  PAYROLL_GENERATED
+  DOCUMENT_EXPIRY
+  PERFORMANCE_REVIEW
+  TRAINING_ASSIGNED
+  BIRTHDAY
+  ANNIVERSARY
+  SYSTEM
+  PROJECT_RELEASED
+  FEEDBACK_FORM_RELEASED
+  TEST_ACTIVATED
+  DEADLINE_REMINDER
+  MODULE_FEEDBACK_GIVEN
+}
+
+enum NotificationChannel {
+  BELL
+  EMAIL
+  POPUP
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  UNDER_MAINTENANCE
+  RETIRED
+}
+
+enum DocumentType {
+  RESUME
+  AADHAAR
+  PAN
+  PASSPORT
+  DEGREE
+  DEGREE_PG
+  MARKSHEET_10
+  MARKSHEET_12
+  PAYSLIP
+  OFFER_LETTER
+  CONTRACT
+  SALARY_REVISION
+  OTHER
+}
+
+enum RecruitmentStatus {
+  OPEN
+  IN_PROGRESS
+  FILLED
+  CANCELLED
+  ON_HOLD
+}
+
+enum CandidateStatus {
+  APPLIED
+  SCREENING
+  INTERVIEW_SCHEDULED
+  INTERVIEWED
+  OFFER_SENT
+  OFFER_ACCEPTED
+  OFFER_REJECTED
+  HIRED
+  REJECTED
+}
+
+enum OnboardingStatus {
+  PENDING
+  ACCOUNT_CREATED
+  PROFILE_COMPLETE
+  AWAITING_APPROVAL
+  COMPLETED
+  REJECTED
+}
+
+enum OnboardingDocStatus {
+  PENDING
+  SIGNED
+  DECLINED
+}
+
+enum ResignationStatus {
+  PENDING
+  MANAGER_APPROVED
+  HR_APPROVED
+  BOTH_APPROVED
+  REJECTED
+}
+
+enum ExitClearanceStatus {
+  PENDING
+  MANAGER_CLEARED
+  HR_CLEARED
+  COMPLETED
+  REJECTED
+}
+
+// ─── MODULE ACCESS / MASTER CONTROL ──────────────────────────────────────────
+
+enum ModuleName {
+  SALES
+  FINANCE_SALES
+  FINANCE_ADMIN
+  ADMIN
+  HR
+  PRODUCTION_TRAINING
+  PLACEMENTS
+  DIGITAL_MARKETING
+}
+
+enum AccessLevel {
+  NONE
+  VIEW
+  EDIT
+  ADMIN
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  DEMO_SCHEDULED
+  DEMO_DONE
+  NEGOTIATION
+  ENROLLED
+  LOST
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  CARD
+  NET_BANKING
+  CHEQUE
+  OTHER
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum BatchStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+enum DriveStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+// ─── STUDENT ACADEMY ──────────────────────────────────────────────────────────
+
+enum StudentTrack {
+  JRP // Job Readiness Program — non-placement, course only
+  IOP // Interview Opportunities — placement-driven
+  PAP // Placement Assurance Program — placement-driven
+}
+
+enum StudentStatus {
+  ENROLLED
+  ONBOARDED
+  ACTIVE
+  INACTIVE // attendance % dropped below 60 — auto-set/cleared by the daily attendance sync job
+  COMPLETED
+  IN_PLACEMENT // pushed into the placement pool by the Production Manager (sub-batch push)
+  PLACED
+  BATCH_TRANSFER
+}
+
+enum BatchTiming {
+  MORNING
+  AFTERNOON
+  EVENING
+}
+
+enum DayPattern {
+  MON_SAT
+  SAT_SUN
+  SUNDAY_ONLY
+}
+
+enum DeliveryMode {
+  ONLINE
+  OFFLINE
+  HYBRID
+}
+
+enum StudentAttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+}
+
+enum BatchEnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  DROPPED
+  ON_HOLD
+}
+
+enum InterviewOutcome {
+  SCHEDULED
+  SELECTED
+  REJECTED
+  NO_SHOW
+  PENDING
+}
+
+enum CampaignStatus {
+  PLANNED
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+// ─── CORE ─────────────────────────────────────────────────────────────────────
+
+model Company {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  logo        String?
+  address     String?
+  email       String?
+  phone       String?
+  website     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branches     Branch[]
+  departments  Department[]
+  employees    Employee[]
+  payrolls     Payroll[]
+  leaveTypes   CompanyLeaveType[]
+  settings     CompanySetting[]
+}
+
+model Branch {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  code      String
+  address   String?
+  city      String?
+  state     String?
+  country   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  employees Employee[]
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  companyId   String
+  name        String
+  code        String
+  description String?
+  headId      String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company      @relation(fields: [companyId], references: [id])
+  employees   Employee[]
+  tickets     HelpDeskTicket[]
+  moduleAccessDefaults DepartmentModuleAccess[]
+}
+
+model Designation {
+  id          String   @id @default(uuid())
+  name        String
+  code        String
+  level       Int      @default(1)
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employees Employee[]
+}
+
+// ─── USERS & EMPLOYEES ────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  password     String
+  role         Role     @default(EMPLOYEE)
+  isActive     Boolean  @default(true)
+  mfaEnabled   Boolean  @default(false)
+  mfaSecret    String?
+  lastLoginAt  DateTime?
+  lastLoginIp  String?
+  canManageAccess Boolean @default(false) // Master Control — can grant/revoke module access for ANY employee, regardless of own department/designation
+  mustChangePassword Boolean @default(false) // forces a password reset (+ MIS completion for students) on next login
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  employee      Employee?
+  sessions      UserSession[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+  notificationLogs NotificationLog[]
+  passwordLogs  PasswordLog[]
+  moduleAccessGrants    UserModuleAccess[] @relation("ModuleAccessTarget")
+  moduleAccessGrantedBy UserModuleAccess[] @relation("ModuleAccessGrantedBy")
+  student               Student?
+}
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique @db.VarChar(512)
+  refreshToken String   @unique @db.VarChar(512)
+  device       String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Employee {
+  id              String         @id @default(uuid())
+  userId          String         @unique
+  companyId       String
+  branchId        String?
+  departmentId    String?
+  designationId   String?
+  managerId       String?
+  employeeCode    String         @unique
+  firstName       String
+  lastName        String
+  middleName      String?
+  email           String
+  phone           String?
+  dateOfBirth     DateTime?
+  gender          Gender?
+  maritalStatus   MaritalStatus?
+  bloodGroup      String?
+  profilePhoto    String?
+  status          EmployeeStatus @default(ACTIVE)
+  joiningDate     DateTime
+  confirmationDate DateTime?
+  probationEndDate DateTime?
+  exitDate        DateTime?
+  exitReason      String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user           User         @relation(fields: [userId], references: [id])
+  company        Company      @relation(fields: [companyId], references: [id])
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  department     Department?  @relation(fields: [departmentId], references: [id])
+  designation    Designation? @relation(fields: [designationId], references: [id])
+  manager        Employee?    @relation("ManagerToEmployee", fields: [managerId], references: [id])
+  subordinates   Employee[]   @relation("ManagerToEmployee")
+
+  address          EmployeeAddress?
+  bankDetails      BankDetail[]
+  emergencyContacts EmergencyContact[]
+  education        Education[]
+  experience       WorkExperience[]
+  certifications   Certification[]
+  skills           EmployeeSkill[]
+  documents        Document[]
+  attendances      Attendance[]
+  leaveRequests    LeaveRequest[]
+  leaveBalances    LeaveBalance[]
+  payslips         Payslip[]
+  assets           AssetAssignment[]
+  tickets          HelpDeskTicket[]
+  performanceGoals PerformanceGoal[]
+  enrollments      CourseEnrollment[]
+  salaryStructure  SalaryStructure?
+  compOffRequests  CompOffRequest[] @relation("CompOffEmployee")
+  compOffApprovals CompOffRequest[] @relation("CompOffManager")
+  permissions      Permission[]     @relation("PermEmp")
+  permApprovals    Permission[]     @relation("PermMgr")
+  attRegRequests   AttendanceRegularization[] @relation("AttRegEmp")
+  attRegApprovals  AttendanceRegularization[] @relation("AttRegMgr")
+  onboarding       OnboardingRequest? @relation("OnboardingEmployee")
+  resignations     ResignationRequest[]
+
+  // CRM modules
+  assignedLeads     Lead[]              @relation("LeadAssignee")
+  demosConducted    Demo[]              @relation("DemoConductor")
+  feeCollections    FeeCollection[]     @relation("FeeCollector")
+  expensesRequested AdminExpense[]      @relation("ExpenseRequester")
+  expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
+  hoFundsRecorded   HOFundReceipt[]     @relation("HOFundRecorder")
+  vendorsCreated    Vendor[]            @relation("VendorCreator")
+  recurringTemplatesCreated RecurringExpenseTemplate[] @relation("RecurringTemplateCreator")
+  drivesOrganized   PlacementDrive[]    @relation("DriveOrganizer")
+  campaignsOwned    Campaign[]          @relation("CampaignOwner")
+  campaignsClosed      Campaign[]            @relation("CampaignClosedBy")
+  campaignRecharges    CampaignRecharge[]    @relation("CampaignRechargeBy")
+  campaignDailyReports CampaignDailyReport[] @relation("CampaignReportBy")
+
+  // Student Academy
+  studentsCreated      Student[]            @relation("StudentCreator")
+  batchesCreated       Batch[]              @relation("BatchCreator")
+  trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
+  attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
+  kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
+  studentFeedbacksGiven TrainerFeedback[]   @relation("FeedbackTrainer")
+  moduleFeedbacksGiven  ModuleFeedback[]    @relation("ModuleFeedbackTrainer")
+
+  // Projects / Feedback Forms / Online Tests
+  projectsCreated        Project[]             @relation("ProjectCreator")
+  projectsReleased       ProjectRelease[]      @relation("ProjectReleaser")
+  projectSubmissionsReviewed ProjectSubmission[] @relation("ProjectReviewer")
+  feedbackFormsCreated   FeedbackForm[]        @relation("FeedbackFormCreator")
+  feedbackFormsReleased  FeedbackFormRelease[] @relation("FeedbackFormReleaser")
+  onlineTestsCreated     OnlineTest[]          @relation("OnlineTestCreator")
+  onlineTestsActivated   OnlineTestRelease[]   @relation("OnlineTestActivator")
+  portfoliosReviewed     StudentPortfolio[]    @relation("PortfolioReviewer")
+
+  // Placements
+  interviewFeedbacksGiven PlacementInterview[]      @relation("InterviewFeedbackGiver")
+  driveCandidatesAdded    PlacementDriveCandidate[] @relation("DriveCandidateAdder")
+  softskillSessionsRun    SoftskillSession[]        @relation("SoftskillTrainer")
+}
+
+model EmployeeAddress {
+  id         String  @id @default(uuid())
+  employeeId String  @unique
+  current    String?
+  permanent  String?
+  city       String?
+  state      String?
+  country    String?
+  pincode    String?
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model BankDetail {
+  id            String  @id @default(uuid())
+  employeeId    String
+  bankName      String
+  accountNumber String
+  ifscCode      String
+  accountType   String?
+  isPrimary     Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model EmergencyContact {
+  id           String  @id @default(uuid())
+  employeeId   String
+  name         String
+  relationship String
+  phone        String
+  email        String?
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model Education {
+  id           String  @id @default(uuid())
+  employeeId   String
+  degree       String
+  institution  String
+  fieldOfStudy String?
+  startYear    Int?
+  endYear      Int?
+  grade        String?
+  createdAt    DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model WorkExperience {
+  id          String   @id @default(uuid())
+  employeeId  String
+  company     String
+  designation String
+  startDate   DateTime
+  endDate     DateTime?
+  isCurrent   Boolean  @default(false)
+  description String?
+  createdAt   DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model Certification {
+  id             String   @id @default(uuid())
+  employeeId     String
+  name           String
+  issuer         String
+  issueDate      DateTime?
+  expiryDate     DateTime?
+  credentialId   String?
+  createdAt      DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model Skill {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  category    String?
+  createdAt   DateTime @default(now())
+
+  employees EmployeeSkill[]
+}
+
+model EmployeeSkill {
+  id         String @id @default(uuid())
+  employeeId String
+  skillId    String
+  level      Int    @default(1) // 1-5
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+  skill    Skill    @relation(fields: [skillId], references: [id])
+
+  @@unique([employeeId, skillId])
+}
+
+// ─── SALARY STRUCTURE ────────────────────────────────────────────────────────
+
+model SalaryStructure {
+  id               String   @id @default(uuid())
+  employeeId       String   @unique
+  effectiveDate    DateTime @default(now())
+  netSalary        Float    // Monthly take-home entered by HR
+  grossSalary      Float    // Auto-calculated from net
+  basic            Float
+  hra              Float
+  conveyance       Float    @default(1600)
+  medicalAllowance Float    @default(1250)
+  specialAllowance Float    @default(0)
+  hasPf            Boolean  @default(false)
+  pf               Float
+  esi              Float    @default(0)
+  professionalTax  Float    @default(200)
+  tds              Float    @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+// ─── ATTENDANCE ───────────────────────────────────────────────────────────────
+
+model Shift {
+  id           String   @id @default(uuid())
+  name         String
+  startTime    String   // "09:00"
+  endTime      String   // "18:00"
+  breakMinutes Int      @default(60)
+  isRotational Boolean  @default(false)
+  gracePeriod  Int      @default(15) // minutes
+  createdAt    DateTime @default(now())
+
+  attendances Attendance[]
+}
+
+model Attendance {
+  id             String           @id @default(uuid())
+  employeeId     String
+  shiftId        String?
+  date           DateTime         @db.Date
+  checkIn        DateTime?
+  checkOut       DateTime?
+  checkInMethod  CheckInMethod?
+  checkOutMethod CheckInMethod?
+  checkInLat     Float?
+  checkInLng     Float?
+  checkInIp      String?
+  checkOutIp     String?
+  locationType   String           @default("OFFICE")  // OFFICE | WFH | FIELD
+  wfhStatus      String?                               // PENDING | APPROVED | REJECTED
+  wfhNote        String?
+  wfhApprovedById String?
+  wfhApprovedAt  DateTime?
+  status         AttendanceStatus @default(ABSENT)
+  workHours      Float?
+  overtimeHours  Float?
+  breakMinutes   Int?
+  isRegularized  Boolean          @default(false)
+  regularizeNote String?
+  approvedBy     String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  employee Employee            @relation(fields: [employeeId], references: [id])
+  shift    Shift?              @relation(fields: [shiftId], references: [id])
+  sessions AttendanceSession[]
+
+  @@unique([employeeId, date])
+}
+
+model AttendanceSession {
+  id            String     @id @default(uuid())
+  attendanceId  String
+  checkIn       DateTime
+  checkOut      DateTime?
+  durationHours Float?
+  createdAt     DateTime   @default(now())
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id])
+}
+
+// ─── LEAVE ────────────────────────────────────────────────────────────────────
+
+model CompanyLeaveType {
+  id            String    @id @default(uuid())
+  companyId     String
+  type          LeaveType
+  name          String
+  maxDaysPerYear Int      @default(12)
+  carryForward  Boolean   @default(false)
+  maxCarryForward Int?
+  encashable    Boolean   @default(false)
+  isPaid        Boolean   @default(true)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+
+  company       Company        @relation(fields: [companyId], references: [id])
+  leaveBalances LeaveBalance[]
+  leaveRequests LeaveRequest[]
+}
+
+model LeaveBalance {
+  id              String  @id @default(uuid())
+  employeeId      String
+  leaveTypeId     String
+  year            Int
+  totalDays       Float   @default(0)
+  usedDays        Float   @default(0)
+  pendingDays     Float   @default(0)
+  carriedForward  Float   @default(0)
+  encashed        Float   @default(0)
+
+  employee   Employee         @relation(fields: [employeeId], references: [id])
+  leaveType  CompanyLeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([employeeId, leaveTypeId, year])
+}
+
+model LeaveRequest {
+  id              String      @id @default(uuid())
+  employeeId      String
+  leaveTypeId     String
+  startDate       DateTime    @db.Date
+  endDate         DateTime    @db.Date
+  days            Float
+  reason          String?
+  status          LeaveStatus @default(PENDING)
+  managerId       String?
+  managerAction   LeaveStatus?
+  managerNote     String?
+  managerActedAt  DateTime?
+  hrId            String?
+  hrAction        LeaveStatus?
+  hrNote          String?
+  hrActedAt       DateTime?
+  escalatedAt     DateTime?
+  isHalfDay       Boolean     @default(false)
+  halfDaySession  String?     // "MORNING" | "AFTERNOON"
+  documents       String?     // comma-separated S3 keys
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  employee  Employee         @relation(fields: [employeeId], references: [id])
+  leaveType CompanyLeaveType @relation(fields: [leaveTypeId], references: [id])
+}
+
+// ─── PAYROLL ──────────────────────────────────────────────────────────────────
+
+model Payroll {
+  id          String        @id @default(uuid())
+  companyId   String
+  month       Int
+  year        Int
+  status      PayrollStatus @default(DRAFT)
+  processedBy String?
+  approvedBy  String?
+  lockedAt    DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  company  Company    @relation(fields: [companyId], references: [id])
+  payslips Payslip[]
+
+  @@unique([companyId, month, year])
+}
+
+model Payslip {
+  id               String   @id @default(uuid())
+  payrollId        String
+  employeeId       String
+  month            Int
+  year             Int
+  basic            Float    @default(0)
+  hra              Float    @default(0)
+  conveyance       Float    @default(0)
+  medicalAllowance Float    @default(0)
+  specialAllowance Float    @default(0)
+  bonus            Float    @default(0)
+  incentives       Float    @default(0)
+  grossSalary      Float    @default(0)
+  pf               Float    @default(0)
+  esi              Float    @default(0)
+  professionalTax  Float    @default(0)
+  tds              Float    @default(0)
+  loanRecovery     Float    @default(0)
+  lopDeduction     Float    @default(0)
+  totalDeductions  Float    @default(0)
+  netSalary        Float    @default(0)
+  lopDays          Float    @default(0)
+  workingDays      Int      @default(0)
+  presentDays      Float    @default(0)
+  overtimeHours    Float    @default(0)
+  pdfUrl           String?
+  pdfPassword      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payroll  Payroll  @relation(fields: [payrollId], references: [id])
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([payrollId, employeeId])
+}
+
+// ─── PERMISSION / SHORT LEAVE ─────────────────────────────────────────────────
+
+model Permission {
+  id          String    @id @default(uuid())
+  employeeId  String
+  date        DateTime  @db.Date
+  fromTime    String                        // "HH:MM" 24h
+  toTime      String                        // "HH:MM" 24h
+  type        String    @default("PERMISSION") // PERMISSION | HALF_DAY
+  session     String?                       // MORNING | AFTERNOON (half-day)
+  reason      String
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  managerId   String?
+  managerNote String?
+  actedAt     DateTime?
+  createdAt   DateTime  @default(now())
+
+  employee Employee  @relation("PermEmp", fields: [employeeId], references: [id])
+  manager  Employee? @relation("PermMgr", fields: [managerId], references: [id])
+}
+
+// ─── ATTENDANCE REGULARIZATION REQUESTS ───────────────────────────────────────
+// Employee raises a query about a wrong/missing attendance record (e.g. forgot
+// to check in, marked absent). Goes to their reporting manager for approval —
+// only on approval does the underlying Attendance record get corrected.
+
+model AttendanceRegularization {
+  id                String    @id @default(uuid())
+  employeeId        String
+  date              DateTime  @db.Date
+  requestedCheckIn  String?                       // "HH:MM" 24h, optional
+  requestedCheckOut String?                       // "HH:MM" 24h, optional
+  requestedStatus   String    @default("PRESENT")  // PRESENT | HALF_DAY | WFH
+  reason            String
+  status            String    @default("PENDING")  // PENDING | APPROVED | REJECTED
+  managerId         String?
+  managerNote       String?
+  actedAt           DateTime?
+  createdAt         DateTime  @default(now())
+
+  employee Employee  @relation("AttRegEmp", fields: [employeeId], references: [id])
+  manager  Employee? @relation("AttRegMgr", fields: [managerId], references: [id])
+}
+
+// ─── COMP OFF REQUESTS ────────────────────────────────────────────────────────
+
+model CompOffRequest {
+  id          String    @id @default(uuid())
+  employeeId  String
+  workDate    DateTime  @db.Date
+  reason      String?
+  status      String    @default("PENDING")  // PENDING | APPROVED | REJECTED
+  managerId   String?
+  managerNote String?
+  actedAt     DateTime?
+  createdAt   DateTime  @default(now())
+
+  employee Employee  @relation("CompOffEmployee", fields: [employeeId], references: [id])
+  manager  Employee? @relation("CompOffManager", fields: [managerId], references: [id])
+}
+
+// ─── NOTIFICATIONS ────────────────────────────────────────────────────────────
+
+model Notification {
+  id         String           @id @default(uuid())
+  userId     String
+  type       NotificationType
+  title      String
+  message    String
+  data       Json?
+  isRead     Boolean          @default(false)
+  readAt     DateTime?
+  createdAt  DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model NotificationLog {
+  id        String              @id @default(uuid())
+  userId    String
+  channel   NotificationChannel
+  title     String
+  message   String
+  status    String              @default("SENT") // SENT | FAILED
+  sentAt    DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model EmailLog {
+  id         String   @id @default(uuid())
+  to         String
+  from       String
+  subject    String
+  template   String?
+  status     String   @default("SENT")
+  errorMsg   String?
+  sentAt     DateTime @default(now())
+}
+
+enum ReleaseKind {
+  PROJECT
+  FEEDBACK_FORM
+  ONLINE_TEST
+}
+
+// Dedupe table for the 3/2/1-day-before-deadline reminder cron
+// (releaseReminder.service.ts). One row per (release, student, daysBefore)
+// so a daily cron run never double-emails the same reminder.
+model DeadlineReminderLog {
+  id          String      @id @default(uuid())
+  releaseKind ReleaseKind
+  releaseId   String
+  studentId   String
+  daysBefore  Int
+  sentAt      DateTime    @default(now())
+
+  @@unique([releaseKind, releaseId, studentId, daysBefore])
+}
+
+// Dedupe table for the consecutive-absence escalation cron
+// (attendanceCron.service.ts). One row per (student, schedule, streak length,
+// most-recent-absent-date) so a daily cron run never double-emails the same
+// 2-day or 3-day escalation for the same absence streak.
+model AttendanceEscalationLog {
+  id              String   @id @default(uuid())
+  studentId       String
+  scheduleId      String
+  consecutiveDays Int
+  asOfDate        DateTime
+  sentAt          DateTime @default(now())
+
+  @@unique([studentId, scheduleId, consecutiveDays, asOfDate])
+}
+
+// ─── DOCUMENTS ────────────────────────────────────────────────────────────────
+
+model Document {
+  id           String       @id @default(uuid())
+  employeeId   String
+  type         DocumentType
+  name         String
+  fileKey      String       // S3 key
+  fileUrl      String?
+  version      Int          @default(1)
+  expiryDate   DateTime?
+  isVerified          Boolean      @default(false)
+  isOriginalSubmitted Boolean      @default(false)
+  submittedAt         DateTime?
+  uploadedAt          DateTime     @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+// ─── RECRUITMENT ──────────────────────────────────────────────────────────────
+
+model JobRequisition {
+  id             String            @id @default(uuid())
+  title          String
+  departmentId   String?
+  designationId  String?
+  positions      Int               @default(1)
+  description    String?           @db.Text
+  requirements   String?           @db.Text
+  status         RecruitmentStatus @default(OPEN)
+  postedAt       DateTime?
+  closingDate    DateTime?
+  createdBy      String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  candidates Candidate[]
+}
+
+model Candidate {
+  id              String          @id @default(uuid())
+  jobId           String
+  firstName       String
+  lastName        String
+  email           String
+  phone           String?
+  resumeKey       String?
+  currentCompany  String?
+  experience      Float?
+  currentCtc      Float?
+  expectedCtc     Float?
+  status          CandidateStatus @default(APPLIED)
+  source          String?
+  notes           String?         @db.Text
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  job          JobRequisition @relation(fields: [jobId], references: [id])
+  interviews   Interview[]
+}
+
+model Interview {
+  id            String    @id @default(uuid())
+  candidateId   String
+  round         Int       @default(1)
+  interviewerIds String?  // comma-separated user IDs
+  scheduledAt   DateTime
+  venue         String?
+  type          String    @default("VIDEO") // VIDEO | IN_PERSON | PHONE
+  feedback      String?   @db.Text
+  rating        Int?
+  result        String?   // PASS | FAIL | HOLD
+  createdAt     DateTime  @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id])
+}
+
+// ─── PERFORMANCE ──────────────────────────────────────────────────────────────
+
+model PerformanceGoal {
+  id           String   @id @default(uuid())
+  employeeId   String
+  title        String
+  description  String?
+  type         String   @default("KPI") // KPI | KRA | OKR
+  targetValue  Float?
+  achievedValue Float?
+  startDate    DateTime
+  endDate      DateTime
+  rating       Int?
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+model PerformanceReview {
+  id            String   @id @default(uuid())
+  employeeId    String
+  reviewerId    String
+  reviewType    String   // SELF | MANAGER | HR | 360
+  period        String   // "Q1 2025" | "H1 2025"
+  overallRating Float?
+  comments      String?  @db.Text
+  status        String   @default("PENDING")
+  dueDate       DateTime
+  submittedAt   DateTime?
+  createdAt     DateTime @default(now())
+}
+
+// ─── ASSETS ───────────────────────────────────────────────────────────────────
+
+model Asset {
+  id           String      @id @default(uuid())
+  name         String
+  type         String      // LAPTOP | DESKTOP | MOBILE | SIM | ACCESSORY
+  serialNumber String?     @unique
+  brand        String?
+  model        String?
+  purchaseDate DateTime?
+  warrantyDate DateTime?
+  status       AssetStatus @default(AVAILABLE)
+  notes        String?
+  createdAt    DateTime    @default(now())
+
+  assignments AssetAssignment[]
+}
+
+model AssetAssignment {
+  id           String    @id @default(uuid())
+  assetId      String
+  employeeId   String
+  assignedAt   DateTime  @default(now())
+  returnedAt   DateTime?
+  condition    String?
+  notes        String?
+
+  asset    Asset    @relation(fields: [assetId], references: [id])
+  employee Employee @relation(fields: [employeeId], references: [id])
+}
+
+// ─── HELPDESK ─────────────────────────────────────────────────────────────────
+
+model HelpDeskTicket {
+  id           String         @id @default(uuid())
+  employeeId   String
+  departmentId String?
+  subject      String
+  description  String         @db.Text
+  priority     TicketPriority @default(MEDIUM)
+  status       TicketStatus   @default(OPEN)
+  assignedTo   String?
+  resolvedAt   DateTime?
+  slaDeadline  DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  employee   Employee    @relation(fields: [employeeId], references: [id])
+  department Department? @relation(fields: [departmentId], references: [id])
+  comments   TicketComment[]
+}
+
+model TicketComment {
+  id        String   @id @default(uuid())
+  ticketId  String
+  authorId  String
+  comment   String   @db.Text
+  createdAt DateTime @default(now())
+
+  ticket HelpDeskTicket @relation(fields: [ticketId], references: [id])
+}
+
+// ─── LMS ──────────────────────────────────────────────────────────────────────
+
+model Course {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  category    String?
+  duration    Int?     // minutes
+  instructor  String?
+  thumbnail   String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  enrollments CourseEnrollment[]
+}
+
+model CourseEnrollment {
+  id          String    @id @default(uuid())
+  courseId    String
+  employeeId  String
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+  progress    Int       @default(0) // 0-100
+  rating      Int?
+
+  course   Course   @relation(fields: [courseId], references: [id])
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([courseId, employeeId])
+}
+
+// ─── MODULE ACCESS / MASTER CONTROL ──────────────────────────────────────────
+// Effective access for a user = DepartmentModuleAccess (default, via their dept)
+// overridden/extended by any matching UserModuleAccess row (NONE = explicit revoke).
+// Master Control (User.canManageAccess = true) is who is allowed to write UserModuleAccess
+// rows for ANYONE, independent of their own department/designation.
+
+model DepartmentModuleAccess {
+  id           String      @id @default(uuid())
+  departmentId String
+  module       ModuleName
+  accessLevel  AccessLevel @default(VIEW)
+  createdAt    DateTime    @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id])
+
+  @@unique([departmentId, module])
+}
+
+model UserModuleAccess {
+  id          String      @id @default(uuid())
+  userId      String
+  module      ModuleName
+  accessLevel AccessLevel @default(VIEW)
+  grantedById String?
+  note        String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user      User  @relation("ModuleAccessTarget", fields: [userId], references: [id])
+  grantedBy User? @relation("ModuleAccessGrantedBy", fields: [grantedById], references: [id])
+
+  @@unique([userId, module])
+}
+
+// ─── SALES ────────────────────────────────────────────────────────────────────
+
+model Lead {
+  id           String     @id @default(uuid())
+  name         String
+  phone        String
+  email        String?
+  source       String?
+  courseInterest String?
+  status       LeadStatus @default(NEW)
+  assignedToId String?
+  campaignId   String?
+  notes        String?    @db.Text
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  assignedTo  Employee?           @relation("LeadAssignee", fields: [assignedToId], references: [id])
+  campaign    Campaign?           @relation(fields: [campaignId], references: [id])
+  demos       Demo[]
+  collections FeeCollection[]
+  students    Student[]
+}
+
+model Demo {
+  id            String   @id @default(uuid())
+  leadId        String
+  scheduledAt   DateTime
+  conductedById String?
+  status        String   @default("SCHEDULED")
+  feedback      String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  lead        Lead      @relation(fields: [leadId], references: [id])
+  conductedBy Employee? @relation("DemoConductor", fields: [conductedById], references: [id])
+}
+
+// ─── FINANCE (SALES) — student fee collections ───────────────────────────────
+
+model FeeCollection {
+  id           String      @id @default(uuid())
+  leadId       String?
+  studentName  String
+  amount       Float
+  mode         PaymentMode @default(UPI)
+  receivedById String?
+  receiptNo    String?     @unique
+  remarks      String?
+  collectedAt  DateTime    @default(now())
+  createdAt    DateTime    @default(now())
+
+  lead       Lead?     @relation(fields: [leadId], references: [id])
+  receivedBy Employee? @relation("FeeCollector", fields: [receivedById], references: [id])
+}
+
+// ─── FINANCE (ADMIN) — internal expenses/budget ──────────────────────────────
+
+model AdminExpense {
+  id                  String        @id @default(uuid())
+  title               String
+  category            String?
+  miscDescription     String?
+  amount              Float
+  status              ExpenseStatus @default(PENDING)
+  voucherNo           String?
+  billNo              String?
+  paymentMode         String?
+  billCopyUrl         String?
+  paymentProofUrl     String?
+  expenseDate         DateTime      @default(now())
+  requestedById       String?
+  approvedById        String?
+  vendorId            String?
+  recurringTemplateId String?
+  paidAt              DateTime?
+  notes               String?       @db.Text
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  requestedBy       Employee?                 @relation("ExpenseRequester", fields: [requestedById], references: [id])
+  approvedBy        Employee?                 @relation("ExpenseApprover", fields: [approvedById], references: [id])
+  vendor            Vendor?                   @relation(fields: [vendorId], references: [id])
+  recurringTemplate RecurringExpenseTemplate? @relation(fields: [recurringTemplateId], references: [id])
+}
+
+// HO (Head Office) funding — this entity is operated out of a separate
+// Head Office that funds it monthly. Each receipt is a credit against
+// which AdminExpense rows (debits) are reconciled to produce a running
+// opening/closing balance per month (see financeAdmin controller).
+model HOFundReceipt {
+  id           String   @id @default(uuid())
+  amount       Float
+  receivedDate DateTime @default(now())
+  notes        String?  @db.Text
+  recordedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  recordedBy Employee? @relation("HOFundRecorder", fields: [recordedById], references: [id])
+}
+
+// Vendor master — admin-managed (SUPER_ADMIN / FINANCE_ADMIN:ADMIN only);
+// any spender can pick a vendor on their own expense, enabling vendor-wise
+// spend reporting without exposing the vendor list to edits.
+model Vendor {
+  id            String       @id @default(uuid())
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?      @db.Text
+  gstNumber     String?
+  panNumber     String?
+  category      String?
+  bankName      String?
+  bankAccountNo String?
+  ifscCode      String?
+  status        VendorStatus @default(ACTIVE)
+  notes         String?      @db.Text
+  createdById   String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  createdBy Employee?      @relation("VendorCreator", fields: [createdById], references: [id])
+  expenses  AdminExpense[]
+}
+
+enum VendorStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// Recurring fixed-cost templates (rent, internet, AMC, etc). ADMIN-only to
+// manage; the "generate" action stamps out a PENDING AdminExpense for the
+// requested month per active template, skipped if already generated.
+model RecurringExpenseTemplate {
+  id          String   @id @default(uuid())
+  title       String
+  category    String?
+  amount      Float
+  vendorId    String?
+  paymentMode String?
+  notes       String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy Employee?      @relation("RecurringTemplateCreator", fields: [createdById], references: [id])
+  expenses  AdminExpense[]
+}
+
+// ─── PRODUCTION (TRAINING) ────────────────────────────────────────────────────
+
+// Students of Vinsup Skill Academy. Distinct from Employee — they get their
+// own User row (Role.STUDENT) for the minimal student portal, but are never
+// HR employees. createdById = the Production Manager who onboarded them.
+model Student {
+  id                 String        @id @default(uuid())
+  userId             String?       @unique
+  leadId             String?
+  createdById        String?
+  studentCode        String        @unique
+  firstName          String
+  lastName           String
+  email              String?
+  phone              String
+  photo              String?
+  track              StudentTrack  @default(JRP)
+  status             StudentStatus @default(ENROLLED)
+  joiningDate        DateTime      @default(now())
+  movedToPlacementAt DateTime?
+
+  // MIS / profile-completion fields, filled in by the student on first login
+  dateOfBirth           DateTime?
+  gender                String?
+  address               String?   @db.Text
+  city                  String?
+  state                 String?
+  pincode               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  education             Json?     // [{ degree, institution, fieldOfStudy, year, grade }]
+  aadharNumber          String?
+  aadharPhoto           String?   // scan/photo of the Aadhar card itself — distinct from the certificate `photo`
+  fatherName            String?
+  fatherPhone           String?
+  motherName            String?
+  motherPhone           String?
+  profileCompletedAt    DateTime?
+
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  user      User?     @relation(fields: [userId], references: [id])
+  lead      Lead?     @relation(fields: [leadId], references: [id])
+  createdBy Employee? @relation("StudentCreator", fields: [createdById], references: [id])
+
+  enrollments      StudentBatchEnrollment[]
+  attendances      StudentAttendance[]
+  moduleMarks      ModuleMark[]
+  moduleFeedbacks  ModuleFeedback[]
+  trainerFeedbacks TrainerFeedback[]
+  placementResults PlacementResult[]
+  interviews       PlacementInterview[]
+  certificates     Certificate[]
+  courseFeedbacks  CourseFeedback[]
+  referrals        Referral[]
+
+  projectSubmissions    ProjectSubmission[]
+  feedbackFormResponses FeedbackFormResponse[]
+  onlineTestAttempts    OnlineTestAttempt[]
+  portfolio             StudentPortfolio?
+
+  softskillAttendances SoftskillAttendance[]
+  driveCandidacies     PlacementDriveCandidate[]
+}
+
+// One of the 6 standard courses (Data Analytics, MERN Stack, Digital
+// Marketing, UX UI & Graphic Design, Data Verse Pro) or a custom course
+// (Frontend, Backend, AI Course, etc — isCustom = true).
+model AcademyCourse {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?  @db.Text
+  totalHours  Int?
+  isCustom    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  modules          AcademyModule[]
+  schedules        BatchCourseSchedule[]
+  trainerFeedbacks TrainerFeedback[]
+  certificates     Certificate[]
+  courseFeedbacks  CourseFeedback[]
+}
+
+model AcademyModule {
+  id       String  @id @default(uuid())
+  courseId String
+  order    Int
+  title    String
+  hours    Int?
+  dayRange String?
+  topics   String? @db.Text
+
+  course     AcademyCourse @relation(fields: [courseId], references: [id])
+  kraEntries KRAEntry[]
+  tests      ModuleTest[]
+  moduleFeedbacks ModuleFeedback[]
+
+  projects      Project[]
+  feedbackForm  FeedbackForm?
+  onlineTests   OnlineTest[]
+
+  @@unique([courseId, order])
+}
+
+// "Batch 14" — a cohort container. Holds several courses, each running on
+// its own timing/mode via BatchCourseSchedule.
+model Batch {
+  id          String      @id @default(uuid())
+  code        String      @unique
+  startDate   DateTime
+  endDate     DateTime?
+  status      BatchStatus @default(UPCOMING)
+  createdById String?
+  createdAt   DateTime    @default(now())
+
+  createdBy Employee? @relation("BatchCreator", fields: [createdById], references: [id])
+  schedules BatchCourseSchedule[]
+}
+
+// One course running inside a batch, with its own timing/day-pattern/mode.
+model BatchCourseSchedule {
+  id        String       @id @default(uuid())
+  batchId   String
+  courseId  String
+  timing    BatchTiming
+  dayPattern DayPattern
+  mode      DeliveryMode
+  startDate DateTime
+  endDate   DateTime?
+  capacity  Int?
+  createdAt DateTime     @default(now())
+
+  batch  Batch         @relation(fields: [batchId], references: [id])
+  course AcademyCourse @relation(fields: [courseId], references: [id])
+
+  trainers        TrainerAssignment[]
+  enrollments     StudentBatchEnrollment[]
+  attendances     StudentAttendance[]
+  kraEntries      KRAEntry[]
+  tests           ModuleTest[]
+  courseFeedbacks CourseFeedback[]
+  moduleFeedbacks ModuleFeedback[]
+
+  projectReleases      ProjectRelease[]
+  feedbackFormReleases FeedbackFormRelease[]
+  onlineTestReleases   OnlineTestRelease[]
+
+  @@unique([batchId, courseId])
+}
+
+model TrainerAssignment {
+  id         String   @id @default(uuid())
+  scheduleId String
+  trainerId  String
+  assignedAt DateTime @default(now())
+
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  trainer  Employee            @relation("TrainerAssignments", fields: [trainerId], references: [id])
+
+  @@unique([scheduleId, trainerId])
+}
+
+model StudentBatchEnrollment {
+  id         String                 @id @default(uuid())
+  studentId  String
+  scheduleId String
+  status     BatchEnrollmentStatus  @default(ACTIVE)
+  enrolledAt DateTime               @default(now())
+
+  student  Student             @relation(fields: [studentId], references: [id])
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+
+  @@unique([studentId, scheduleId])
+}
+
+model StudentAttendance {
+  id         String                   @id @default(uuid())
+  studentId  String
+  scheduleId String
+  date       DateTime
+  status     StudentAttendanceStatus  @default(PRESENT)
+  markedById String?
+  createdAt  DateTime                 @default(now())
+
+  student  Student             @relation(fields: [studentId], references: [id])
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  markedBy Employee?           @relation("AttendanceMarker", fields: [markedById], references: [id])
+
+  @@unique([studentId, scheduleId, date])
+}
+
+// Trainer's per-class log: what topics were covered.
+model KRAEntry {
+  id            String        @id @default(uuid())
+  scheduleId    String
+  moduleId      String?
+  trainerId     String?
+  track         StudentTrack? // sub-batch (JRP/IOP/PAP) this log entry is for; null = whole schedule
+  date          DateTime
+  topicsCovered String        @db.Text
+  notes         String?       @db.Text
+  createdAt     DateTime      @default(now())
+
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  module   AcademyModule?      @relation(fields: [moduleId], references: [id])
+  trainer  Employee?           @relation("KRATrainer", fields: [trainerId], references: [id])
+
+  @@unique([scheduleId, track, date, moduleId])
+}
+
+model ModuleTest {
+  id         String   @id @default(uuid())
+  scheduleId String
+  moduleId   String
+  title      String
+  testDate   DateTime
+  maxMarks   Int      @default(100)
+  createdAt  DateTime @default(now())
+
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  module   AcademyModule       @relation(fields: [moduleId], references: [id])
+  marks    ModuleMark[]
+}
+
+// Student-visible: marks + remarks for a module test.
+model ModuleMark {
+  id            String   @id @default(uuid())
+  testId        String
+  studentId     String
+  marksObtained Float
+  remarks       String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  test    ModuleTest @relation(fields: [testId], references: [id])
+  student Student    @relation(fields: [studentId], references: [id])
+
+  @@unique([testId, studentId])
+}
+
+// STUDENT-VISIBLE — the trainer's module-wise feedback for a student (distinct
+// from TrainerFeedback below, which is course-level and staff-only). Shown to
+// the student on the Rank Card alongside their marks and project grades.
+model ModuleFeedback {
+  id         String   @id @default(uuid())
+  studentId  String
+  moduleId   String
+  scheduleId String
+  trainerId  String?
+  rating     Int?     // 1-5 overall rating for the student's performance in this module
+  comments   String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  student  Student             @relation(fields: [studentId], references: [id])
+  module   AcademyModule       @relation(fields: [moduleId], references: [id])
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  trainer  Employee?           @relation("ModuleFeedbackTrainer", fields: [trainerId], references: [id])
+
+  @@unique([studentId, moduleId, scheduleId])
+}
+
+// INTERNAL ONLY — never serialized to a STUDENT-role request. Final trainer
+// opinion per course: performance rating, placement readiness, JRP→IOP
+// conversion opinion, certificate eligibility.
+model TrainerFeedback {
+  id                      String   @id @default(uuid())
+  studentId               String
+  courseId                String
+  trainerId               String?
+  performanceRating       Int?
+  placementReadinessNote  String?  @db.Text
+  jrpToIopRecommended     Boolean?
+  certificateEligible     Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  student Student       @relation(fields: [studentId], references: [id])
+  course  AcademyCourse @relation(fields: [courseId], references: [id])
+  trainer Employee?     @relation("FeedbackTrainer", fields: [trainerId], references: [id])
+
+  @@unique([studentId, courseId])
+}
+
+// STUDENT-AUTHORED — the reverse of TrainerFeedback. A student's own rating
+// of the course/trainer/training experience. Visible to the student who
+// wrote it; staff visibility can be added later without touching this shape.
+model CourseFeedback {
+  id              String   @id @default(uuid())
+  studentId       String
+  scheduleId      String
+  courseId        String
+  trainerRating   Int?     // 1-5
+  contentRating   Int?     // 1-5
+  comments        String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  student  Student             @relation(fields: [studentId], references: [id])
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  course   AcademyCourse       @relation(fields: [courseId], references: [id])
+
+  @@unique([studentId, scheduleId])
+}
+
+// "Refer a friend" — a student-sourced lead. Sales/Production can pick these
+// up and convert into a real Lead once contacted; kept separate from Lead so
+// students never see or touch the CRM pipeline directly.
+model Referral {
+  id             String         @id @default(uuid())
+  studentId      String
+  name           String
+  phone          String
+  email          String?
+  courseInterest String?
+  status         ReferralStatus @default(NEW)
+  notes          String?        @db.Text
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id])
+}
+
+enum ReferralStatus {
+  NEW
+  CONTACTED
+  ENROLLED
+  NOT_INTERESTED
+}
+
+// ─── REPORT AUTOMATION ────────────────────────────────────────────────────────
+
+enum ReportRecipientType {
+  DAILY_ATTENDANCE // gets yesterday's attendance summary every day
+  ESCALATION       // gets the 3-consecutive-day-absence escalation email (in addition to management)
+}
+
+// Configurable recipient lists for automated report/escalation emails — kept
+// as plain emails (not tied to Employee) so external/extra people can be
+// added without needing an Employee record.
+model ReportRecipient {
+  id        String              @id @default(uuid())
+  type      ReportRecipientType
+  email     String
+  name      String?
+  createdAt DateTime            @default(now())
+
+  @@unique([type, email])
+}
+
+model Certificate {
+  id            String   @id @default(uuid())
+  studentId     String
+  courseId      String
+  certificateNo String   @unique
+  issuedAt      DateTime @default(now())
+
+  student Student       @relation(fields: [studentId], references: [id])
+  course  AcademyCourse @relation(fields: [courseId], references: [id])
+}
+
+// ─── PLACEMENTS ───────────────────────────────────────────────────────────────
+
+model HiringPartner {
+  id           String   @id @default(uuid())
+  name         String
+  industry     String?
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  drives PlacementDrive[]
+}
+
+model PlacementDrive {
+  id            String      @id @default(uuid())
+  partnerId     String
+  role          String
+  driveDate     DateTime
+  status        DriveStatus @default(SCHEDULED)
+  organizedById String?
+  notes         String?
+  createdAt     DateTime    @default(now())
+
+  partner     HiringPartner     @relation(fields: [partnerId], references: [id])
+  organizedBy Employee?         @relation("DriveOrganizer", fields: [organizedById], references: [id])
+  results     PlacementResult[]
+  interviews  PlacementInterview[]
+  candidates  PlacementDriveCandidate[]
+}
+
+model PlacementResult {
+  id          String   @id @default(uuid())
+  driveId     String?
+  studentId   String?
+  studentName String
+  result      String   @default("PENDING")
+  package     Float?
+  createdAt   DateTime @default(now())
+
+  // ── Offer details, filled in once result = SELECTED ──────────────────────
+  designation     String?
+  joiningDate     DateTime?
+  offerLetterUrl  String?
+  offerSentAt     DateTime?
+
+  // driveId is optional so direct/off-campus offers can be recorded straight
+  // from the Placement Pool without requiring an associated Drive.
+  drive   PlacementDrive? @relation(fields: [driveId], references: [id])
+  student Student?        @relation(fields: [studentId], references: [id])
+}
+
+// Interview-SLA tracking: minimum 3 interviews within 90 days of
+// Student.movedToPlacementAt. Named PlacementInterview to avoid colliding
+// with the existing recruitment Interview model above. Multiple interviews
+// (rounds) can be mapped per student, optionally tied to a specific drive.
+model PlacementInterview {
+  id          String           @id @default(uuid())
+  studentId   String
+  driveId     String?
+  companyName String?
+  round       Int              @default(1)
+  interviewerName String?
+  scheduledAt DateTime
+  outcome     InterviewOutcome @default(SCHEDULED)
+  notes       String?          @db.Text // general scheduling notes
+
+  // ── Placement-team feedback on this specific interview ───────────────────
+  rating            Float?    // e.g. 1-5
+  feedback          String?   @db.Text
+  feedbackGivenById String?
+  feedbackGivenAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  student         Student         @relation(fields: [studentId], references: [id])
+  drive           PlacementDrive? @relation(fields: [driveId], references: [id])
+  feedbackGivenBy Employee?       @relation("InterviewFeedbackGiver", fields: [feedbackGivenById], references: [id])
+}
+
+enum DriveCandidateStatus {
+  SHORTLISTED
+  CONFIRMED
+  WITHDRAWN
+  REJECTED
+}
+
+// Explicit shortlist step: the Placement team picks which "Ready for
+// Placement" pool students are being put forward for a given drive, before
+// any PlacementResult exists.
+model PlacementDriveCandidate {
+  id          String               @id @default(uuid())
+  driveId     String
+  studentId   String
+  status      DriveCandidateStatus @default(SHORTLISTED)
+  addedById   String?
+  notes       String?              @db.Text
+  createdAt   DateTime             @default(now())
+
+  drive   PlacementDrive @relation(fields: [driveId], references: [id])
+  student Student        @relation(fields: [studentId], references: [id])
+  addedBy Employee?      @relation("DriveCandidateAdder", fields: [addedById], references: [id])
+
+  @@unique([driveId, studentId])
+}
+
+enum SoftskillSessionType {
+  SOFTSKILL
+  APTITUDE
+}
+
+// A single Softskill or Aptitude class session run by the Placement team
+// for students in the pool. Lightweight session + attendance log — does not
+// reuse the AcademyCourse/Batch infrastructure.
+model SoftskillSession {
+  id          String               @id @default(uuid())
+  type        SoftskillSessionType
+  topic       String
+  sessionDate DateTime
+  trainerId   String?
+  notes       String?              @db.Text
+  createdAt   DateTime             @default(now())
+
+  trainer     Employee?            @relation("SoftskillTrainer", fields: [trainerId], references: [id])
+  attendances SoftskillAttendance[]
+}
+
+model SoftskillAttendance {
+  id        String   @id @default(uuid())
+  sessionId String
+  studentId String
+  present   Boolean  @default(true)
+  score     Float?   // optional aptitude test score out of 100
+  remarks   String?  @db.Text
+
+  session SoftskillSession @relation(fields: [sessionId], references: [id])
+  student Student          @relation(fields: [studentId], references: [id])
+
+  @@unique([sessionId, studentId])
+}
+
+// ─── DIGITAL MARKETING ────────────────────────────────────────────────────────
+
+model Campaign {
+  id        String         @id @default(uuid())
+  name      String
+  channel   String?
+  status    CampaignStatus @default(PLANNED)
+  budget    Float?
+  spent     Float?         @default(0)
+  startDate DateTime?
+  endDate   DateTime?
+  ownerId   String?
+  createdAt DateTime       @default(now())
+
+  // ── Closure checkpoint ──────────────────────────────────────────────────
+  closedAt               DateTime?
+  closedById              String?
+  closureSummary          String?   @db.Text
+  closureExpenseSheetUrl   String?
+  closureDashboardUrl      String?
+
+  owner    Employee? @relation("CampaignOwner", fields: [ownerId], references: [id])
+  closedBy Employee? @relation("CampaignClosedBy", fields: [closedById], references: [id])
+  leads    Lead[]
+
+  recharges    CampaignRecharge[]
+  dailyReports CampaignDailyReport[]
+}
+
+/// One row per funding event on a campaign (initial recharge at campaign
+/// start, plus any later top-ups). Every recharge requires its own bill
+/// copy attachment — this is the auditable funding trail for the campaign.
+model CampaignRecharge {
+  id            String   @id @default(uuid())
+  campaignId    String
+  amount        Float
+  rechargedFor  String? // platform/channel this top-up funds, e.g. "Meta Ads"
+  billUrl       String  // bill copy attachment — required for every recharge
+  note          String? @db.Text
+  rechargedById String?
+  rechargedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  rechargedBy Employee? @relation("CampaignRechargeBy", fields: [rechargedById], references: [id])
+}
+
+/// One row per day a campaign is reported on — leads funnel + spend +
+/// optional ad-platform dashboard screenshot for that day.
+model CampaignDailyReport {
+  id                 String   @id @default(uuid())
+  campaignId         String
+  date               DateTime
+  leadsReceived      Int      @default(0)
+  leadsGivenToSales  Int      @default(0)
+  leadsUploadedToCrm Int      @default(0)
+  amountSpent        Float    @default(0)
+  dashboardUrl       String? // ad platform dashboard screenshot for that day
+  notes              String? @db.Text
+  reportedById       String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  reportedBy Employee? @relation("CampaignReportBy", fields: [reportedById], references: [id])
+
+  @@unique([campaignId, date])
+}
+
+// ─── AUDIT ────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String
+  action     String
+  module     String
+  entityId   String?
+  entityType String?
+  oldData    Json?
+  newData    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model CompanySetting {
+  id        String @id @default(uuid())
+  companyId String
+  key       String
+  value     String @db.Text
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, key])
+}
+
+// ─── PASSWORD AUDIT (plain text — for admin recovery only) ───────────────────
+
+model PasswordLog {
+  id          String   @id @default(uuid())
+  userId      String
+  plainText   String                    // stored without encryption — admin use only
+  setBy       String?                   // userId of who set it (self or HR/admin)
+  reason      String?                   // "self_change" | "admin_reset" | "onboarding"
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// ─── ONBOARDING ───────────────────────────────────────────────────────────────
+
+model OnboardingRequest {
+  id              String           @id @default(uuid())
+  companyId       String
+  branchId        String?
+  departmentId    String?
+  designationId   String?
+  managerId       String?
+  firstName       String
+  lastName        String
+  email           String
+  phone           String?
+  gender          Gender?
+  joiningDate     DateTime
+  status          OnboardingStatus @default(PENDING)
+  hrApprovedById  String?
+  hrApprovedAt    DateTime?
+  hrRemarks       String?
+  rejectionReason String?
+  employeeId          String?          @unique
+  tempPassword        String?
+  firstLoginAt        DateTime?
+  profileCompletedAt  DateTime?
+  documentDeadline    DateTime?
+  documentsSubmittedAt DateTime?
+  policyAgreedAt        DateTime?
+  documentsSignedAt     DateTime?
+  originalDocsConfirmedAt DateTime?
+  signatureName         String?
+  hrFinalApprovedById String?
+  hrFinalApprovedAt   DateTime?
+  hrFinalRemarks      String?
+  createdById         String
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  employee  Employee?           @relation("OnboardingEmployee", fields: [employeeId], references: [id])
+  documents OnboardingDocument[]
+}
+
+model OnboardingDocument {
+  id              String              @id @default(uuid())
+  onboardingId    String
+  documentName    String
+  documentType    String
+  fileKey         String?
+  signedAt        DateTime?
+  signedByName    String?
+  signedByEmail   String?
+  status          OnboardingDocStatus @default(PENDING)
+  createdAt       DateTime            @default(now())
+
+  onboarding OnboardingRequest @relation(fields: [onboardingId], references: [id])
+}
+
+// ─── RESIGNATION & EXIT ───────────────────────────────────────────────────────
+
+model ResignationRequest {
+  id                  String            @id @default(uuid())
+  employeeId          String
+  reason              String            @db.Text
+  requestedLastDate   DateTime
+  noticePeriodDays    Int               @default(30)
+  managerId           String?
+  managerStatus       String            @default("PENDING")
+  managerApprovedById String?
+  managerApprovedAt   DateTime?
+  managerLastDate     DateTime?
+  managerRemarks      String?
+  hrStatus            String            @default("PENDING")
+  hrApprovedById      String?
+  hrApprovedAt        DateTime?
+  hrLastDate          DateTime?
+  hrRemarks           String?
+  finalLastDate       DateTime?
+  status              ResignationStatus @default(PENDING)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  employee      Employee       @relation(fields: [employeeId], references: [id])
+  exitClearance ExitClearance?
+}
+
+model ExitClearance {
+  id                  String              @id @default(uuid())
+  resignationId       String              @unique
+  initiatedById       String
+  managerStatus       String              @default("PENDING")
+  managerApprovedById String?
+  managerApprovedAt   DateTime?
+  managerRemarks      String?
+  managerNewLastDate  DateTime?
+  hrStatus            String              @default("PENDING")
+  hrApprovedById      String?
+  hrApprovedAt        DateTime?
+  hrRemarks           String?
+  hrNewLastDate       DateTime?
+  status              ExitClearanceStatus @default(PENDING)
+  finalLastDate       DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  resignation ResignationRequest @relation(fields: [resignationId], references: [id])
+  documents   ExitDocument[]
+}
+
+model ExitDocument {
+  id              String        @id @default(uuid())
+  exitClearanceId String
+  name            String
+  description     String?
+  isReceived      Boolean       @default(false)
+  receivedAt      DateTime?
+  receivedBy      String?
+  createdAt       DateTime      @default(now())
+
+  exitClearance ExitClearance @relation(fields: [exitClearanceId], references: [id])
+}
+
+// ─── PRODUCTION MANAGER AUTHORING → TRAINER RELEASE → STUDENT CONSUMPTION ────
+// Three parallel subsystems, each following the same shape: the Production
+// Manager authors reusable content tied to a module (Project / FeedbackForm
+// template / OnlineTest with MCQs), a Trainer "releases"/"activates" that
+// content onto one of their own BatchCourseSchedule sub-batches, and
+// students enrolled in that schedule consume it. Kept fully separate from
+// the legacy ModuleTest/ModuleMark (manual marks entry) and CourseFeedback
+// (fixed-shape student feedback) models above — those serve a different,
+// already-shipped purpose and are not touched by any of this.
+
+// Shared status for a release/activation row: ACTIVE while students can
+// still interact with it, CLOSED once the trainer ends it early or it has
+// naturally lapsed.
+enum ReleaseStatus {
+  ACTIVE
+  CLOSED
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────
+model Project {
+  id          String   @id @default(uuid())
+  moduleId    String
+  title       String
+  description String?  @db.Text
+  resourceUrl String   // the project brief PDF, uploaded by the Production Manager
+  isCapstone  Boolean  @default(false) // flagged by the Production Manager — gates "Ready for Placement" in the Placement Pool
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  module    AcademyModule @relation(fields: [moduleId], references: [id])
+  createdBy Employee      @relation("ProjectCreator", fields: [createdById], references: [id])
+  releases  ProjectRelease[]
+}
+
+// One row per schedule the trainer has released a given Project to.
+// Releasing triggers a bulk in-portal notification + an automated email to
+// every enrolled student, the Production Manager, and the assigned trainer(s)
+// (see notificationService.bulkCreate / emailService.templates.projectReleased).
+// If `deadline` is set, the release email includes it and the
+// releaseReminder.service cron sends 3/2/1-day-before reminders to students
+// who haven't submitted yet.
+model ProjectRelease {
+  id           String        @id @default(uuid())
+  projectId    String
+  scheduleId   String
+  releasedById String
+  status       ReleaseStatus @default(ACTIVE)
+  releasedAt   DateTime      @default(now())
+  deadline     DateTime?
+
+  project    Project             @relation(fields: [projectId], references: [id])
+  schedule   BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  releasedBy Employee            @relation("ProjectReleaser", fields: [releasedById], references: [id])
+
+  submissions ProjectSubmission[]
+
+  @@unique([projectId, scheduleId])
+}
+
+enum ProjectSubmissionStatus {
+  SUBMITTED
+  REVIEWED
+}
+
+// A student's in-app submission for a released project — a file upload, a
+// link (e.g. a deployed URL / GitHub repo), or both.
+model ProjectSubmission {
+  id           String                  @id @default(uuid())
+  releaseId    String
+  studentId    String
+  fileUrl      String?
+  linkUrl      String?
+  note         String?                 @db.Text
+  status       ProjectSubmissionStatus @default(SUBMITTED)
+  submittedAt  DateTime                @default(now())
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?                 @db.Text
+  grade        Float?                  // trainer's numeric grade for this submission, out of maxGrade
+  maxGrade     Float?                  @default(100)
+
+  release    ProjectRelease @relation(fields: [releaseId], references: [id])
+  student    Student        @relation(fields: [studentId], references: [id])
+  reviewedBy Employee?      @relation("ProjectReviewer", fields: [reviewedById], references: [id])
+
+  @@unique([releaseId, studentId])
+}
+
+// ── Feedback Forms ───────────────────────────────────────────────────────
+// One reusable, fully-custom template per module ("fix the template for
+// the module"); the trainer's job is then just to assign/release that
+// already-built module template onto a schedule.
+model FeedbackForm {
+  id          String   @id @default(uuid())
+  moduleId    String   @unique
+  title       String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  module    AcademyModule @relation(fields: [moduleId], references: [id])
+  createdBy Employee      @relation("FeedbackFormCreator", fields: [createdById], references: [id])
+
+  questions FeedbackFormQuestion[]
+  releases  FeedbackFormRelease[]
+}
+
+enum FeedbackQuestionType {
+  RATING
+  TEXT
+  MCQ
+}
+
+model FeedbackFormQuestion {
+  id       String               @id @default(uuid())
+  formId   String
+  order    Int
+  type     FeedbackQuestionType
+  prompt   String               @db.Text
+  options  Json?                // MCQ choices, e.g. ["Excellent","Good","Average","Poor"]
+  required Boolean              @default(true)
+
+  form    FeedbackForm     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers FeedbackAnswer[]
+
+  @@unique([formId, order])
+}
+
+model FeedbackFormRelease {
+  id           String        @id @default(uuid())
+  formId       String
+  scheduleId   String
+  releasedById String
+  status       ReleaseStatus @default(ACTIVE)
+  releasedAt   DateTime      @default(now())
+  deadline     DateTime?
+
+  form       FeedbackForm        @relation(fields: [formId], references: [id])
+  schedule   BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  releasedBy Employee            @relation("FeedbackFormReleaser", fields: [releasedById], references: [id])
+
+  responses FeedbackFormResponse[]
+
+  @@unique([formId, scheduleId])
+}
+
+model FeedbackFormResponse {
+  id          String   @id @default(uuid())
+  releaseId   String
+  studentId   String
+  submittedAt DateTime @default(now())
+
+  release FeedbackFormRelease @relation(fields: [releaseId], references: [id])
+  student Student             @relation(fields: [studentId], references: [id])
+  answers FeedbackAnswer[]
+
+  @@unique([releaseId, studentId])
+}
+
+model FeedbackAnswer {
+  id          String  @id @default(uuid())
+  responseId  String
+  questionId  String
+  ratingValue Int?
+  textValue   String? @db.Text
+  optionValue String?
+
+  response FeedbackFormResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  question FeedbackFormQuestion @relation(fields: [questionId], references: [id])
+
+  @@unique([responseId, questionId])
+}
+
+// ── Online Tests ─────────────────────────────────────────────────────────
+// MCQ-only, auto-graded. Trainer "activation" of a release is a one-click
+// open for the whole schedule; each student then gets their own fixed
+// 45-minute window starting from the moment THEY click "Start" (see
+// OnlineTestAttempt.deadlineAt, computed server-side at start time — this
+// is a per-student timer, not a single global window).
+model OnlineTest {
+  id              String   @id @default(uuid())
+  moduleId        String
+  title           String
+  durationMinutes Int      @default(45)
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  module    AcademyModule @relation(fields: [moduleId], references: [id])
+  createdBy Employee      @relation("OnlineTestCreator", fields: [createdById], references: [id])
+
+  questions OnlineTestQuestion[]
+  releases  OnlineTestRelease[]
+}
+
+// Bulk-uploaded MCQ question. `options` is the ordered list of choices;
+// `correctIndex` points into it. Never sent to students until after they
+// submit (or auto-submit) their attempt.
+model OnlineTestQuestion {
+  id           String @id @default(uuid())
+  testId       String
+  order        Int
+  prompt       String @db.Text
+  options      Json   // string[] choices
+  correctIndex Int    // index into `options`
+  marks        Int    @default(1)
+
+  test    OnlineTest         @relation(fields: [testId], references: [id], onDelete: Cascade)
+  answers OnlineTestAnswer[]
+
+  @@unique([testId, order])
+}
+
+model OnlineTestRelease {
+  id            String        @id @default(uuid())
+  testId        String
+  scheduleId    String
+  activatedById String
+  status        ReleaseStatus @default(ACTIVE)
+  activatedAt   DateTime      @default(now())
+  // Optional overall "available until" deadline for the schedule (distinct
+  // from OnlineTestAttempt.deadlineAt, which is each student's personal
+  // per-attempt timer). Used only for the release-email + 3/2/1-day reminder
+  // flow for students who haven't started/submitted an attempt yet.
+  deadline      DateTime?
+
+  test        OnlineTest          @relation(fields: [testId], references: [id])
+  schedule    BatchCourseSchedule @relation(fields: [scheduleId], references: [id])
+  activatedBy Employee            @relation("OnlineTestActivator", fields: [activatedById], references: [id])
+
+  attempts OnlineTestAttempt[]
+
+  @@unique([testId, scheduleId])
+}
+
+enum OnlineTestAttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  AUTO_SUBMITTED_VIOLATION
+  EXPIRED
+}
+
+// One attempt per student per release. `deadlineAt` = startedAt + the
+// test's durationMinutes, fixed at creation time. The frontend auto-submits
+// the moment a tab-switch/blur is detected while IN_PROGRESS, marking the
+// attempt AUTO_SUBMITTED_VIOLATION.
+model OnlineTestAttempt {
+  id          String                  @id @default(uuid())
+  releaseId   String
+  studentId   String
+  startedAt   DateTime                @default(now())
+  deadlineAt  DateTime
+  submittedAt DateTime?
+  status      OnlineTestAttemptStatus @default(IN_PROGRESS)
+  score       Int?
+  totalMarks  Int?
+
+  release OnlineTestRelease  @relation(fields: [releaseId], references: [id])
+  student Student            @relation(fields: [studentId], references: [id])
+  answers OnlineTestAnswer[]
+
+  @@unique([releaseId, studentId])
+}
+
+model OnlineTestAnswer {
+  id            String   @id @default(uuid())
+  attemptId     String
+  questionId    String
+  selectedIndex Int?
+  isCorrect     Boolean?
+
+  attempt  OnlineTestAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question OnlineTestQuestion @relation(fields: [questionId], references: [id])
+
+  @@unique([attemptId, questionId])
+}
+
+enum PortfolioStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Student-built portfolio (education, skills, projects, experience) submitted
+/// by the student and reviewed by a Production Manager. On approval a
+/// `publicSlug` is generated — the public, no-login page at
+/// /portfolio/:publicSlug renders the data, and a QR code (generated
+/// client-side) points at that URL. One portfolio per student.
+model StudentPortfolio {
+  id        String @id @default(uuid())
+  studentId String @unique
+
+  summary    String? @db.Text // short intro / career objective
+  education  Json? // [{ degree, institution, fieldOfStudy, year, grade }]
+  skills     Json? // [{ name, level }]
+  projects   Json? // [{ title, description, link, techStack }]
+  experience Json? // [{ company, role, duration, description }]
+
+  status      PortfolioStatus @default(PENDING)
+  submittedAt DateTime?
+
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?   @db.Text
+
+  publicSlug String? @unique // set on approval; used as the public URL + QR code target
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  student    Student   @relation(fields: [studentId], references: [id])
+  reviewedBy Employee? @relation("PortfolioReviewer", fields: [reviewedById], references: [id])
+}
