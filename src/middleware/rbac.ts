@@ -9,6 +9,7 @@ const ROLE_HIERARCHY: Record<Role, number> = {
   HR: 3,
   MANAGER: 2,
   EMPLOYEE: 1,
+  STUDENT: 0,
 };
 
 export const requireRole = (...roles: Role[]) =>

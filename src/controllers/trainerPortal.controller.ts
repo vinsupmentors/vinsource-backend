@@ -531,7 +531,7 @@ export const trainerPortalController = {
       });
 
       await notificationService.bulkCreate(
-        enrollments.map((e) => e.student.userId),
+        enrollments.map((e) => e.student.userId).filter((id): id is string => id !== null),
         {
           type: 'PROJECT_RELEASED',
           title: 'New project released',
@@ -620,7 +620,7 @@ export const trainerPortalController = {
         include: { student: { select: { id: true, userId: true, firstName: true, lastName: true, email: true, user: { select: { email: true } } } } },
       });
       await notificationService.bulkCreate(
-        enrollments.map((e) => e.student.userId),
+        enrollments.map((e) => e.student.userId).filter((id): id is string => id !== null),
         {
           type: 'FEEDBACK_FORM_RELEASED',
           title: 'Feedback form available',
@@ -710,7 +710,7 @@ export const trainerPortalController = {
         include: { student: { select: { id: true, userId: true, firstName: true, lastName: true, email: true, user: { select: { email: true } } } } },
       });
       await notificationService.bulkCreate(
-        enrollments.map((e) => e.student.userId),
+        enrollments.map((e) => e.student.userId).filter((id): id is string => id !== null),
         {
           type: 'TEST_ACTIVATED',
           title: 'Test activated',
@@ -864,7 +864,10 @@ export const trainerPortalController = {
         prisma.onlineTestAttempt.findMany({ where: { releaseId } }),
       ]);
       const byStudent = new Map(attempts.map((a) => [a.studentId, a]));
-      const roster = enrollments.map((e) => ({ student: e.student, attempt: byStudent.get(e.studentId) ?? null }));
+      const roster = enrollments.map((e) => ({
+        student: e.student,
+        attempt: byStudent.get(e.studentId) ?? null,
+      }));
       res.json({ success: true, data: { release, roster } });
     } catch (err) { next(err); }
   },

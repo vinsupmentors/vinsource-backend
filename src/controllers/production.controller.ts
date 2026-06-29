@@ -348,7 +348,7 @@ export const productionController = {
           phone: phone || 'PENDING',
           track,
           leadId: leadId || undefined,
-          createdById,
+          ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
           user: await buildStudentUserCreate(studentCode, email),
           ...(scheduleId ? { enrollments: { create: { scheduleId } } } : {}),
         },
@@ -464,7 +464,7 @@ export const productionController = {
               email: rowEmail,
               phone,
               track: track as never,
-              createdById,
+              ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
               user: await buildStudentUserCreate(studentCode, rowEmail),
             },
           });
@@ -692,7 +692,12 @@ export const productionController = {
 
       res.json({
         success: true,
-        data: { ongoingBatches, upcomingBatches, totalStudents, activeStudents },
+        data: {
+          ongoingBatches,
+          upcomingBatches,
+          totalStudents,
+          activeStudents,
+        },
       });
     } catch (err) { next(err); }
   },

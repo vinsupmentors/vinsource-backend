@@ -477,7 +477,7 @@ export const financeAdminController = {
   async listRecurring(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const templates = await prisma.recurringExpenseTemplate.findMany({
-        include: { vendor: { select: vendorSelect }, createdBy: { select: employeeSelect } },
+        include: { createdBy: { select: employeeSelect } },
         orderBy: { title: 'asc' },
       });
       res.json({ success: true, data: templates });

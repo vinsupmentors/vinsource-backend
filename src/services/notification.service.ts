@@ -1,6 +1,6 @@
 import prisma from '../config/database';
 import { emitToUser } from '../config/socket';
-import { NotificationType } from '@prisma/client';
+import { NotificationType, Prisma } from '@prisma/client';
 
 interface CreateNotificationDto {
   userId: string;
@@ -12,7 +12,9 @@ interface CreateNotificationDto {
 
 export const notificationService = {
   async create(dto: CreateNotificationDto) {
-    const notification = await prisma.notification.create({ data: dto });
+    const notification = await prisma.notification.create({
+      data: { ...dto, data: dto.data as Prisma.InputJsonValue },
+    });
 
     // Real-time push
     emitToUser(dto.userId, 'notification', {

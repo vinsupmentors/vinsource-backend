@@ -342,7 +342,7 @@ export const productionReportsController = {
         prisma.softskillAttendance.findMany({
           where: { studentId },
           include: { session: { select: { type: true, topic: true, sessionDate: true } } },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { sessionId: 'asc' },
         }),
         prisma.placementDriveCandidate.findMany({
           where: { studentId },
@@ -401,7 +401,7 @@ export const productionReportsController = {
               feedbackGivenBy: iv.feedbackGivenBy ? `${iv.feedbackGivenBy.firstName} ${iv.feedbackGivenBy.lastName}` : null,
             })),
             results: placementResults.map((r) => ({
-              id: r.id, partnerName: r.drive.partner.name, result: r.result, package: r.package,
+              id: r.id, partnerName: r.drive?.partner?.name ?? null, result: r.result, package: r.package,
               designation: r.designation, joiningDate: r.joiningDate, offerLetterUrl: r.offerLetterUrl,
             })),
           },

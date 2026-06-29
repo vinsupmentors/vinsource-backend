@@ -58,7 +58,7 @@ export const reportController = {
         const present   = att.filter(a => a.status === 'PRESENT').length;
         const halfDay   = att.filter(a => a.status === 'HALF_DAY').length;
         const absent    = att.filter(a => a.status === 'ABSENT').length;
-        const late      = att.filter(a => a.status === 'LATE').length;
+        const late      = 0; // LATE is not a valid AttendanceStatus
         const wfh       = att.filter(a => a.locationType === 'WFH').length;
         const totalHours = att.reduce((s, a) => s + (a.workHours || 0), 0);
         const otHours   = att.reduce((s, a) => s + (a.overtimeHours || 0), 0);
