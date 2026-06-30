@@ -366,8 +366,9 @@ export const employeeController = {
           where: { name: rawName.trim() },
         });
         if (!desig) {
+          const desigCode = rawName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'DESIG';
           desig = await prisma.designation.create({
-            data: { name: rawName.trim() },
+            data: { name: rawName.trim(), code: `${desigCode}_${Date.now().toString(36).toUpperCase()}` },
           });
         }
         desigCache[key] = desig.id;
