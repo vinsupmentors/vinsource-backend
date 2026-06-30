@@ -341,8 +341,9 @@ export const employeeController = {
         if (!rawName) return null;
         const key = rawName.trim().toLowerCase();
         if (deptCache[key]) return deptCache[key];
+        // MySQL is case-insensitive by default — no need for mode:'insensitive'
         let dept = await prisma.department.findFirst({
-          where: { companyId, name: { equals: rawName.trim(), mode: 'insensitive' } },
+          where: { companyId, name: rawName.trim() },
         });
         if (!dept) {
           const code = rawName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'DEPT';
@@ -362,11 +363,11 @@ export const employeeController = {
         const key = rawName.trim().toLowerCase();
         if (desigCache[key]) return desigCache[key];
         let desig = await prisma.designation.findFirst({
-          where: { companyId, name: { equals: rawName.trim(), mode: 'insensitive' } },
+          where: { name: rawName.trim() },
         });
         if (!desig) {
           desig = await prisma.designation.create({
-            data: { companyId, name: rawName.trim() },
+            data: { name: rawName.trim() },
           });
         }
         desigCache[key] = desig.id;
@@ -374,6 +375,7 @@ export const employeeController = {
       };
 
       const results: { email: string; status: 'created' | 'skipped'; reason?: string }[] = [];
+      let empCount = await prisma.employee.count({ where: { companyId } });
 
       for (const emp of employees) {
         if (!emp.firstName || !emp.email || !emp.joiningDate) {
@@ -404,7 +406,7 @@ export const employeeController = {
 
         const tempPassword = `Vinsup@${Math.random().toString(36).slice(-6).toUpperCase()}`;
         const hashedPwd = await hashPassword(tempPassword);
-        const employeeCode = await generateEmployeeCode(companyId);
+        const employeeCode = generateEmployeeCode('EMP', empCount++);
 
         const user = await prisma.user.create({
           data: {
