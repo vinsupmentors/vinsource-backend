@@ -20,7 +20,7 @@ export const emailService = {
   async send(opts: EmailOptions) {
     try {
       await transporter.sendMail({
-        from: `"HRMS" <${config.EMAIL_FROM}>`,
+        from: `"Vin-Source Portal" <${config.EMAIL_FROM}>`,
         to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
         subject: opts.subject,
         html: opts.html,
@@ -81,23 +81,89 @@ export const emailService = {
 
     welcomeEmployee: (data: { firstName: string; email: string; password: string; loginUrl: string }) => `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-        <div style="background:#1e40af;padding:24px;">
-          <h1 style="color:#fff;margin:0;font-size:22px;">Welcome to the Team! 🎉</h1>
+        <div style="background:#1e3a8a;padding:28px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:24px;letter-spacing:1px;">Vin-Source Portal</h1>
+          <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Vinsup Skill Academy — HR & Operations</p>
         </div>
-        <div style="padding:24px;">
-          <p>Dear ${data.firstName},</p>
-          <p>Your HRMS account has been created by HR. You can now log in to access your profile, payslips, attendance, and more.</p>
-          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Login Email</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.email}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Temporary Password</strong></td><td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;font-size:16px;letter-spacing:2px;">${data.password}</td></tr>
-          </table>
-          <p style="background:#fef3c7;padding:12px;border-radius:6px;border-left:4px solid #f59e0b;">
-            <strong>Action Required:</strong> Please log in and change your password immediately after your first login.
+        <div style="padding:28px;">
+          <h2 style="color:#1e3a8a;margin-top:0;">Welcome to the Team, ${data.firstName}! 🎉</h2>
+          <p>Your employee account has been created on the <strong>Vin-Source Portal</strong>. You can now log in to access your profile, attendance, payslips, and more.</p>
+
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 8px;font-weight:600;color:#0369a1;">Your Login Credentials</p>
+            <table style="width:100%;border-collapse:collapse;">
+              <tr><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:4px 0 0 0;"><strong>Portal URL</strong></td><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;"><a href="${data.loginUrl}" style="color:#1e40af;">${data.loginUrl}</a></td></tr>
+              <tr><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;"><strong>Email (Username)</strong></td><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;">${data.email}</td></tr>
+              <tr><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 0 4px;"><strong>Temporary Password</strong></td><td style="padding:8px 12px;background:#fffbeb;border:1px solid #e5e7eb;font-family:monospace;font-size:16px;letter-spacing:3px;font-weight:700;color:#92400e;">${data.password}</td></tr>
+            </table>
+          </div>
+
+          <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px;border-radius:0 6px 6px 0;margin:20px 0;">
+            <p style="margin:0;font-weight:700;color:#92400e;">⚠️ Important: Change Your Password on First Login</p>
+            <p style="margin:8px 0 0;color:#78350f;font-size:14px;">Your temporary password must be changed immediately. You will be prompted automatically.</p>
+          </div>
+
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 10px;font-weight:700;color:#374151;">How to Change Your Password:</p>
+            <ol style="margin:0;padding-left:20px;color:#374151;font-size:14px;line-height:1.8;">
+              <li>Click the <strong>Sign In</strong> button below and log in with the credentials above.</li>
+              <li>You will be automatically taken to the <strong>Change Password</strong> screen.</li>
+              <li>Enter your temporary password in the <em>Current Password</em> field.</li>
+              <li>Enter your new password (minimum 6 characters) in the <em>New Password</em> field.</li>
+              <li>Re-enter your new password to confirm.</li>
+              <li>Click <strong>Update Password</strong>. You're done!</li>
+            </ol>
+            <p style="margin:10px 0 0;font-size:13px;color:#6b7280;">You can also change your password anytime from your <strong>Profile → Security</strong> section.</p>
+          </div>
+
+          <p style="text-align:center;margin:24px 0;">
+            <a href="${data.loginUrl}" style="background:#1e3a8a;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:15px;">Sign In to Vin-Source Portal →</a>
           </p>
-          <p style="text-align:center;margin:20px 0;">
-            <a href="${data.loginUrl}" style="background:#1e40af;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block;">Log In to HRMS &rarr;</a>
+
+          <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:20px;">
+            If you have trouble logging in, please contact HR at <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a><br/>
+            This is an automated message from the Vin-Source Portal.
           </p>
-          <p style="color:#6b7280;font-size:12px;">If you have any trouble logging in, please contact your HR team.</p>
+        </div>
+      </div>`,
+
+    passwordChangeReminder: (data: { firstName: string; email: string; loginUrl: string }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#dc2626;padding:24px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">⚠️ Password Change Required</h1>
+          <p style="color:#fca5a5;margin:6px 0 0;font-size:13px;">Vin-Source Portal — Vinsup Skill Academy</p>
+        </div>
+        <div style="padding:28px;">
+          <p>Dear <strong>${data.firstName}</strong>,</p>
+          <p>This is a reminder that your <strong>Vin-Source Portal</strong> account still has a temporary password. For the security of your account, please log in and change it today.</p>
+
+          <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 6px;font-weight:700;color:#991b1b;">Your account is at risk until you change your password.</p>
+            <p style="margin:0;font-size:14px;color:#7f1d1d;">Login Email: <strong>${data.email}</strong></p>
+          </div>
+
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 10px;font-weight:700;color:#374151;">Steps to Change Your Password:</p>
+            <ol style="margin:0;padding-left:20px;color:#374151;font-size:14px;line-height:1.8;">
+              <li>Click <strong>Sign In</strong> below and log in with your current credentials.</li>
+              <li>Go to your <strong>Profile</strong> (top-right corner, click your name).</li>
+              <li>Click <strong>Security</strong> or you will be prompted automatically.</li>
+              <li>Enter your current password, then your new password.</li>
+              <li>Click <strong>Update Password</strong>.</li>
+            </ol>
+          </div>
+
+          <p style="text-align:center;margin:24px 0;">
+            <a href="${data.loginUrl}" style="background:#dc2626;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:15px;">Change My Password Now →</a>
+          </p>
+
+          <p style="background:#fef3c7;padding:12px;border-radius:6px;font-size:13px;color:#92400e;">
+            You will receive this reminder every day until your password is changed.
+          </p>
+
+          <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:20px;">
+            Need help? Contact HR at <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a>
+          </p>
         </div>
       </div>`,
 

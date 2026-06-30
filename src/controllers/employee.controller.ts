@@ -294,4 +294,109 @@ export const employeeController = {
       res.json({ success: true, data: reports });
     } catch (err) { next(err); }
   },
+
+  // ─── HR: Bulk create employees + send welcome emails ─────────────────────────
+  async bulkCreate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const companyId = req.user!.companyId!;
+      const { employees } = req.body as {
+        employees: {
+          firstName: string;
+          lastName: string;
+          email: string;
+          phone?: string;
+          joiningDate: string;
+          departmentId: string;
+          designationId: string;
+          branchId?: string;
+          managerId?: string;
+        }[];
+      };
+
+      if (!Array.isArray(employees) || employees.length === 0) {
+        throw new AppError('employees array is required', 400);
+      }
+      if (employees.length > 100) {
+        throw new AppError('Maximum 100 employees per bulk upload', 400);
+      }
+
+      const branch = await prisma.branch.findFirst({ where: { companyId } });
+      if (!branch) throw new AppError('No branch found for this company', 400);
+
+      const results: { email: string; status: 'created' | 'skipped'; reason?: string }[] = [];
+
+      for (const emp of employees) {
+        if (!emp.firstName || !emp.lastName || !emp.email || !emp.joiningDate || !emp.departmentId || !emp.designationId) {
+          results.push({ email: emp.email || '?', status: 'skipped', reason: 'Missing required fields' });
+          continue;
+        }
+
+        // Check duplicate
+        const existing = await prisma.employee.findFirst({ where: { email: emp.email } });
+        if (existing) {
+          results.push({ email: emp.email, status: 'skipped', reason: 'Email already exists' });
+          continue;
+        }
+
+        const tempPassword = `Vinsup@${Math.random().toString(36).slice(-6).toUpperCase()}`;
+        const hashedPwd = await hashPassword(tempPassword);
+        const employeeCode = await generateEmployeeCode(companyId);
+
+        const user = await prisma.user.create({
+          data: {
+            email: emp.email,
+            password: hashedPwd,
+            role: 'EMPLOYEE',
+            mustChangePassword: true,
+          },
+        });
+
+        await prisma.employee.create({
+          data: {
+            userId: user.id,
+            companyId,
+            branchId: emp.branchId || branch.id,
+            departmentId: emp.departmentId,
+            designationId: emp.designationId,
+            managerId: emp.managerId || null,
+            employeeCode,
+            firstName: emp.firstName,
+            lastName: emp.lastName,
+            email: emp.email,
+            phone: emp.phone,
+            joiningDate: new Date(emp.joiningDate),
+            status: 'ACTIVE',
+          },
+        });
+
+        // Send welcome email
+        try {
+          await emailService.send({
+            to: emp.email,
+            subject: '🎉 Welcome to Vin-Source Portal — Your Login Credentials',
+            html: emailService.templates.welcomeEmployee({
+              firstName: emp.firstName,
+              email: emp.email,
+              password: tempPassword,
+              loginUrl: config.FRONTEND_URL + '/login',
+            }),
+            template: 'welcomeEmployee',
+          });
+        } catch {
+          // Email failure doesn't block account creation
+        }
+
+        results.push({ email: emp.email, status: 'created' });
+      }
+
+      const created = results.filter((r) => r.status === 'created').length;
+      const skipped = results.filter((r) => r.status === 'skipped').length;
+
+      res.status(201).json({
+        success: true,
+        message: `${created} employee(s) created, ${skipped} skipped`,
+        data: { results, created, skipped },
+      });
+    } catch (err) { next(err); }
+  },
 };

@@ -12,6 +12,7 @@ router.get('/my-team', requireMinRole('MANAGER'), employeeController.getDirectRe
 router.get('/', requireMinRole('MANAGER'), employeeController.list);
 router.get('/:id', requireMinRole('MANAGER'), employeeController.get);
 router.post('/', requireMinRole('HR'), employeeController.create);
+router.post('/bulk', requireMinRole('HR'), employeeController.bulkCreate);
 router.post('/calc-salary', requireMinRole('HR'), employeeController.calcSalary);
 router.put('/:id', requireMinRole('HR'), employeeController.update);
 router.put('/:id/salary', requireMinRole('HR'), employeeController.updateSalary);

@@ -8,6 +8,7 @@ import redis from './config/redis';
 import { birthdayService } from './services/birthday.service';
 import { releaseReminderService } from './services/releaseReminder.service';
 import { attendanceCronService } from './services/attendanceCron.service';
+import { passwordReminderService } from './services/passwordReminder.service';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -27,6 +28,18 @@ const start = async () => {
 
     httpServer.listen(config.PORT, () => {
       console.log(`🚀 HRMS Backend running on port ${config.PORT} [${config.NODE_ENV}]`);
+    });
+
+    // Password change reminder — runs every day at 9:00 AM, emails anyone with mustChangePassword=true
+    cron.schedule('0 9 * * *', async () => {
+      try {
+        const result = await passwordReminderService.sendDailyReminders();
+        if (result.sent > 0) {
+          console.log(`🔑 Password change reminders sent: ${result.sent} (failed: ${result.failed})`);
+        }
+      } catch (err) {
+        console.error('Password reminder cron failed:', err);
+      }
     });
 
     // Daily birthday check — runs every day at 8:30 AM server time
