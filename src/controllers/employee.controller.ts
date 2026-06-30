@@ -451,6 +451,7 @@ export const employeeController = {
             status: 'ACCOUNT_CREATED',
             employeeId: createdEmp.id,
             tempPassword,
+            createdById: req.user!.userId,
           },
         });
 

@@ -127,21 +127,25 @@ export const onboardingController = {
             joiningDate: employee.joiningDate,
             status: 'ACCOUNT_CREATED',
             employeeId: employee.id,
+            createdById: employee.userId,
           },
           include: { documents: true },
         });
       }
 
+      // TypeScript: onboarding is guaranteed non-null from here
+      const onb = onboarding!;
+
       // On first login: record it and set document deadline
-      if (!onboarding.firstLoginAt) {
+      if (!onb.firstLoginAt) {
         const deadline = new Date();
         deadline.setDate(deadline.getDate() + GRACE_DAYS);
         await prisma.onboardingRequest.update({
-          where: { id: onboarding.id },
+          where: { id: onb.id },
           data: { firstLoginAt: new Date(), documentDeadline: deadline },
         });
-        onboarding.firstLoginAt = new Date();
-        onboarding.documentDeadline = deadline;
+        onb.firstLoginAt = new Date();
+        onb.documentDeadline = deadline;
       }
 
       // Check uploaded documents
@@ -155,12 +159,12 @@ export const onboardingController = {
       res.json({
         success: true,
         data: {
-          ...onboarding,
+          ...onb,
           requiredDocumentsUploaded: requiredDone,
           uploadedDocTypes: uploadedTypes,
-          gracePeriodExpired: onboarding.documentDeadline ? new Date() > onboarding.documentDeadline : false,
-          graceDaysLeft: onboarding.documentDeadline
-            ? Math.max(0, Math.ceil((onboarding.documentDeadline.getTime() - Date.now()) / 86400000))
+          gracePeriodExpired: onb.documentDeadline ? new Date() > onb.documentDeadline : false,
+          graceDaysLeft: onb.documentDeadline
+            ? Math.max(0, Math.ceil((onb.documentDeadline.getTime() - Date.now()) / 86400000))
             : GRACE_DAYS,
         },
       });
