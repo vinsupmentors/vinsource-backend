@@ -30,6 +30,13 @@ export async function getEffectiveAccess(userId: string): Promise<EffectiveAcces
 
   if (!user) return {};
 
+  // SUPER_ADMIN always gets full ADMIN access to every module.
+  if (user.role === 'SUPER_ADMIN') {
+    return Object.fromEntries(
+      Object.values(ModuleName).map((m) => [m, AccessLevel.ADMIN])
+    ) as EffectiveAccessMap;
+  }
+
   const access: EffectiveAccessMap = {};
 
   for (const dma of user.employee?.department?.moduleAccessDefaults ?? []) {
