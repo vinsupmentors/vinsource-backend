@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { notificationService } from '../services/notification.service';
 import { emailService } from '../services/email.service';
+import { config } from '../config/env';
 
 const REQUIRED_DOCS = ['AADHAAR', 'PAN', 'RESUME', 'MARKSHEET_10', 'MARKSHEET_12'];
 const GRACE_DAYS = 7;
@@ -237,17 +238,17 @@ export const onboardingController = {
         },
       });
 
-      // Welcome email with login credentials + wizard link
+      // Welcome email with login credentials + portal link
       await emailService.send({
         to: onb.email,
-        subject: 'Welcome! Complete your onboarding to get started',
-        html: emailService.templates.onboardingWelcome({
-          name: `${onb.firstName} ${onb.lastName}`,
-          email: onb.email, tempPassword,
-          onboardingId: onb.id,
-          joiningDate: onb.joiningDate.toDateString(),
+        subject: '🎉 Welcome to Vin-Source Portal — Your Login Credentials',
+        html: emailService.templates.welcomeEmployee({
+          firstName: onb.firstName,
+          email: onb.email,
+          password: tempPassword,
+          loginUrl: config.FRONTEND_URL + '/login',
         }),
-        template: 'onboarding_welcome',
+        template: 'welcomeEmployee',
       }).catch(console.error);
 
       await notificationService.create({
