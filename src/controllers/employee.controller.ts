@@ -418,7 +418,7 @@ export const employeeController = {
           },
         });
 
-        await prisma.employee.create({
+        const createdEmp = await prisma.employee.create({
           data: {
             userId: user.id,
             companyId,
@@ -433,6 +433,24 @@ export const employeeController = {
             phone: emp.phone,
             joiningDate: new Date(emp.joiningDate),
             status: 'ACTIVE',
+          },
+        });
+
+        // Create onboarding record so the setup wizard flow works
+        await prisma.onboardingRequest.create({
+          data: {
+            companyId,
+            branchId: emp.branchId || branch.id,
+            departmentId: deptId,
+            designationId: desigId,
+            firstName: emp.firstName,
+            lastName: emp.lastName || '',
+            email: emp.email,
+            phone: emp.phone || null,
+            joiningDate: new Date(emp.joiningDate),
+            status: 'ACCOUNT_CREATED',
+            employeeId: createdEmp.id,
+            tempPassword,
           },
         });
 
