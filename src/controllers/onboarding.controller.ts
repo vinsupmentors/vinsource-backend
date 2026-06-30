@@ -107,11 +107,30 @@ export const onboardingController = {
       const employee = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
       if (!employee) return res.json({ success: true, data: null });
 
-      const onboarding = await prisma.onboardingRequest.findUnique({
+      let onboarding = await prisma.onboardingRequest.findUnique({
         where: { employeeId: employee.id },
         include: { documents: true },
       });
-      if (!onboarding) return res.json({ success: true, data: null });
+
+      // Auto-create onboarding record for employees created via bulk upload
+      if (!onboarding) {
+        onboarding = await prisma.onboardingRequest.create({
+          data: {
+            companyId: employee.companyId,
+            branchId: employee.branchId,
+            departmentId: employee.departmentId,
+            designationId: employee.designationId,
+            firstName: employee.firstName,
+            lastName: employee.lastName,
+            email: employee.email,
+            phone: employee.phone || null,
+            joiningDate: employee.joiningDate,
+            status: 'ACCOUNT_CREATED',
+            employeeId: employee.id,
+          },
+          include: { documents: true },
+        });
+      }
 
       // On first login: record it and set document deadline
       if (!onboarding.firstLoginAt) {
