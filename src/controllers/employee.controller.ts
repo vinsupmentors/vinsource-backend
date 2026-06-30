@@ -302,12 +302,15 @@ export const employeeController = {
       const { employees } = req.body as {
         employees: {
           firstName: string;
-          lastName: string;
+          lastName?: string;
           email: string;
           phone?: string;
           joiningDate: string;
-          departmentId: string;
-          designationId: string;
+          // Accept either an ID or a plain name for dept/designation
+          departmentId?: string;
+          departmentName?: string;
+          designationId?: string;
+          designationName?: string;
           branchId?: string;
           managerId?: string;
         }[];
@@ -323,18 +326,79 @@ export const employeeController = {
       const branch = await prisma.branch.findFirst({ where: { companyId } });
       if (!branch) throw new AppError('No branch found for this company', 400);
 
+      // Cache resolved dept/desig names within this request to avoid repeated DB hits
+      const deptCache: Record<string, string> = {};
+      const desigCache: Record<string, string> = {};
+
+      // UUID pattern — if a value doesn't match, treat it as a name
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const isUUID = (v: string) => UUID_RE.test(v);
+
+      const resolveDept = async (idOrName?: string, nameOnly?: string): Promise<string | null> => {
+        const rawName = nameOnly || (idOrName && !isUUID(idOrName) ? idOrName : undefined);
+        const rawId   = idOrName && isUUID(idOrName) ? idOrName : undefined;
+        if (rawId) return rawId;
+        if (!rawName) return null;
+        const key = rawName.trim().toLowerCase();
+        if (deptCache[key]) return deptCache[key];
+        let dept = await prisma.department.findFirst({
+          where: { companyId, name: { equals: rawName.trim(), mode: 'insensitive' } },
+        });
+        if (!dept) {
+          const code = rawName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'DEPT';
+          dept = await prisma.department.create({
+            data: { companyId, name: rawName.trim(), code: `${code}_${Date.now().toString(36).toUpperCase()}` },
+          });
+        }
+        deptCache[key] = dept.id;
+        return dept.id;
+      };
+
+      const resolveDesig = async (idOrName?: string, nameOnly?: string): Promise<string | null> => {
+        const rawName = nameOnly || (idOrName && !isUUID(idOrName) ? idOrName : undefined);
+        const rawId   = idOrName && isUUID(idOrName) ? idOrName : undefined;
+        if (rawId) return rawId;
+        if (!rawName) return null;
+        const key = rawName.trim().toLowerCase();
+        if (desigCache[key]) return desigCache[key];
+        let desig = await prisma.designation.findFirst({
+          where: { companyId, name: { equals: rawName.trim(), mode: 'insensitive' } },
+        });
+        if (!desig) {
+          desig = await prisma.designation.create({
+            data: { companyId, name: rawName.trim() },
+          });
+        }
+        desigCache[key] = desig.id;
+        return desig.id;
+      };
+
       const results: { email: string; status: 'created' | 'skipped'; reason?: string }[] = [];
 
       for (const emp of employees) {
-        if (!emp.firstName || !emp.lastName || !emp.email || !emp.joiningDate || !emp.departmentId || !emp.designationId) {
-          results.push({ email: emp.email || '?', status: 'skipped', reason: 'Missing required fields' });
+        if (!emp.firstName || !emp.email || !emp.joiningDate) {
+          results.push({ email: emp.email || '?', status: 'skipped', reason: 'Missing required fields (firstName, email, joiningDate)' });
           continue;
         }
 
-        // Check duplicate
-        const existing = await prisma.employee.findFirst({ where: { email: emp.email } });
-        if (existing) {
+        // Resolve dept and desig
+        const deptId = await resolveDept(emp.departmentId, emp.departmentName);
+        const desigId = await resolveDesig(emp.designationId, emp.designationName);
+
+        if (!deptId || !desigId) {
+          results.push({ email: emp.email, status: 'skipped', reason: 'Missing department or designation' });
+          continue;
+        }
+
+        // Check duplicate — check both User and Employee tables
+        const existingUser = await prisma.user.findUnique({ where: { email: emp.email } });
+        if (existingUser) {
           results.push({ email: emp.email, status: 'skipped', reason: 'Email already exists' });
+          continue;
+        }
+        const existingEmp = await prisma.employee.findFirst({ where: { email: emp.email } });
+        if (existingEmp) {
+          results.push({ email: emp.email, status: 'skipped', reason: 'Employee already exists' });
           continue;
         }
 
@@ -356,12 +420,12 @@ export const employeeController = {
             userId: user.id,
             companyId,
             branchId: emp.branchId || branch.id,
-            departmentId: emp.departmentId,
-            designationId: emp.designationId,
+            departmentId: deptId,
+            designationId: desigId,
             managerId: emp.managerId || null,
             employeeCode,
             firstName: emp.firstName,
-            lastName: emp.lastName,
+            lastName: emp.lastName || '',
             email: emp.email,
             phone: emp.phone,
             joiningDate: new Date(emp.joiningDate),
