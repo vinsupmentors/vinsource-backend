@@ -477,7 +477,7 @@ export const onboardingController = {
       });
       if (!onb) throw new AppError('Onboarding request not found', 404);
       if (onb.companyId !== req.user!.companyId) throw new AppError('Forbidden', 403);
-      if (onb.status !== 'AWAITING_APPROVAL') throw new AppError('Not ready for final approval', 400);
+      if (!['AWAITING_APPROVAL', 'PROFILE_COMPLETE'].includes(onb.status)) throw new AppError('Not ready for final approval', 400);
 
       await prisma.onboardingRequest.update({
         where: { id: onb.id },
