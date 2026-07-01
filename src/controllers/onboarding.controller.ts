@@ -382,15 +382,23 @@ export const onboardingController = {
       // Work experience (delete old + insert new)
       await prisma.workExperience.deleteMany({ where: { employeeId: employee.id } });
       if (Array.isArray(experience) && experience.length > 0) {
-        await prisma.workExperience.createMany({
-          data: experience.map((e: any) => ({
-            employeeId: employee.id,
-            company: e.company, designation: e.designation,
-            startDate: new Date(e.startDate),
-            endDate: e.endDate ? new Date(e.endDate) : undefined,
-            isCurrent: e.isCurrent || false, description: e.description,
-          })),
-        });
+        // Guard: skip entries missing company or startDate to avoid Invalid Date crash
+        const validExp = experience.filter(
+          (e: any) => e.company && e.startDate && !isNaN(new Date(e.startDate).getTime())
+        );
+        if (validExp.length > 0) {
+          await prisma.workExperience.createMany({
+            data: validExp.map((e: any) => ({
+              employeeId: employee.id,
+              company: e.company,
+              designation: e.designation || '',
+              startDate: new Date(e.startDate),
+              endDate: e.endDate && !isNaN(new Date(e.endDate).getTime()) ? new Date(e.endDate) : undefined,
+              isCurrent: e.isCurrent || false,
+              description: e.description || '',
+            })),
+          });
+        }
       }
 
       // Set document deadline on first profile completion
