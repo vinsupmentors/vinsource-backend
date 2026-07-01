@@ -46,6 +46,9 @@ export const employeeController = {
 
   async get(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const requesterRole = req.user!.role;
+      const isHROrAbove = ['HR', 'ADMIN', 'SUPER_ADMIN'].includes(requesterRole);
+
       const employee = await prisma.employee.findUnique({
         where: { id: req.params.id },
         include: {
@@ -55,7 +58,9 @@ export const employeeController = {
           branch: true,
           manager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
           address: true,
-          bankDetails: true,
+          // Salary and bank details — HR/ADMIN/SUPER_ADMIN only
+          bankDetails: isHROrAbove,
+          salaryStructure: isHROrAbove,
           emergencyContacts: true,
           education: true,
           experience: true,
@@ -63,7 +68,6 @@ export const employeeController = {
           skills: { include: { skill: true } },
           documents: true,
           assets: { include: { asset: true } },
-          salaryStructure: true,
         },
       });
       if (!employee) throw new AppError('Employee not found', 404);
