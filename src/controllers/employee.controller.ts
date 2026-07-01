@@ -206,8 +206,22 @@ export const employeeController = {
           managerId: body.managerId,
           status: body.status,
           confirmationDate: body.confirmationDate ? new Date(body.confirmationDate) : undefined,
+          joiningDate: body.joiningDate ? new Date(body.joiningDate) : undefined,
         },
       });
+
+      // Also update user role if provided (promotion/transfer)
+      if (body.role) {
+        const VALID_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'];
+        const newRole = String(body.role).toUpperCase();
+        if (VALID_ROLES.includes(newRole)) {
+          await prisma.user.update({
+            where: { id: employee.userId },
+            data: { role: newRole as any },
+          });
+        }
+      }
+
       res.json({ success: true, data: employee });
     } catch (err) { next(err); }
   },
@@ -306,6 +320,7 @@ export const employeeController = {
           email: string;
           phone?: string;
           joiningDate: string;
+          role?: string;
           // Accept either an ID or a plain name for dept/designation
           departmentId?: string;
           departmentName?: string;
@@ -409,11 +424,16 @@ export const employeeController = {
         const hashedPwd = await hashPassword(tempPassword);
         const employeeCode = generateEmployeeCode('EMP', empCount++);
 
+        const VALID_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'];
+        const assignedRole = emp.role && VALID_ROLES.includes(emp.role.toUpperCase())
+          ? emp.role.toUpperCase()
+          : 'EMPLOYEE';
+
         const user = await prisma.user.create({
           data: {
             email: emp.email,
             password: hashedPwd,
-            role: 'EMPLOYEE',
+            role: assignedRole as any,
             mustChangePassword: true,
           },
         });
