@@ -2,11 +2,12 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { Request } from 'express';
+import { isCloudStorageEnabled } from '../services/storage.service';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'documents');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
+const diskDocStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname);
@@ -22,8 +23,10 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
   else cb(new Error('Only PDF, images, Word, and Excel documents are allowed'));
 };
 
+// Use memoryStorage when R2 is configured (buffer needed for cloud upload),
+// otherwise fall back to diskStorage (local VPS uploads/ directory).
 export const uploadDocument = multer({
-  storage,
+  storage: isCloudStorageEnabled() ? multer.memoryStorage() : diskDocStorage,
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 }).single('file');

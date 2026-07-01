@@ -4,6 +4,7 @@ import fs from 'fs';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { storageService, isCloudStorageEnabled } from '../services/storage.service';
 
 // Document types required at onboarding — in display order
 export const REQUIRED_DOC_TYPES = [
@@ -52,7 +53,25 @@ export const documentController = {
       const emp = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
       if (!emp) throw new AppError('Employee not found', 404);
 
-      const fileUrl = `/uploads/documents/${file.filename}`;
+      // ── Determine storage key + URL ─────────────────────────────────────────
+      let fileKey: string;
+      let fileUrl: string;
+
+      if (isCloudStorageEnabled() && file.buffer) {
+        // Cloud path: upload buffer → R2
+        const result = await storageService.upload(
+          file.buffer,
+          file.originalname,
+          file.mimetype,
+          'documents',
+        );
+        fileKey = result.key;
+        fileUrl = result.url;
+      } else {
+        // Local disk path (R2 not configured)
+        fileKey = file.filename!;
+        fileUrl = `/uploads/documents/${file.filename}`;
+      }
 
       // Upsert: replace existing doc of same type
       const existing = await prisma.document.findFirst({
@@ -61,15 +80,19 @@ export const documentController = {
 
       let doc;
       if (existing) {
-        // Delete old file
-        const oldPath = path.join(process.cwd(), 'uploads', 'documents', path.basename(existing.fileKey));
-        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        // Delete the old file (cloud or disk)
+        if (isCloudStorageEnabled()) {
+          await storageService.delete(existing.fileKey);
+        } else {
+          const oldPath = path.join(process.cwd(), 'uploads', 'documents', path.basename(existing.fileKey));
+          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        }
 
         doc = await prisma.document.update({
           where: { id: existing.id },
           data: {
             name: name || file.originalname,
-            fileKey: file.filename,
+            fileKey,
             fileUrl,
             uploadedAt: new Date(),
           },
@@ -80,7 +103,7 @@ export const documentController = {
             employeeId: emp.id,
             type: type as any,
             name: name || file.originalname,
-            fileKey: file.filename,
+            fileKey,
             fileUrl,
           },
         });
@@ -213,8 +236,14 @@ export const documentController = {
       const doc = await prisma.document.findUnique({ where: { id: req.params.id } });
       if (!doc) throw new AppError('Document not found', 404);
 
-      const filePath = path.join(process.cwd(), 'uploads', 'documents', path.basename(doc.fileKey));
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (isCloudStorageEnabled() && !doc.fileKey.startsWith('/uploads/')) {
+        // Cloud file
+        await storageService.delete(doc.fileKey);
+      } else {
+        // Local disk file
+        const filePath = path.join(process.cwd(), 'uploads', 'documents', path.basename(doc.fileKey));
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      }
 
       await prisma.document.delete({ where: { id: req.params.id } });
       res.json({ success: true, message: 'Document deleted' });
