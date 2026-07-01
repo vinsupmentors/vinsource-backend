@@ -3,7 +3,7 @@ import prisma from '../config/database';
 import { hashPassword, comparePassword } from '../utils/helpers';
 import { generateToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { AppError } from '../middleware/errorHandler';
-import { AuthRequest } from '../types';
+import { AuthRequest, AuthPayload } from '../types';
 import { emailService } from '../services/email.service';
 import { config } from '../config/env';
 
@@ -93,12 +93,14 @@ export const authController = {
       const { refreshToken } = req.body;
       if (!refreshToken) throw new AppError('Refresh token required', 400);
 
-      const payload = verifyRefreshToken(refreshToken);
+      const decoded = verifyRefreshToken(refreshToken);
       const session = await prisma.userSession.findUnique({ where: { refreshToken } });
       if (!session) throw new AppError('Session not found', 401);
 
-      const newToken = generateToken(payload);
-      const newRefreshToken = generateRefreshToken(payload);
+      // Strip JWT-internal fields (iat, exp) so jwt.sign doesn't clash with expiresIn option
+      const { iat, exp, ...payload } = decoded as any;
+      const newToken = generateToken(payload as AuthPayload);
+      const newRefreshToken = generateRefreshToken(payload as AuthPayload);
 
       await prisma.userSession.update({
         where: { id: session.id },
