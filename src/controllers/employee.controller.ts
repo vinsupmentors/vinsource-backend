@@ -4,6 +4,7 @@ import { hashPassword, paginate, formatPagination, generateEmployeeCode, calcSal
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { emailService } from '../services/email.service';
+import { notificationService } from '../services/notification.service';
 import { config } from '../config/env';
 
 export const employeeController = {
@@ -506,6 +507,119 @@ export const employeeController = {
         success: true,
         message: `${created} employee(s) created, ${skipped} skipped`,
         data: { results, created, skipped },
+      });
+    } catch (err) { next(err); }
+  },
+
+  // ─── HR: confirm employee (probation → permanent) ───────────────────────────
+  async confirm(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employee = await prisma.employee.findUnique({
+        where: { id: req.params.id },
+        include: { user: true },
+      });
+      if (!employee) throw new AppError('Employee not found', 404);
+      if (employee.companyId !== req.user!.companyId) throw new AppError('Forbidden', 403);
+      if (employee.status !== 'ON_PROBATION') throw new AppError('Employee is not on probation', 400);
+
+      const confirmationDate = req.body.confirmationDate
+        ? new Date(req.body.confirmationDate)
+        : new Date();
+
+      // Mark as permanent
+      const updated = await prisma.employee.update({
+        where: { id: employee.id },
+        data: { status: 'ACTIVE', confirmationDate },
+      });
+
+      // Auto-allocate casual leave for current year
+      const year = new Date().getFullYear();
+      const casualType = await prisma.companyLeaveType.findFirst({
+        where: { companyId: req.user!.companyId!, type: 'CASUAL', isActive: true },
+      });
+      if (casualType) {
+        await prisma.leaveBalance.upsert({
+          where: {
+            employeeId_leaveTypeId_year: {
+              employeeId: employee.id,
+              leaveTypeId: casualType.id,
+              year,
+            },
+          },
+          create: {
+            employeeId: employee.id,
+            leaveTypeId: casualType.id,
+            year,
+            totalDays: casualType.maxDaysPerYear,
+            usedDays: 0,
+            pendingDays: 0,
+          },
+          update: {
+            totalDays: casualType.maxDaysPerYear,
+          },
+        });
+      }
+
+      // Notify employee
+      if (employee.userId) {
+        await notificationService.create({
+          userId: employee.userId,
+          type: 'GENERAL',
+          title: 'Congratulations! You are now a permanent employee',
+          message: `Your probation period has ended. You have been confirmed as a permanent employee effective ${confirmationDate.toLocaleDateString()}.`,
+          data: {},
+        });
+      }
+
+      res.json({ success: true, data: updated, message: 'Employee confirmed as permanent' });
+    } catch (err) { next(err); }
+  },
+
+  // ─── HR: list employees on probation ────────────────────────────────────────
+  async probationList(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employees = await prisma.employee.findMany({
+        where: { companyId: req.user!.companyId!, status: 'ON_PROBATION' },
+        include: {
+          department: { select: { name: true } },
+          designation: { select: { name: true } },
+          manager: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: { joiningDate: 'asc' },
+      });
+      res.json({ success: true, data: employees });
+    } catch (err) { next(err); }
+  },
+
+  // ─── HR: department-wise active employee report ──────────────────────────────
+  async departmentReport(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employees = await prisma.employee.findMany({
+        where: { companyId: req.user!.companyId!, status: { in: ['ACTIVE', 'ON_PROBATION'] } },
+        include: {
+          department: { select: { name: true } },
+          designation: { select: { name: true } },
+          manager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
+        },
+        orderBy: [{ department: { name: 'asc' } }, { firstName: 'asc' }],
+      });
+
+      // Group by department
+      const grouped: Record<string, {
+        department: string;
+        employees: typeof employees;
+      }> = {};
+
+      for (const emp of employees) {
+        const deptName = emp.department?.name ?? 'Unassigned';
+        if (!grouped[deptName]) grouped[deptName] = { department: deptName, employees: [] };
+        grouped[deptName].employees.push(emp);
+      }
+
+      res.json({
+        success: true,
+        data: Object.values(grouped),
+        meta: { total: employees.length, departments: Object.keys(grouped).length },
       });
     } catch (err) { next(err); }
   },

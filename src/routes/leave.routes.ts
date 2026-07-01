@@ -8,6 +8,9 @@ router.use(authenticate);
 
 router.get('/all', requireRole('SUPER_ADMIN'), leaveController.all);
 router.get('/types', leaveController.types);
+router.get('/types/all', requireMinRole('HR'), leaveController.allTypes);
+router.post('/types', requireRole('SUPER_ADMIN'), leaveController.createType);
+router.delete('/types/:id', requireRole('SUPER_ADMIN'), leaveController.deleteType);
 router.post('/accrue-monthly', requireMinRole('HR'), leaveController.accrueMonthly);
 router.post('/apply', leaveController.apply);
 router.get('/my-requests', leaveController.myRequests);

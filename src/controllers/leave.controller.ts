@@ -390,6 +390,60 @@ export const leaveController = {
     } catch (err) { next(err); }
   },
 
+  // ─── SUPER_ADMIN: create leave type ─────────────────────────────────────────
+  async createType(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { type, name, maxDaysPerYear, isPaid, carryForward, encashable } = req.body;
+      if (!type || !name) throw new AppError('type and name are required', 400);
+
+      const existing = await prisma.companyLeaveType.findFirst({
+        where: { companyId: req.user!.companyId!, type },
+      });
+      if (existing) {
+        // Re-activate if soft-deleted
+        const updated = await prisma.companyLeaveType.update({
+          where: { id: existing.id },
+          data: { isActive: true, name, maxDaysPerYear: maxDaysPerYear ?? existing.maxDaysPerYear },
+        });
+        return res.json({ success: true, data: updated, message: 'Leave type re-activated' });
+      }
+
+      const lt = await prisma.companyLeaveType.create({
+        data: {
+          companyId: req.user!.companyId!,
+          type,
+          name,
+          maxDaysPerYear: maxDaysPerYear ?? 12,
+          isPaid: isPaid ?? true,
+          carryForward: carryForward ?? false,
+          encashable: encashable ?? false,
+        },
+      });
+      res.status(201).json({ success: true, data: lt });
+    } catch (err) { next(err); }
+  },
+
+  // ─── SUPER_ADMIN: deactivate leave type ─────────────────────────────────────
+  async deleteType(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const lt = await prisma.companyLeaveType.findUnique({ where: { id: req.params.id } });
+      if (!lt || lt.companyId !== req.user!.companyId) throw new AppError('Not found', 404);
+      await prisma.companyLeaveType.update({ where: { id: lt.id }, data: { isActive: false } });
+      res.json({ success: true, message: 'Leave type removed' });
+    } catch (err) { next(err); }
+  },
+
+  // ─── HR: get all leave types (including inactive) for management view ────────
+  async allTypes(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const types = await prisma.companyLeaveType.findMany({
+        where: { companyId: req.user!.companyId! },
+        orderBy: { name: 'asc' },
+      });
+      res.json({ success: true, data: types });
+    } catch (err) { next(err); }
+  },
+
   async calendar(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { month, year } = req.query;
