@@ -583,14 +583,8 @@ export const onboardingController = {
 
       // Clear partial employee profile data so they start fresh
       if (onb.employeeId) {
-        await prisma.employee.update({
-          where: { id: onb.employeeId },
-          data: { onboardingComplete: false },
-        }).catch(() => {}); // ignore if field doesn't exist
-
-        // Delete partial profile data
         await Promise.allSettled([
-          prisma.address.deleteMany({ where: { employeeId: onb.employeeId } }),
+          prisma.employeeAddress.deleteMany({ where: { employeeId: onb.employeeId } }),
           prisma.workExperience.deleteMany({ where: { employeeId: onb.employeeId } }),
           prisma.education.deleteMany({ where: { employeeId: onb.employeeId } }),
           prisma.emergencyContact.deleteMany({ where: { employeeId: onb.employeeId } }),
@@ -606,13 +600,16 @@ export const onboardingController = {
           data: { password: hashed },
         });
 
-        await emailService.sendWelcomeEmail({
+        await emailService.send({
           to: onb.email,
-          name: `${onb.firstName} ${onb.lastName}`,
-          email: onb.email,
-          tempPassword: newTempPwd,
-          loginUrl: `${config.FRONTEND_URL}/login`,
-        }).catch((e) => console.warn('Re-initiate welcome email failed:', e));
+          subject: 'Your onboarding has been re-initiated — new login details',
+          html: emailService.templates.welcomeEmployee({
+            firstName: onb.firstName,
+            email: onb.email,
+            password: newTempPwd,
+            loginUrl: `${config.FRONTEND_URL}/login`,
+          }),
+        }).catch((e: any) => console.warn('Re-initiate welcome email failed:', e));
       }
 
       // Notify employee
