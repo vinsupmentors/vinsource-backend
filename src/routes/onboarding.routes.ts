@@ -19,5 +19,6 @@ router.put('/:id/approve',      requireMinRole('HR'), onboardingController.appro
 router.put('/:id/reject',       requireMinRole('HR'), onboardingController.reject);
 router.put('/:id/final-approve', requireMinRole('HR'), onboardingController.hrFinalApprove);
 router.put('/:id/final-reject',  requireMinRole('HR'), onboardingController.hrFinalReject);
+router.put('/:id/reinitiate',    requireMinRole('HR'), onboardingController.reinitiate);
 
 export default router;
