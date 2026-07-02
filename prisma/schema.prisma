@@ -462,6 +462,8 @@ model Employee {
   bloodGroup      String?
   profilePhoto    String?
   status          EmployeeStatus @default(ACTIVE)
+  // System/control accounts (portal super admin) — excluded from employee lists & counts
+  isSystemAccount Boolean        @default(false)
   joiningDate     DateTime
   confirmationDate DateTime?
   probationEndDate DateTime?

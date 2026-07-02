@@ -13,7 +13,7 @@ export const employeeController = {
       const { page = 1, limit = 20, search, departmentId, status, branchId } = req.query;
       const p = Number(page), l = Number(limit);
 
-      const where: Record<string, unknown> = { companyId: req.user!.companyId };
+      const where: Record<string, unknown> = { companyId: req.user!.companyId, isSystemAccount: false };
       if (departmentId) where.departmentId = departmentId;
       if (branchId) where.branchId = branchId;
       if (status) where.status = status;
@@ -337,7 +337,7 @@ export const employeeController = {
   async mappingList(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employees = await prisma.employee.findMany({
-        where: { status: { not: 'TERMINATED' } },
+        where: { status: { not: 'TERMINATED' }, isSystemAccount: false },
         select: {
           id: true,
           firstName: true,
@@ -682,7 +682,7 @@ export const employeeController = {
   async departmentReport(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employees = await prisma.employee.findMany({
-        where: { companyId: req.user!.companyId!, status: { in: ['ACTIVE', 'ON_PROBATION'] } },
+        where: { companyId: req.user!.companyId!, status: { in: ['ACTIVE', 'ON_PROBATION'] }, isSystemAccount: false },
         include: {
           department: { select: { name: true } },
           designation: { select: { name: true } },

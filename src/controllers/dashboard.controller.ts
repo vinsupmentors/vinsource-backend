@@ -15,7 +15,7 @@ export const dashboardController = {
       if (role === 'SUPER_ADMIN') {
         const [companies, employees, users] = await Promise.all([
           prisma.company.count(),
-          prisma.employee.count(),
+          prisma.employee.count({ where: { isSystemAccount: false } }),
           prisma.user.count(),
         ]);
         return res.json({ success: true, data: { companies, totalEmployees: employees, users } });
@@ -35,11 +35,11 @@ export const dashboardController = {
 
       // Build where filters — managers see only their team
       const empWhere = isManagerRole && teamEmpIds !== null
-        ? { id: { in: teamEmpIds } }
-        : { companyId };
+        ? { id: { in: teamEmpIds }, isSystemAccount: false }
+        : { companyId, isSystemAccount: false };
       const activeEmpWhere = isManagerRole && teamEmpIds !== null
-        ? { id: { in: teamEmpIds }, status: 'ACTIVE' as const }
-        : { companyId, status: 'ACTIVE' as const };
+        ? { id: { in: teamEmpIds }, status: 'ACTIVE' as const, isSystemAccount: false }
+        : { companyId, status: 'ACTIVE' as const, isSystemAccount: false };
 
       const [
         totalEmployees,
