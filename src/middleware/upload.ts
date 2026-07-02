@@ -73,6 +73,31 @@ export const uploadCampaignBill = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 }).single('billCopy');
 
+// ── Profile photos (employee DP) ─────────────────────────────────────────────
+const PHOTO_UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'photos');
+if (!fs.existsSync(PHOTO_UPLOADS_DIR)) fs.mkdirSync(PHOTO_UPLOADS_DIR, { recursive: true });
+
+const photoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, PHOTO_UPLOADS_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
+  },
+});
+
+const photoFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowed = ['.jpg', '.jpeg', '.png', '.webp'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (allowed.includes(ext)) cb(null, true);
+  else cb(new Error('Only JPG, PNG, or WebP images are allowed'));
+};
+
+export const uploadProfilePhoto = multer({
+  storage: photoStorage,
+  fileFilter: photoFilter,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+}).single('photo');
+
 /** Optional ad-platform dashboard screenshot attached to a daily report. */
 export const uploadCampaignDashboard = multer({
   storage: campaignStorage,

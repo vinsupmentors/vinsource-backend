@@ -11,6 +11,7 @@
     "db:generate": "npx prisma generate",
     "db:seed": "ts-node src/utils/seed.ts",
     "db:seed:real": "ts-node src/utils/seedRealOrg.ts",
+    "notify:photos": "ts-node src/utils/sendPhotoRequest.ts",
     "db:studio": "npx prisma studio"
   },
   "dependencies": {

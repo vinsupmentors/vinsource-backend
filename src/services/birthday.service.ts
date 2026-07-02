@@ -1,6 +1,7 @@
 import prisma from '../config/database';
 import { emailService } from './email.service';
 import { notificationService } from './notification.service';
+import { config } from '../config/env';
 
 export const birthdayService = {
   /**
@@ -15,8 +16,8 @@ export const birthdayService = {
     const todayDate = today.getDate();
 
     const allActive = await prisma.employee.findMany({
-      where: { status: 'ACTIVE', dateOfBirth: { not: null } },
-      select: { id: true, userId: true, firstName: true, lastName: true, email: true, dateOfBirth: true },
+      where: { status: { in: ['ACTIVE', 'ON_PROBATION'] }, dateOfBirth: { not: null }, isSystemAccount: false },
+      select: { id: true, userId: true, firstName: true, lastName: true, email: true, dateOfBirth: true, profilePhoto: true },
     });
 
     const celebrants = allActive.filter((emp) => {
@@ -31,7 +32,7 @@ export const birthdayService = {
 
     // Recipients: every active employee (including celebrants themselves can receive a copy too)
     const allEmployees = await prisma.employee.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: { in: ['ACTIVE', 'ON_PROBATION'] }, isSystemAccount: false },
       select: { id: true, userId: true, firstName: true, lastName: true, email: true },
     });
 
@@ -50,8 +51,13 @@ export const birthdayService = {
             to: recipientEmails,
             subject: `🎉 Happy Birthday, ${celebrantName}!`,
             html: emailService.templates.birthdayWish({
-              recipientName: 'Team',
               celebrantName,
+              celebrantFirstName: celebrant.firstName,
+              // Absolute URL so the photo renders inside email clients
+              photoUrl: celebrant.profilePhoto
+                ? `${config.FRONTEND_URL}${celebrant.profilePhoto.startsWith('/') ? '' : '/'}${celebrant.profilePhoto}`
+                : null,
+              logoUrl: `${config.FRONTEND_URL}/vinsup-logo.png`,
             }),
             template: 'birthday_wish',
           })

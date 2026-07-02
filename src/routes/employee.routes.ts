@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { employeeController } from '../controllers/employee.controller';
 import { authenticate } from '../middleware/auth';
 import { requireMinRole, requireRole } from '../middleware/rbac';
+import { uploadProfilePhoto } from '../middleware/upload';
 
 const router = Router();
 
 router.use(authenticate);
 
 router.get('/me', employeeController.getMyProfile);
+router.post('/me/photo', uploadProfilePhoto, employeeController.uploadMyPhoto);
 router.get('/my-team', requireMinRole('MANAGER'), employeeController.getDirectReports);
 router.get('/probation', requireMinRole('HR'), employeeController.probationList);
 router.get('/report/departments', requireMinRole('MANAGER'), employeeController.departmentReport);

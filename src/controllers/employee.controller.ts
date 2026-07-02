@@ -241,6 +241,20 @@ export const employeeController = {
     } catch (err) { next(err); }
   },
 
+  // Any employee: upload/replace own profile photo (DP)
+  async uploadMyPhoto(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      if (!req.file) throw new AppError('No image uploaded — use form field "photo"', 400);
+      const employee = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
+      if (!employee) throw new AppError('Employee profile not found', 404);
+
+      const photoUrl = `/uploads/photos/${req.file.filename}`;
+      await prisma.employee.update({ where: { id: employee.id }, data: { profilePhoto: photoUrl } });
+
+      res.json({ success: true, data: { profilePhoto: photoUrl }, message: 'Profile photo updated' });
+    } catch (err) { next(err); }
+  },
+
   async getMyProfile(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employee = await prisma.employee.findUnique({

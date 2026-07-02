@@ -218,19 +218,83 @@ export const emailService = {
         </div>
       </div>`,
 
-    birthdayWish: (data: { recipientName: string; celebrantName: string }) => `
-      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-        <div style="background:linear-gradient(135deg,#ec4899,#8b5cf6);padding:24px;text-align:center;">
-          <h1 style="color:#fff;margin:0;font-size:24px;">🎉 Happy Birthday, ${data.celebrantName}! 🎂</h1>
+    birthdayWish: (data: { celebrantName: string; celebrantFirstName: string; photoUrl?: string | null; messageLine?: string; logoUrl?: string }) => `
+      <div style="font-family:Georgia,'Times New Roman',serif;max-width:620px;margin:auto;">
+        <div style="font-family:Arial,Helvetica,sans-serif;padding:0 4px 18px;">
+          <p style="margin:0 0 14px;">Dear ${data.celebrantFirstName},</p>
+          <p style="margin:0 0 6px;">Wishing you a wonderful <strong>birthday</strong> filled with joy, laughter, and everything you love the most.</p>
+          <p style="margin:0 0 14px;">May the year ahead open doors to new achievements, meaningful experiences, and moments you'll cherish forever.</p>
+          <p style="margin:0;">Happy <strong>Birthday</strong> once again!</p>
         </div>
-        <div style="padding:24px;">
-          <p>Dear ${data.recipientName},</p>
-          <p>Today is a special day — please join us in wishing <strong>${data.celebrantName}</strong> a very Happy Birthday! 🎈</p>
-          <p>Let's take a moment to celebrate and make their day extra special.</p>
-          <p style="background:#fdf2f8;padding:12px;border-radius:6px;border-left:4px solid #ec4899;">
-            Wishing you a fantastic year ahead, filled with success and happiness!
+
+        <!-- Birthday card -->
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f7f8fa;border:1px solid #e5e7eb;border-radius:4px;">
+          <tr>
+            <!-- Photo panel -->
+            <td width="45%" valign="top" style="padding:26px 0 26px 26px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                <tr><td style="background:#1e3a8a;padding:6px;">
+                  ${data.photoUrl
+                    ? `<img src="${data.photoUrl}" alt="${data.celebrantName}" width="230" style="display:block;width:100%;max-width:230px;height:auto;background:#fff;" />`
+                    : `<div style="background:#e8edf7;text-align:center;padding:70px 10px;color:#1e3a8a;font-size:64px;font-weight:bold;font-family:Arial,sans-serif;">${data.celebrantFirstName.charAt(0).toUpperCase()}</div>`}
+                </td></tr>
+                <tr><td style="background:#1e3a8a;text-align:center;padding:8px 6px;">
+                  <span style="color:#ffffff;font-family:Arial,sans-serif;font-size:15px;font-weight:bold;letter-spacing:0.5px;">${data.celebrantName}</span>
+                </td></tr>
+              </table>
+            </td>
+            <!-- Message panel -->
+            <td width="55%" valign="top" style="padding:26px;">
+              <p style="text-align:right;margin:0 0 18px;font-family:Arial,sans-serif;">
+                ${data.logoUrl
+                  ? `<img src="${data.logoUrl}" alt="Vinsup Skill Academy" height="42" style="height:42px;width:auto;display:inline-block;" />`
+                  : `<span style="display:inline-block;background:#1e3a8a;color:#fff;font-weight:bold;font-size:14px;letter-spacing:1px;padding:6px 12px;border-radius:3px;">VINSUP<br/><span style="font-size:8px;letter-spacing:2px;">SKILL ACADEMY</span></span>`}
+              </p>
+              <p style="font-family:'Brush Script MT',cursive;color:#1e3a8a;font-size:30px;margin:0;line-height:1.1;">Happy</p>
+              <p style="font-family:'Brush Script MT',cursive;color:#1e3a8a;font-size:48px;margin:0 0 18px;line-height:1.1;">Birthday</p>
+              <p style="font-family:Arial,sans-serif;color:#374151;font-size:12.5px;line-height:1.7;margin:0;">
+                ${data.messageLine || 'Wishing a very happy birthday to a valued member of our team. Your dedication, energy, and contribution inspire everyone around you. Have an amazing day and an even better year ahead!'}
+              </p>
+              <p style="font-size:26px;margin:16px 0 0;">🎉🎊</p>
+            </td>
+          </tr>
+        </table>
+
+        <p style="font-family:Arial,sans-serif;color:#6b7280;font-size:12px;margin:16px 4px 0;">— With warm wishes from everyone at Vinsup Skill Academy</p>
+      </div>`,
+
+    photoUploadRequest: (data: { firstName: string; loginUrl: string; deadline: string; logoUrl?: string }) => `
+      <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e3a8a;padding:24px;text-align:center;">
+          ${data.logoUrl ? `<img src="${data.logoUrl}" alt="Vinsup Skill Academy" height="40" style="height:40px;width:auto;display:inline-block;background:#fff;padding:4px 10px;border-radius:6px;margin-bottom:10px;" /><br/>` : ''}
+          <h1 style="color:#fff;margin:0;font-size:22px;">📸 Update Your Profile Photo</h1>
+          <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Vin-Source Portal — Vinsup Skill Academy</p>
+        </div>
+        <div style="padding:26px;">
+          <p>Dear <strong>${data.firstName}</strong>,</p>
+          <p>We're adding profile photos across the Vin-Source Portal — they'll appear on your profile, the org chart, and in celebration emails (like birthday wishes 🎂).</p>
+          <p><strong>Please upload a clear, professional photo of yourself by ${data.deadline}.</strong></p>
+
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px;margin:18px 0;">
+            <p style="margin:0 0 8px;font-weight:700;color:#0369a1;">How to upload (takes under a minute):</p>
+            <ol style="margin:0;padding-left:20px;color:#374151;font-size:14px;line-height:1.8;">
+              <li>Log in to the <a href="${data.loginUrl}" style="color:#1e40af;">Vin-Source Portal</a>.</li>
+              <li>Click your name in the top-right corner.</li>
+              <li>Choose <strong>Upload Photo</strong> and select your picture.</li>
+            </ol>
+          </div>
+
+          <div style="background:#fef9c3;border-left:4px solid #eab308;padding:12px 14px;border-radius:0 6px 6px 0;margin:18px 0;">
+            <p style="margin:0;font-size:13px;color:#713f12;"><strong>Photo guidelines:</strong> recent, front-facing, plain background, formal/business attire preferred. JPG or PNG, max 5&nbsp;MB.</p>
+          </div>
+
+          <p style="text-align:center;margin:22px 0 8px;">
+            <a href="${data.loginUrl}" style="background:#1e3a8a;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:14px;">Open Vin-Source Portal →</a>
           </p>
-          <p style="color:#6b7280;font-size:12px;">— With wishes from the entire team</p>
+
+          <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:12px;margin-top:18px;">
+            Questions? Contact HR at <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a>
+          </p>
         </div>
       </div>`,
 
