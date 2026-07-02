@@ -30,7 +30,7 @@ const DATASET = [
   ['Hariharan',                'V7011', 'V7003', true,  '2025-04-21', 'Team Lead - Sales'],
   ['Muhammad Ramees J',        'V7012', 'V7003', true,  '2025-04-21', 'Business Development Associate'],
   ['Shabir Ahmed S',           'V7016', 'V7003', true,  '2025-04-21', 'Business Development Associate'],
-  ['Muneeswari',               'V7017', 'V7048', true,  '2025-04-22', 'Janitor'],
+  // Muneeswari (V7017) omitted — never onboarded (per Madhu). Code stays reserved.
   ['Jothimalar S',             'V7020', 'V7003', true,  '2025-04-21', 'Business Development Associate'],
   ['Nishanthini S',            'V7029', 'V7003', true,  '2025-07-02', 'Business Development Associate'],
   ['Midhun K',                 'V7030', 'V7003', true,  '2025-07-02', 'Student Success Advisor'],
@@ -42,7 +42,7 @@ const DATASET = [
   ['Hariharashuthan A',        'V7046', 'V7003', true,  '2026-02-01', 'Business Development Associate'],
   ['Jayasoorya Subramanian M', 'V7048', 'V7007', true,  '2026-04-01', 'Operation Manager - AGM'],
   ['Danush V K',               'V7049', 'V7000', false, '2026-03-02', 'Video Editor'],
-  ['Ramya',                    'V7051', 'V7003', false, '2026-04-01', 'Business Development Associate'],
+  // Ramya (V7051) omitted — never onboarded (per Madhu). Code stays reserved.
   ['Athithyan J',              'V7052', 'V7032', false, '2026-04-01', 'Skill Mentor'],
   ['Sneha M',                  'V7053', 'V7000', false, '2026-04-06', 'Marketing'],
   ['Vishmitha V',              'V7054', 'V7003', false, '2026-04-06', 'Business Development Associate'],
@@ -58,6 +58,14 @@ const DATASET = [
   ['Yureka',                   'V7064', 'V7048', false, '2026-07-01', 'Admin and Ops Executive'],
   ['Raj Prasanth',             'V7065', 'V7048', false, '2026-07-01', 'Admin Executive - Intern'],
 ];
+
+// Confirmed by Madhu: alternate names in the DB for people on the sheet
+const ALIASES = {
+  V7037: ['Selva Kumar'], // Selvakumar Santhanam
+};
+
+// Confirmed by Madhu: duplicate/test accounts — terminated + login disabled on --apply
+const TEST_ACCOUNT_CODES = ['EMP0002', 'EMP0003']; // duplicate Pooranam, test Gaurav
 
 const norm = (s) => (s || '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -76,15 +84,20 @@ async function main() {
   console.log(APPLY ? '=== APPLY MODE ===' : '=== DRY RUN (pass --apply to write) ===');
   if (!SYNC_DATES) console.log('(joining dates are NOT synced — add --dates to include them)\n');
 
-  const employees = await prisma.employee.findMany({
+  const allEmployees = await prisma.employee.findMany({
     select: {
-      id: true, firstName: true, lastName: true, employeeCode: true, status: true,
+      id: true, userId: true, firstName: true, lastName: true, employeeCode: true, status: true,
       managerId: true, joiningDate: true, designationId: true,
       designation: { select: { id: true, name: true } },
     },
   });
   const designations = await prisma.designation.findMany({ select: { id: true, name: true } });
-  console.log(`DB employees: ${employees.length} | dataset rows: ${DATASET.length}\n`);
+
+  // Known duplicate/test accounts — excluded from matching so they can never
+  // steal a sheet identity from the real person.
+  const testAccounts = allEmployees.filter((e) => TEST_ACCOUNT_CODES.includes(e.employeeCode.toUpperCase()));
+  const employees = allEmployees.filter((e) => !testAccounts.includes(e));
+  console.log(`DB employees: ${allEmployees.length} (${testAccounts.length} known test/duplicate) | dataset rows: ${DATASET.length}\n`);
 
   // ── Match dataset rows to DB employees (exact code → exact name → fuzzy) ──
   const byRowCode = {};
@@ -96,17 +109,18 @@ async function main() {
     const emp = employees.find((e) => e.employeeCode.toUpperCase() === code && !matchedIds.has(e.id));
     if (emp) { byRowCode[code] = emp; matchedIds.add(emp.id); }
   }
-  // Pass 2: exact normalized full name
+  // Pass 2: exact normalized full name (incl. confirmed aliases)
   for (const [name, code] of DATASET) {
     if (byRowCode[code]) continue;
-    const target = norm(name);
-    const emp = employees.find((e) => norm(e.firstName + e.lastName) === target && !matchedIds.has(e.id));
+    const targets = [name, ...(ALIASES[code] || [])].map(norm);
+    const emp = employees.find((e) => targets.includes(norm(e.firstName + e.lastName)) && !matchedIds.has(e.id));
     if (emp) { byRowCode[code] = emp; matchedIds.add(emp.id); }
   }
-  // Pass 3: fuzzy (trailing initials)
+  // Pass 3: fuzzy (trailing initials, incl. aliases)
   for (const [name, code] of DATASET) {
     if (byRowCode[code]) continue;
-    const emp = employees.find((e) => fuzzyMatches(name, e) && !matchedIds.has(e.id));
+    const names = [name, ...(ALIASES[code] || [])];
+    const emp = employees.find((e) => names.some((n) => fuzzyMatches(n, e)) && !matchedIds.has(e.id));
     if (emp) { byRowCode[code] = emp; matchedIds.add(emp.id); }
     else missing.push(`${name} (${code})`);
   }
@@ -185,7 +199,14 @@ async function main() {
     if (Object.keys(changes).length) plan.push({ name, code, emp, changes, data });
   }
 
-  if (!plan.length) { console.log('✓ Everything already in sync — nothing to change.'); return; }
+  // Test/duplicate accounts to deactivate (confirmed by Madhu)
+  const toDeactivate = testAccounts.filter((e) => e.status !== 'TERMINATED');
+  if (toDeactivate.length) {
+    console.log('\nTest/duplicate accounts to TERMINATE + disable login:');
+    toDeactivate.forEach((e) => console.log(`   - ${e.firstName} ${e.lastName} [${e.employeeCode}]`));
+  }
+
+  if (!plan.length && !toDeactivate.length) { console.log('✓ Everything already in sync — nothing to change.'); return; }
 
   console.log(`\nPlanned updates (${plan.length} employee(s), only the fields shown are touched):`);
   for (const p of plan) {
@@ -193,6 +214,13 @@ async function main() {
   }
 
   if (!APPLY) { console.log('\nDry run complete — review above, then re-run with --apply.'); return; }
+
+  // ── Phase 0: deactivate confirmed test/duplicate accounts ───────────────
+  for (const e of toDeactivate) {
+    await prisma.employee.update({ where: { id: e.id }, data: { status: 'TERMINATED' } });
+    await prisma.user.update({ where: { id: e.userId }, data: { isActive: false } });
+    console.log(`   ✗ deactivated ${e.firstName} ${e.lastName} [${e.employeeCode}]`);
+  }
 
   // ── Phase 1: temp codes (avoids unique-constraint collisions on swaps) ──
   const codeChanges = plan.filter((p) => p.changes.employeeCode);
