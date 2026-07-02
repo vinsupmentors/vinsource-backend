@@ -78,6 +78,11 @@ export const documentController = {
         where: { employeeId: emp.id, type: type as any },
       });
 
+      // A verified document is locked — the employee cannot replace it.
+      if (existing?.isVerified) {
+        throw new AppError('This document has been verified by HR and can no longer be replaced. Contact HR if it needs correction.', 403);
+      }
+
       let doc;
       if (existing) {
         // Delete the old file (cloud or disk)
@@ -235,6 +240,11 @@ export const documentController = {
     try {
       const doc = await prisma.document.findUnique({ where: { id: req.params.id } });
       if (!doc) throw new AppError('Document not found', 404);
+
+      // Verified documents are locked — only SUPER_ADMIN can remove them.
+      if (doc.isVerified && req.user!.role !== 'SUPER_ADMIN') {
+        throw new AppError('This document has been verified by HR and can no longer be deleted. Contact HR if it needs correction.', 403);
+      }
 
       if (isCloudStorageEnabled() && !doc.fileKey.startsWith('/uploads/')) {
         // Cloud file
