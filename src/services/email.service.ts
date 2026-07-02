@@ -11,6 +11,7 @@ const transporter = nodemailer.createTransport({
 
 export interface EmailOptions {
   to: string | string[];
+  bcc?: string | string[];
   subject: string;
   html: string;
   template?: string;
@@ -22,12 +23,15 @@ export const emailService = {
       await transporter.sendMail({
         from: `"Vin-Source Portal" <${config.EMAIL_FROM}>`,
         to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
+        bcc: opts.bcc ? (Array.isArray(opts.bcc) ? opts.bcc.join(', ') : opts.bcc) : undefined,
         subject: opts.subject,
         html: opts.html,
       });
       await prisma.emailLog.create({
         data: {
-          to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
+          to:
+            (Array.isArray(opts.to) ? opts.to.join(', ') : opts.to) +
+            (opts.bcc ? ` | bcc: ${Array.isArray(opts.bcc) ? opts.bcc.length + ' recipients' : opts.bcc}` : ''),
           from: config.EMAIL_FROM,
           subject: opts.subject,
           template: opts.template,

@@ -42,7 +42,7 @@ const start = async () => {
       }
     });
 
-    // Daily birthday check — runs every day at 8:30 AM server time
+    // Daily birthday check — 8:30 AM India time (celebrant in To:, rest of company in Bcc:)
     cron.schedule('30 8 * * *', async () => {
       try {
         const result = await birthdayService.sendTodaysBirthdayWishes();
@@ -52,7 +52,7 @@ const start = async () => {
       } catch (err) {
         console.error('Birthday cron job failed:', err);
       }
-    });
+    }, { timezone: 'Asia/Kolkata' });
 
     // Deadline reminders — runs every day at 9:00 AM server time, emailing
     // students who haven't submitted a released Project/FeedbackForm/OnlineTest

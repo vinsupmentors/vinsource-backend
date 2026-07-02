@@ -39,16 +39,16 @@ export const birthdayService = {
     for (const celebrant of celebrants) {
       const celebrantName = `${celebrant.firstName} ${celebrant.lastName}`;
 
-      // Email the whole company (skip the celebrant's own inbox if you'd rather keep it a surprise —
-      // here we include everyone so it reads as a genuine company-wide announcement)
-      const recipientEmails = allEmployees
-        .filter((e) => e.email)
+      // Celebrant in To:, every other active employee in Bcc:
+      const bccEmails = allEmployees
+        .filter((e) => e.email && e.email !== celebrant.email)
         .map((e) => e.email);
 
-      if (recipientEmails.length > 0) {
+      if (celebrant.email) {
         await emailService
           .send({
-            to: recipientEmails,
+            to: celebrant.email,
+            bcc: bccEmails,
             subject: `🎉 Happy Birthday, ${celebrantName}!`,
             html: emailService.templates.birthdayWish({
               celebrantName,
