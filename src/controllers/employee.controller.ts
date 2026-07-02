@@ -288,6 +288,90 @@ export const employeeController = {
     } catch (err) { next(err); }
   },
 
+  // SUPER_ADMIN: delete (soft-delete → TERMINATED) an employee
+  async remove(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const emp = await prisma.employee.findUnique({ where: { id }, include: { user: true } });
+      if (!emp) throw new AppError('Employee not found', 404);
+
+      // Soft-delete: mark TERMINATED + disable login
+      await prisma.$transaction([
+        prisma.employee.update({ where: { id }, data: { status: 'TERMINATED' } }),
+        prisma.user.update({ where: { id: emp.userId }, data: { isActive: false } }),
+      ]);
+
+      await notificationService.create({
+        userId: req.user!.userId,
+        type: 'SYSTEM',
+        title: 'Employee Terminated',
+        message: `${emp.firstName} ${emp.lastName} has been marked as terminated.`,
+        data: {},
+      });
+
+      res.json({ success: true, message: 'Employee terminated successfully' });
+    } catch (err) { next(err); }
+  },
+
+  // SUPER_ADMIN: update employee code
+  async updateEmpCode(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const { employeeCode } = req.body;
+      if (!employeeCode?.trim()) throw new AppError('Employee code is required', 400);
+
+      const code = employeeCode.trim().toUpperCase();
+
+      // Check uniqueness
+      const existing = await prisma.employee.findFirst({ where: { employeeCode: code, NOT: { id } } });
+      if (existing) throw new AppError(`Employee code ${code} is already in use`, 409);
+
+      const emp = await prisma.employee.update({ where: { id }, data: { employeeCode: code } });
+      res.json({ success: true, data: emp, message: 'Employee code updated' });
+    } catch (err) { next(err); }
+  },
+
+  // SUPER_ADMIN: get all employees for mapping (flat list with manager info)
+  async mappingList(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employees = await prisma.employee.findMany({
+        where: { status: { not: 'TERMINATED' } },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          employeeCode: true,
+          status: true,
+          managerId: true,
+          department: { select: { id: true, name: true } },
+          designation: { select: { id: true, name: true } },
+          manager: { select: { id: true, firstName: true, lastName: true, employeeCode: true } },
+        },
+        orderBy: [{ department: { name: 'asc' } }, { firstName: 'asc' }],
+      });
+      res.json({ success: true, data: employees });
+    } catch (err) { next(err); }
+  },
+
+  // SUPER_ADMIN: bulk update manager assignments
+  async bulkUpdateMapping(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { mappings } = req.body as { mappings: { employeeId: string; managerId: string | null }[] };
+      if (!Array.isArray(mappings) || mappings.length === 0) throw new AppError('mappings array required', 400);
+
+      await prisma.$transaction(
+        mappings.map(({ employeeId, managerId }) =>
+          prisma.employee.update({
+            where: { id: employeeId },
+            data: { managerId: managerId || null },
+          })
+        )
+      );
+
+      res.json({ success: true, message: `${mappings.length} employees updated` });
+    } catch (err) { next(err); }
+  },
+
   // HR: preview salary breakdown without saving
   async calcSalary(req: AuthRequest, res: Response, next: NextFunction) {
     try {
