@@ -301,14 +301,6 @@ export const employeeController = {
         prisma.user.update({ where: { id: emp.userId }, data: { isActive: false } }),
       ]);
 
-      await notificationService.create({
-        userId: req.user!.userId,
-        type: 'SYSTEM',
-        title: 'Employee Terminated',
-        message: `${emp.firstName} ${emp.lastName} has been marked as terminated.`,
-        data: {},
-      });
-
       res.json({ success: true, message: 'Employee terminated successfully' });
     } catch (err) { next(err); }
   },
