@@ -60,8 +60,9 @@ export const onboardingController = {
     try {
       const { status, page = 1, limit = 20 } = req.query;
       const p = Number(page), l = Number(limit);
+      const VALID_STATUSES = ['PENDING', 'ACCOUNT_CREATED', 'PROFILE_COMPLETE', 'AWAITING_APPROVAL', 'COMPLETED', 'REJECTED'];
       const where: Record<string, unknown> = { companyId: req.user!.companyId! };
-      if (status) where.status = status;
+      if (status && VALID_STATUSES.includes(status as string)) where.status = status;
 
       const [requests, total] = await Promise.all([
         prisma.onboardingRequest.findMany({
@@ -338,8 +339,12 @@ export const onboardingController = {
         data: {
           firstName: firstName || employee.firstName,
           lastName: lastName || employee.lastName,
-          middleName, phone, dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
-          gender, bloodGroup, maritalStatus,
+          middleName: middleName || undefined,
+          phone: phone || undefined,
+          dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+          gender: gender || undefined,
+          bloodGroup: bloodGroup || undefined,
+          maritalStatus: maritalStatus || undefined,
         },
       });
 
