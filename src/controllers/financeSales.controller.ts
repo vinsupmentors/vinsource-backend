@@ -16,8 +16,8 @@ export const financeSalesController = {
       if (mode) where.mode = mode;
       if (search) {
         where.OR = [
-          { studentName: { contains: String(search), mode: 'insensitive' } },
-          { receiptNo: { contains: String(search), mode: 'insensitive' } },
+          { studentName: { contains: String(search) } },
+          { receiptNo: { contains: String(search) } },
         ];
       }
 

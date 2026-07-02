@@ -40,7 +40,7 @@ export const financeAdminController = {
       const where: Record<string, unknown> = {};
       if (status) where.status = status;
       if (category) where.category = category;
-      if (search) where.title = { contains: String(search), mode: 'insensitive' };
+      if (search) where.title = { contains: String(search) };
       if (month || year) {
         const { start, end } = monthRange(month as string, year as string);
         where.expenseDate = { gte: start, lt: end };
@@ -222,7 +222,7 @@ export const financeAdminController = {
       if (paymentMode) where.paymentMode = paymentMode;
       if (status) where.status = status;
       if (vendorId) where.vendorId = vendorId;
-      if (search) where.title = { contains: String(search), mode: 'insensitive' };
+      if (search) where.title = { contains: String(search) };
       if (from || to) {
         const dateFilter: Record<string, Date> = {};
         if (from) dateFilter.gte = new Date(`${from}T00:00:00`);
@@ -409,7 +409,7 @@ export const financeAdminController = {
       const { status, search } = req.query;
       const where: Record<string, unknown> = {};
       if (status) where.status = status;
-      if (search) where.name = { contains: String(search), mode: 'insensitive' };
+      if (search) where.name = { contains: String(search) };
       const vendors = await prisma.vendor.findMany({
         where,
         include: { createdBy: { select: employeeSelect } },

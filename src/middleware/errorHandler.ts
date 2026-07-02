@@ -26,6 +26,12 @@ export const errorHandler = (
     return;
   }
 
+  // Multer file size limit exceeded
+  if ((err as any).code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({ success: false, message: 'File too large. Maximum size is 10 MB.' });
+    return;
+  }
+
   // Prisma unique constraint
   if ((err as any).code === 'P2002') {
     res.status(409).json({ success: false, message: 'Record already exists' });

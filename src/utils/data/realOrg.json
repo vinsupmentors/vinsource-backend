@@ -7,83 +7,714 @@
     "address": "Vinsup Skill Academy, India"
   },
   "departments": [
-    { "code": "SALES", "name": "Sales" },
-    { "code": "PROD", "name": "Production" },
-    { "code": "PLACEMENT", "name": "Placements" },
-    { "code": "DM", "name": "Digital Marketing" },
-    { "code": "OPS", "name": "Operations" },
-    { "code": "HK", "name": "Housekeeping" },
-    { "code": "HR", "name": "HR & Ops" },
-    { "code": "MGMT", "name": "Management" },
-    { "code": "B2B", "name": "B2B" },
-    { "code": "DM_PLACEMENTS", "name": "DM & Placements" }
+    {
+      "code": "SALES",
+      "name": "Sales"
+    },
+    {
+      "code": "PROD",
+      "name": "Production"
+    },
+    {
+      "code": "PLACEMENT",
+      "name": "Placements"
+    },
+    {
+      "code": "DM",
+      "name": "Digital Marketing"
+    },
+    {
+      "code": "OPS",
+      "name": "Operations"
+    },
+    {
+      "code": "HK",
+      "name": "Housekeeping"
+    },
+    {
+      "code": "HR",
+      "name": "HR & Ops"
+    },
+    {
+      "code": "MGMT",
+      "name": "Management"
+    },
+    {
+      "code": "B2B",
+      "name": "B2B"
+    },
+    {
+      "code": "DM_PLACEMENTS",
+      "name": "DM & Placements"
+    },
+    {
+      "code": "ADMIN",
+      "name": "Admin"
+    }
   ],
   "departmentModuleAccess": [
-    { "dept": "SALES", "modules": [["SALES", "EDIT"], ["FINANCE_SALES", "EDIT"], ["HR", "VIEW"]] },
-    { "dept": "PROD", "modules": [["PRODUCTION_TRAINING", "EDIT"], ["HR", "VIEW"]] },
-    { "dept": "PLACEMENT", "modules": [["PLACEMENTS", "EDIT"], ["HR", "VIEW"]] },
-    { "dept": "DM", "modules": [["DIGITAL_MARKETING", "EDIT"], ["HR", "VIEW"]] },
-    { "dept": "OPS", "modules": [["ADMIN", "VIEW"], ["HR", "VIEW"]] },
-    { "dept": "HK", "modules": [["ADMIN", "VIEW"], ["HR", "VIEW"]] },
-    { "dept": "HR", "modules": [["HR", "ADMIN"]] },
-    { "dept": "MGMT", "modules": [["SALES", "ADMIN"], ["FINANCE_SALES", "ADMIN"], ["FINANCE_ADMIN", "ADMIN"], ["ADMIN", "ADMIN"], ["HR", "ADMIN"], ["PRODUCTION_TRAINING", "ADMIN"], ["PLACEMENTS", "ADMIN"], ["DIGITAL_MARKETING", "ADMIN"]] },
-    { "dept": "B2B", "modules": [["SALES", "EDIT"], ["FINANCE_SALES", "EDIT"], ["HR", "VIEW"]] },
-    { "dept": "DM_PLACEMENTS", "modules": [["PLACEMENTS", "ADMIN"], ["DIGITAL_MARKETING", "ADMIN"], ["HR", "VIEW"]] }
+    {
+      "dept": "SALES",
+      "modules": [
+        [
+          "SALES",
+          "EDIT"
+        ],
+        [
+          "FINANCE_SALES",
+          "EDIT"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "PROD",
+      "modules": [
+        [
+          "PRODUCTION_TRAINING",
+          "EDIT"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "PLACEMENT",
+      "modules": [
+        [
+          "PLACEMENTS",
+          "EDIT"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "DM",
+      "modules": [
+        [
+          "DIGITAL_MARKETING",
+          "EDIT"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "OPS",
+      "modules": [
+        [
+          "ADMIN",
+          "VIEW"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "HK",
+      "modules": [
+        [
+          "ADMIN",
+          "VIEW"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "HR",
+      "modules": [
+        [
+          "HR",
+          "ADMIN"
+        ]
+      ]
+    },
+    {
+      "dept": "MGMT",
+      "modules": [
+        [
+          "SALES",
+          "ADMIN"
+        ],
+        [
+          "FINANCE_SALES",
+          "ADMIN"
+        ],
+        [
+          "FINANCE_ADMIN",
+          "ADMIN"
+        ],
+        [
+          "ADMIN",
+          "ADMIN"
+        ],
+        [
+          "HR",
+          "ADMIN"
+        ],
+        [
+          "PRODUCTION_TRAINING",
+          "ADMIN"
+        ],
+        [
+          "PLACEMENTS",
+          "ADMIN"
+        ],
+        [
+          "DIGITAL_MARKETING",
+          "ADMIN"
+        ]
+      ]
+    },
+    {
+      "dept": "B2B",
+      "modules": [
+        [
+          "SALES",
+          "EDIT"
+        ],
+        [
+          "FINANCE_SALES",
+          "EDIT"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    },
+    {
+      "dept": "DM_PLACEMENTS",
+      "modules": [
+        [
+          "PLACEMENTS",
+          "ADMIN"
+        ],
+        [
+          "DIGITAL_MARKETING",
+          "ADMIN"
+        ],
+        [
+          "HR",
+          "VIEW"
+        ]
+      ]
+    }
   ],
   "designations": [
-    { "code": "CGO", "name": "Chief Growth Officer", "level": 10 },
-    { "code": "CBPO", "name": "Chief Business Production Officer", "level": 10 },
-    { "code": "VP_SALES", "name": "VP - Sales", "level": 9 },
-    { "code": "TL_SALES", "name": "Team Lead - Sales", "level": 6 },
-    { "code": "SR_BDM_B2B", "name": "Senior Business Development Manager - B2B", "level": 6 },
-    { "code": "BDA", "name": "Business Development Associate", "level": 3 },
-    { "code": "OPS_MGR_AGM", "name": "Operation Manager - AGM", "level": 8 },
-    { "code": "SSA", "name": "Student Success Advisor", "level": 3 },
-    { "code": "JANITOR", "name": "Janitor", "level": 1 },
-    { "code": "RECEP_OPS", "name": "Receptionist - Ops", "level": 3 },
-    { "code": "SM_DA", "name": "Skill Mentor - Data Analytics", "level": 4 },
-    { "code": "SM_DS", "name": "Skill Mentor - Data Science", "level": 4 },
-    { "code": "SM_MERN", "name": "Skill Mentor - MERN Stack", "level": 4 },
-    { "code": "SM_SOFT", "name": "Skill Mentor - Soft Skills & Aptitude", "level": 4 },
-    { "code": "SM_UIUX", "name": "Skill Mentor - UI/UX", "level": 4 },
-    { "code": "SM_DM", "name": "Skill Mentor - Digital Marketing", "level": 4 },
-    { "code": "PLACEMENT_OFFICER", "name": "Placement Officer", "level": 4 },
-    { "code": "VIDEO_EDITOR", "name": "Video Editor", "level": 3 },
-    { "code": "MARKETING", "name": "Marketing", "level": 3 },
-    { "code": "LDM", "name": "Learning Delivery Manager", "level": 8 }
+    {
+      "code": "CGO",
+      "name": "Chief Growth Officer",
+      "level": 10
+    },
+    {
+      "code": "CBPO",
+      "name": "Chief Business Production Officer",
+      "level": 10
+    },
+    {
+      "code": "VP_SALES",
+      "name": "VP - Sales",
+      "level": 9
+    },
+    {
+      "code": "TL_SALES",
+      "name": "Team Lead - Sales",
+      "level": 6
+    },
+    {
+      "code": "SR_BDM_B2B",
+      "name": "Senior Business Development Manager - B2B",
+      "level": 6
+    },
+    {
+      "code": "BDA",
+      "name": "Business Development Associate",
+      "level": 3
+    },
+    {
+      "code": "OPS_MGR_AGM",
+      "name": "Operation Manager - AGM",
+      "level": 8
+    },
+    {
+      "code": "SSA",
+      "name": "Student Success Advisor",
+      "level": 3
+    },
+    {
+      "code": "JANITOR",
+      "name": "Janitor",
+      "level": 1
+    },
+    {
+      "code": "RECEP_OPS",
+      "name": "Receptionist - Ops",
+      "level": 3
+    },
+    {
+      "code": "SM_DA",
+      "name": "Skill Mentor - Data Analytics",
+      "level": 4
+    },
+    {
+      "code": "SM_DS",
+      "name": "Skill Mentor - Data Science",
+      "level": 4
+    },
+    {
+      "code": "SM_MERN",
+      "name": "Skill Mentor - MERN Stack",
+      "level": 4
+    },
+    {
+      "code": "SM_SOFT",
+      "name": "Skill Mentor - Soft Skills & Aptitude",
+      "level": 4
+    },
+    {
+      "code": "SM_UIUX",
+      "name": "Skill Mentor - UI/UX",
+      "level": 4
+    },
+    {
+      "code": "SM_DM",
+      "name": "Skill Mentor - Digital Marketing",
+      "level": 4
+    },
+    {
+      "code": "PLACEMENT_OFFICER",
+      "name": "Placement Officer",
+      "level": 4
+    },
+    {
+      "code": "VIDEO_EDITOR",
+      "name": "Video Editor",
+      "level": 3
+    },
+    {
+      "code": "MARKETING",
+      "name": "Marketing",
+      "level": 3
+    },
+    {
+      "code": "LDM",
+      "name": "Learning Delivery Manager",
+      "level": 8
+    },
+    {
+      "code": "ADMIN_OPS_EXEC",
+      "name": "Admin and Ops Executive"
+    },
+    {
+      "code": "ADMIN_EXEC_INT",
+      "name": "Admin Executive - Intern"
+    }
   ],
   "employees": [
-    { "code": "V7000", "name": "Clement Sudharson", "dept": "DM_PLACEMENTS", "desig": "CGO", "join": "2024-10-01", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7007" },
-    { "code": "V7007", "name": "Pooranam Annamalai", "dept": "MGMT", "desig": "CBPO", "join": "2025-04-15", "probationCompleted": true, "role": "SUPER_ADMIN", "canManageAccess": true },
-    { "code": "V7003", "name": "Gokul S", "dept": "SALES", "desig": "VP_SALES", "join": "2025-03-17", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7007" },
-    { "code": "V7006", "name": "Kumaresan R", "dept": "SALES", "desig": "TL_SALES", "join": "2025-03-17", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7011", "name": "Hariharan", "dept": "SALES", "desig": "TL_SALES", "join": "2025-04-21", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7012", "name": "Muhammad Ramees J", "dept": "SALES", "desig": "BDA", "join": "2025-04-21", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7016", "name": "Shabir Ahmed S", "dept": "SALES", "desig": "BDA", "join": "2025-04-21", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7017", "name": "Muneeswari", "dept": "HK", "desig": "JANITOR", "join": "2025-04-22", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7048" },
-    { "code": "V7020", "name": "Jothimalar S", "dept": "SALES", "desig": "BDA", "join": "2025-04-21", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7029", "name": "Nishanthini S", "dept": "SALES", "desig": "BDA", "join": "2025-07-02", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7030", "name": "Midhun K", "dept": "OPS", "desig": "SSA", "join": "2025-07-02", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7032", "name": "Gaurav Kumar M S", "dept": "PROD", "desig": "LDM", "join": "2025-07-03", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7007", "moduleOverrides": [["FINANCE_ADMIN", "EDIT"], ["PRODUCTION_TRAINING", "ADMIN"]] },
-    { "code": "V7037", "name": "Selvakumar Santhanam", "dept": "B2B", "desig": "SR_BDM_B2B", "join": "2025-10-03", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7007" },
-    { "code": "V7040", "name": "Pradhap M", "dept": "SALES", "desig": "TL_SALES", "join": "2025-12-15", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7044", "name": "Steffi S", "dept": "OPS", "desig": "RECEP_OPS", "join": "2026-01-19", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7048" },
-    { "code": "V7045", "name": "Ranjith S", "dept": "SALES", "desig": "BDA", "join": "2026-02-01", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7046", "name": "Hariharashuthan A", "dept": "SALES", "desig": "BDA", "join": "2026-02-01", "probationCompleted": true, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7048", "name": "Jayasoorya Subramanian M", "dept": "OPS", "desig": "OPS_MGR_AGM", "join": "2026-04-01", "probationCompleted": true, "role": "MANAGER", "canManageAccess": false, "manager": "V7007", "moduleOverrides": [["ADMIN", "EDIT"]] },
-    { "code": "V7049", "name": "Danush V K", "dept": "DM", "desig": "VIDEO_EDITOR", "join": "2026-03-02", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7000" },
-    { "code": "V7051", "name": "Ramya", "dept": "SALES", "desig": "BDA", "join": "2026-04-01", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7052", "name": "Athithyan J", "dept": "PROD", "desig": "SM_DS", "join": "2026-04-01", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7053", "name": "Sneha M", "dept": "DM", "desig": "MARKETING", "join": "2026-04-06", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7000" },
-    { "code": "V7054", "name": "Vishmitha V", "dept": "SALES", "desig": "BDA", "join": "2026-04-06", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7055", "name": "Micheal Steafun Babu D", "dept": "SALES", "desig": "BDA", "join": "2026-04-06", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7003" },
-    { "code": "V7056", "name": "Shrihari BH", "dept": "PROD", "desig": "SM_MERN", "join": "2026-04-13", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7057", "name": "Dhivya V", "dept": "PROD", "desig": "SM_SOFT", "join": "2026-04-27", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7058", "name": "Prakalya P", "dept": "PROD", "desig": "SM_DS", "join": "2026-05-06", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7059", "name": "Samjebadurai Govindaraj", "dept": "PLACEMENT", "desig": "PLACEMENT_OFFICER", "join": "2026-05-16", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7000" },
-    { "code": "V7060", "name": "Selvam T", "dept": "PROD", "desig": "SM_MERN", "join": "2026-05-25", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7061", "name": "Nancy", "dept": "PROD", "desig": "SM_UIUX", "join": "2026-06-01", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7062", "name": "Kalaivani Ramesh", "dept": "PROD", "desig": "SM_DM", "join": "2026-06-03", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" },
-    { "code": "V7063", "name": "Varththini V", "dept": "PROD", "desig": "SM_DA", "join": "2026-06-03", "probationCompleted": false, "role": "EMPLOYEE", "canManageAccess": false, "manager": "V7032" }
+    {
+      "code": "V7000",
+      "name": "Clement Sudharson",
+      "dept": "DM_PLACEMENTS",
+      "desig": "CGO",
+      "join": "2024-10-01",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7007"
+    },
+    {
+      "code": "V7007",
+      "name": "Pooranam Annamalai",
+      "dept": "MGMT",
+      "desig": "CBPO",
+      "join": "2025-04-15",
+      "probationCompleted": true,
+      "role": "SUPER_ADMIN",
+      "canManageAccess": true
+    },
+    {
+      "code": "V7003",
+      "name": "Gokul S",
+      "dept": "SALES",
+      "desig": "VP_SALES",
+      "join": "2025-03-17",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7007"
+    },
+    {
+      "code": "V7006",
+      "name": "Kumaresan R",
+      "dept": "SALES",
+      "desig": "TL_SALES",
+      "join": "2025-03-17",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7011",
+      "name": "Hariharan",
+      "dept": "SALES",
+      "desig": "TL_SALES",
+      "join": "2025-04-21",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7012",
+      "name": "Muhammad Ramees J",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2025-04-21",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7016",
+      "name": "Shabir Ahmed S",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2025-04-21",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7017",
+      "name": "Muneeswari",
+      "dept": "HK",
+      "desig": "JANITOR",
+      "join": "2025-04-22",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7048"
+    },
+    {
+      "code": "V7020",
+      "name": "Jothimalar S",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2025-04-21",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7029",
+      "name": "Nishanthini S",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2025-07-02",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7030",
+      "name": "Midhun K",
+      "dept": "OPS",
+      "desig": "SSA",
+      "join": "2025-07-02",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7032",
+      "name": "Gaurav Kumar M S",
+      "dept": "PROD",
+      "desig": "LDM",
+      "join": "2025-07-03",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7007",
+      "moduleOverrides": [
+        [
+          "FINANCE_ADMIN",
+          "EDIT"
+        ],
+        [
+          "PRODUCTION_TRAINING",
+          "ADMIN"
+        ]
+      ]
+    },
+    {
+      "code": "V7037",
+      "name": "Selvakumar Santhanam",
+      "dept": "B2B",
+      "desig": "SR_BDM_B2B",
+      "join": "2025-10-03",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7007"
+    },
+    {
+      "code": "V7040",
+      "name": "Pradhap M",
+      "dept": "SALES",
+      "desig": "TL_SALES",
+      "join": "2025-12-15",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7044",
+      "name": "Steffi S",
+      "dept": "OPS",
+      "desig": "RECEP_OPS",
+      "join": "2026-01-19",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7048"
+    },
+    {
+      "code": "V7045",
+      "name": "Ranjith S",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2026-02-01",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7046",
+      "name": "Hariharashuthan A",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2026-02-01",
+      "probationCompleted": true,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7048",
+      "name": "Jayasoorya Subramanian M",
+      "dept": "OPS",
+      "desig": "OPS_MGR_AGM",
+      "join": "2026-04-01",
+      "probationCompleted": true,
+      "role": "MANAGER",
+      "canManageAccess": false,
+      "manager": "V7007",
+      "moduleOverrides": [
+        [
+          "ADMIN",
+          "EDIT"
+        ]
+      ]
+    },
+    {
+      "code": "V7049",
+      "name": "Danush V K",
+      "dept": "DM",
+      "desig": "VIDEO_EDITOR",
+      "join": "2026-03-02",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7000"
+    },
+    {
+      "code": "V7051",
+      "name": "Ramya",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2026-04-01",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7052",
+      "name": "Athithyan J",
+      "dept": "PROD",
+      "desig": "SM_DS",
+      "join": "2026-04-01",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7053",
+      "name": "Sneha M",
+      "dept": "DM",
+      "desig": "MARKETING",
+      "join": "2026-04-06",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7000"
+    },
+    {
+      "code": "V7054",
+      "name": "Vishmitha V",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2026-04-06",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7055",
+      "name": "Micheal Steafun Babu D",
+      "dept": "SALES",
+      "desig": "BDA",
+      "join": "2026-04-06",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7003"
+    },
+    {
+      "code": "V7056",
+      "name": "Shrihari BH",
+      "dept": "PROD",
+      "desig": "SM_MERN",
+      "join": "2026-04-13",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7057",
+      "name": "Dhivya V",
+      "dept": "PROD",
+      "desig": "SM_SOFT",
+      "join": "2026-04-27",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7058",
+      "name": "Prakalya P",
+      "dept": "PROD",
+      "desig": "SM_DS",
+      "join": "2026-05-06",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7059",
+      "name": "Samjebadurai Govindaraj",
+      "dept": "PLACEMENT",
+      "desig": "PLACEMENT_OFFICER",
+      "join": "2026-05-16",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7000"
+    },
+    {
+      "code": "V7060",
+      "name": "Selvam T",
+      "dept": "PROD",
+      "desig": "SM_MERN",
+      "join": "2026-05-25",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7061",
+      "name": "Nancy",
+      "dept": "PROD",
+      "desig": "SM_UIUX",
+      "join": "2026-06-01",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7062",
+      "name": "Kalaivani Ramesh",
+      "dept": "PROD",
+      "desig": "SM_DM",
+      "join": "2026-06-03",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7063",
+      "name": "Varththini V",
+      "dept": "PROD",
+      "desig": "SM_DA",
+      "join": "2026-06-03",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7032"
+    },
+    {
+      "code": "V7064",
+      "name": "Yureka",
+      "dept": "ADMIN",
+      "desig": "ADMIN_OPS_EXEC",
+      "join": "2026-07-01",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7048"
+    },
+    {
+      "code": "V7065",
+      "name": "Raj Prasanth",
+      "dept": "ADMIN",
+      "desig": "ADMIN_EXEC_INT",
+      "join": "2026-07-01",
+      "probationCompleted": false,
+      "role": "EMPLOYEE",
+      "canManageAccess": false,
+      "manager": "V7048"
+    }
   ]
 }

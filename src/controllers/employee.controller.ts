@@ -1,6 +1,6 @@
 import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
-import { hashPassword, paginate, formatPagination, generateEmployeeCode, calcSalaryFromNet } from '../utils/helpers';
+import { hashPassword, paginate, formatPagination, nextEmployeeCode, orUndef, orNull, calcSalaryFromNet } from '../utils/helpers';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { emailService } from '../services/email.service';
@@ -18,11 +18,13 @@ export const employeeController = {
       if (branchId) where.branchId = branchId;
       if (status) where.status = status;
       if (search) {
+        // NOTE: no `mode: 'insensitive'` — not supported on MySQL (throws at runtime);
+        // MySQL default collation is already case-insensitive.
         where.OR = [
-          { firstName: { contains: String(search), mode: 'insensitive' } },
-          { lastName: { contains: String(search), mode: 'insensitive' } },
-          { employeeCode: { contains: String(search), mode: 'insensitive' } },
-          { email: { contains: String(search), mode: 'insensitive' } },
+          { firstName: { contains: String(search) } },
+          { lastName: { contains: String(search) } },
+          { employeeCode: { contains: String(search) } },
+          { email: { contains: String(search) } },
         ];
       }
 
@@ -82,8 +84,15 @@ export const employeeController = {
       const tempPassword = `Hrms@${Math.random().toString(36).slice(-6)}`;
       const hashedPwd = await hashPassword(tempPassword);
 
-      const count = await prisma.employee.count({ where: { companyId: body.companyId } });
-      const employeeCode = generateEmployeeCode('EMP', count);
+      // Manual override (e.g. backfilling V7064) or auto next-in-series (V7066…)
+      let employeeCode: string;
+      if (body.employeeCode?.trim()) {
+        employeeCode = String(body.employeeCode).trim().toUpperCase();
+        const dup = await prisma.employee.findFirst({ where: { employeeCode } });
+        if (dup) throw new AppError(`Employee code ${employeeCode} is already in use`, 409);
+      } else {
+        employeeCode = await nextEmployeeCode(prisma);
+      }
 
       const employee = await prisma.$transaction(async (tx) => {
         const user = await tx.user.create({
@@ -98,18 +107,18 @@ export const employeeController = {
           data: {
             userId: user.id,
             companyId: body.companyId || req.user!.companyId!,
-            branchId: body.branchId,
-            departmentId: body.departmentId,
-            designationId: body.designationId,
-            managerId: body.managerId,
+            branchId: orUndef(body.branchId),
+            departmentId: orUndef(body.departmentId),
+            designationId: orUndef(body.designationId),
+            managerId: orUndef(body.managerId),
             employeeCode,
             firstName: body.firstName,
             lastName: body.lastName,
-            middleName: body.middleName,
+            middleName: orUndef(body.middleName),
             email: body.email.toLowerCase(),
-            phone: body.phone,
+            phone: orUndef(body.phone),
             dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : undefined,
-            gender: body.gender,
+            gender: orUndef(body.gender),
             joiningDate: new Date(body.joiningDate),
             probationEndDate: body.probationEndDate ? new Date(body.probationEndDate) : undefined,
             status: body.isProbation === false ? 'ACTIVE' : 'ON_PROBATION',
@@ -199,17 +208,18 @@ export const employeeController = {
       const employee = await prisma.employee.update({
         where: { id: req.params.id },
         data: {
-          firstName: body.firstName,
-          lastName: body.lastName,
-          phone: body.phone,
-          gender: body.gender,
-          maritalStatus: body.maritalStatus,
-          bloodGroup: body.bloodGroup,
-          departmentId: body.departmentId,
-          designationId: body.designationId,
-          branchId: body.branchId,
-          managerId: body.managerId,
-          status: body.status,
+          firstName: orUndef(body.firstName),
+          lastName: orUndef(body.lastName),
+          phone: orUndef(body.phone),
+          gender: orUndef(body.gender),
+          maritalStatus: orUndef(body.maritalStatus),
+          bloodGroup: orUndef(body.bloodGroup),
+          // '' means "clear the assignment" for FK fields on update
+          departmentId: orNull(body.departmentId),
+          designationId: orNull(body.designationId),
+          branchId: orNull(body.branchId),
+          managerId: orNull(body.managerId),
+          status: orUndef(body.status),
           confirmationDate: body.confirmationDate ? new Date(body.confirmationDate) : undefined,
           joiningDate: body.joiningDate ? new Date(body.joiningDate) : undefined,
         },
@@ -472,7 +482,8 @@ export const employeeController = {
       };
 
       const results: { email: string; status: 'created' | 'skipped'; reason?: string }[] = [];
-      let empCount = await prisma.employee.count({ where: { companyId } });
+      // Next V-series code (e.g. V7066), incremented locally for each created row
+      let nextCodeNum = parseInt((await nextEmployeeCode(prisma)).slice(1), 10);
 
       for (const emp of employees) {
         if (!emp.firstName || !emp.email || !emp.joiningDate) {
@@ -503,7 +514,7 @@ export const employeeController = {
 
         const tempPassword = `Vinsup@${Math.random().toString(36).slice(-6).toUpperCase()}`;
         const hashedPwd = await hashPassword(tempPassword);
-        const employeeCode = generateEmployeeCode('EMP', empCount++);
+        const employeeCode = `V${nextCodeNum++}`;
 
         const VALID_ROLES = ['SUPER_ADMIN', 'ADMIN', 'HR', 'MANAGER', 'EMPLOYEE'];
         const assignedRole = emp.role && VALID_ROLES.includes(emp.role.toUpperCase())
@@ -640,7 +651,7 @@ export const employeeController = {
       if (employee.userId) {
         await notificationService.create({
           userId: employee.userId,
-          type: 'GENERAL',
+          type: 'SYSTEM',
           title: 'Congratulations! You are now a permanent employee',
           message: `Your probation period has ended. You have been confirmed as a permanent employee effective ${confirmationDate.toLocaleDateString()}.`,
           data: {},

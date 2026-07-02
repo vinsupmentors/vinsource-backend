@@ -21,6 +21,32 @@ export const formatPagination = (total: number, page: number, limit: number) => 
 export const generateEmployeeCode = (prefix = 'EMP', count: number): string =>
   `${prefix}${String(count + 1).padStart(5, '0')}`;
 
+/**
+ * Generates the next sequential employee code in the company's V-series
+ * (V7000, V7001, … V7065 → next is V7066). Scans existing codes and returns
+ * max + 1, so it is deletion-safe and stays correct after manual code edits.
+ * Falls back to V7000 when no V-codes exist yet.
+ */
+export async function nextEmployeeCode(db: {
+  employee: { findMany: (args: any) => Promise<{ employeeCode: string }[]> };
+}): Promise<string> {
+  const rows = await db.employee.findMany({ select: { employeeCode: true } });
+  let max = 6999;
+  for (const r of rows) {
+    const m = /^V(\d+)$/i.exec((r.employeeCode || '').trim());
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return `V${max + 1}`;
+}
+
+/** Converts '' / null to undefined — for optional FK/enum fields on create. */
+export const orUndef = <T>(v: T | '' | null | undefined): T | undefined =>
+  v === '' || v === null || v === undefined ? undefined : v;
+
+/** Converts '' to null (clear the field), keeps undefined as "no change" — for updates. */
+export const orNull = <T>(v: T | '' | null | undefined): T | null | undefined =>
+  v === undefined ? undefined : v === '' || v === null ? null : v;
+
 export const getDateRange = (month: number, year: number) => {
   const start = new Date(year, month - 1, 1);
   const end = new Date(year, month, 0, 23, 59, 59);

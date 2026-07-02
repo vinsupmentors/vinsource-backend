@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { notificationService } from '../services/notification.service';
 import { emailService } from '../services/email.service';
+import { nextEmployeeCode } from '../utils/helpers';
 import { config } from '../config/env';
 
 const REQUIRED_DOCS = ['AADHAAR', 'PAN', 'RESUME', 'MARKSHEET_10', 'MARKSHEET_12'];
@@ -26,12 +27,21 @@ export const onboardingController = {
       const existing = await prisma.onboardingRequest.findFirst({ where: { email } });
       if (existing) throw new AppError('An onboarding request already exists for this email', 409);
 
+      // Sanitize optional FK/enum fields: '' from the form must become null,
+      // otherwise Prisma throws a foreign-key error and creation fails.
+      const clean = (v?: string) => (v && String(v).trim() ? v : null);
+
       const request = await prisma.onboardingRequest.create({
         data: {
           companyId: req.user!.companyId!,
-          firstName, lastName, email, phone, gender, managerId,
+          firstName, lastName, email,
+          phone: clean(phone),
+          gender: clean(gender) as any,
+          managerId: clean(managerId),
           joiningDate: new Date(joiningDate),
-          departmentId, designationId, branchId,
+          departmentId: clean(departmentId),
+          designationId: clean(designationId),
+          branchId: clean(branchId),
           createdById: req.user!.userId,
         },
       });
@@ -216,8 +226,8 @@ export const onboardingController = {
       const tempPassword = generateTempPassword();
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
 
-      const count = await prisma.employee.count({ where: { companyId: onb.companyId } });
-      const employeeCode = `EMP${String(count + 1).padStart(4, '0')}`;
+      // Next code in the V-series (V7000…V7065 → V7066), deletion-safe
+      const employeeCode = await nextEmployeeCode(prisma);
 
       const { newUser, newEmployee } = await prisma.$transaction(async (tx) => {
         const newUser = await tx.user.create({

@@ -18,9 +18,9 @@ export const salesController = {
       if (assignedToId) where.assignedToId = assignedToId;
       if (search) {
         where.OR = [
-          { name: { contains: String(search), mode: 'insensitive' } },
+          { name: { contains: String(search) } },
           { phone: { contains: String(search) } },
-          { email: { contains: String(search), mode: 'insensitive' } },
+          { email: { contains: String(search) } },
         ];
       }
 
