@@ -65,6 +65,85 @@ export const onboardingController = {
     } catch (err) { next(err); }
   },
 
+  // ─── HR: update an onboarding request (and linked employee, if any) ─────────
+  async update(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const onb = await prisma.onboardingRequest.findUnique({
+        where: { id: req.params.id },
+        include: { employee: true },
+      });
+      if (!onb) throw new AppError('Onboarding request not found', 404);
+      if (onb.companyId !== req.user!.companyId) throw new AppError('Forbidden', 403);
+
+      const { firstName, lastName, email, phone, joiningDate, departmentId, designationId, branchId, managerId } = req.body;
+      const clean = (v?: string) => (v === undefined ? undefined : v && String(v).trim() ? v : null);
+
+      // Email is the login — only editable before an employee account exists
+      if (email && email !== onb.email) {
+        if (onb.employeeId) throw new AppError('Email cannot be changed after the employee account is created', 400);
+        const dup = await prisma.onboardingRequest.findFirst({ where: { email, NOT: { id: onb.id } } });
+        if (dup) throw new AppError('Another onboarding request already uses this email', 409);
+      }
+
+      const updated = await prisma.onboardingRequest.update({
+        where: { id: onb.id },
+        data: {
+          firstName: firstName || undefined,
+          lastName: lastName || undefined,
+          email: !onb.employeeId && email ? email : undefined,
+          phone: clean(phone),
+          joiningDate: joiningDate ? new Date(joiningDate) : undefined,
+          departmentId: clean(departmentId),
+          designationId: clean(designationId),
+          branchId: clean(branchId),
+          managerId: clean(managerId),
+        },
+      });
+
+      // Keep the linked employee record in sync
+      if (onb.employeeId) {
+        await prisma.employee.update({
+          where: { id: onb.employeeId },
+          data: {
+            firstName: firstName || undefined,
+            lastName: lastName || undefined,
+            phone: clean(phone),
+            joiningDate: joiningDate ? new Date(joiningDate) : undefined,
+            departmentId: clean(departmentId),
+            designationId: clean(designationId),
+            branchId: clean(branchId),
+            managerId: clean(managerId),
+          },
+        });
+      }
+
+      res.json({ success: true, data: updated, message: 'Onboarding request updated' });
+    } catch (err) { next(err); }
+  },
+
+  // ─── SUPER_ADMIN: delete an onboarding request ──────────────────────────────
+  // Removes the request + its documents. A linked employee account (if any) is
+  // NOT touched — terminate/delete the employee separately if that's intended.
+  async remove(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const onb = await prisma.onboardingRequest.findUnique({ where: { id: req.params.id } });
+      if (!onb) throw new AppError('Onboarding request not found', 404);
+      if (onb.companyId !== req.user!.companyId) throw new AppError('Forbidden', 403);
+
+      await prisma.$transaction([
+        prisma.onboardingDocument.deleteMany({ where: { onboardingId: onb.id } }),
+        prisma.onboardingRequest.delete({ where: { id: onb.id } }),
+      ]);
+
+      res.json({
+        success: true,
+        message: onb.employeeId
+          ? 'Onboarding request deleted. The employee account still exists — manage it from the Employees page.'
+          : 'Onboarding request deleted',
+      });
+    } catch (err) { next(err); }
+  },
+
   // ─── HR: list all onboarding requests ───────────────────────────────────────
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
