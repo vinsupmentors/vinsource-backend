@@ -87,6 +87,63 @@ async function resolveScheduleByCode(subBatchCode: string): Promise<string> {
 }
 
 export const productionController = {
+  // ── COURSE MATERIALS ──────────────────────────────────────────────────────
+  // Students see ALL of a course's materials from day one of enrollment.
+  async listMaterials(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const materials = await prisma.courseMaterial.findMany({
+        where: { courseId: req.params.courseId },
+        include: {
+          module: { select: { id: true, order: true, title: true } },
+          uploadedBy: { select: employeeSelect },
+        },
+        orderBy: [{ module: { order: 'asc' } }, { createdAt: 'asc' }],
+      });
+      res.json({ success: true, data: materials });
+    } catch (err) { next(err); }
+  },
+
+  async addMaterial(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { courseId } = req.params;
+      const { title, type, url, moduleId, notes } = req.body;
+
+      let finalUrl: string;
+      let finalType: string;
+      if (req.file) {
+        finalUrl = `/uploads/materials/${req.file.filename}`;
+        finalType = 'FILE';
+      } else {
+        if (!url?.trim()) throw new AppError('Provide a file or a link URL', 400);
+        finalUrl = String(url).trim();
+        if (!/^https?:\/\//i.test(finalUrl)) throw new AppError('Link must start with http:// or https://', 400);
+        finalType = type === 'VIDEO' ? 'VIDEO' : 'LINK';
+      }
+      if (!title?.trim()) throw new AppError('Title is required', 400);
+
+      const material = await prisma.courseMaterial.create({
+        data: {
+          courseId,
+          moduleId: moduleId || null,
+          title: String(title).trim(),
+          type: finalType as never,
+          url: finalUrl,
+          notes: notes?.trim() || null,
+          uploadedById: req.user?.employeeId || null,
+        },
+        include: { module: { select: { id: true, order: true, title: true } } },
+      });
+      res.status(201).json({ success: true, data: material });
+    } catch (err) { next(err); }
+  },
+
+  async removeMaterial(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      await prisma.courseMaterial.delete({ where: { id: req.params.id } });
+      res.json({ success: true, message: 'Material removed' });
+    } catch (err) { next(err); }
+  },
+
   // ── COURSES & MODULES ─────────────────────────────────────────────────────
   async listCourses(_req: AuthRequest, res: Response, next: NextFunction) {
     try {

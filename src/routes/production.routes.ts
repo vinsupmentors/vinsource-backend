@@ -5,7 +5,7 @@ import { productionReportsController } from '../controllers/productionReports.co
 import { portfolioController } from '../controllers/portfolio.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
-import { uploadProjectResource } from '../middleware/upload';
+import { uploadProjectResource, uploadCourseMaterial } from '../middleware/upload';
 
 const router = Router();
 router.use(authenticate);
@@ -19,6 +19,11 @@ router.post('/courses', requireModule('PRODUCTION_TRAINING', 'EDIT'), production
 router.put('/courses/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateCourse);
 router.post('/courses/:courseId/modules', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.addModule);
 router.put('/modules/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateModule);
+
+// Course study materials (files or links; visible to enrolled students from day one)
+router.get('/courses/:courseId/materials', productionController.listMaterials);
+router.post('/courses/:courseId/materials', requireModule('PRODUCTION_TRAINING', 'EDIT'), uploadCourseMaterial, productionController.addMaterial);
+router.delete('/materials/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.removeMaterial);
 
 // Batches & schedules
 router.get('/batches', productionController.listBatches);

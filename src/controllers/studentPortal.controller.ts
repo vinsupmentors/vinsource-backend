@@ -226,7 +226,16 @@ export const studentPortalController = {
         include: {
           schedule: {
             include: {
-              course: { include: { modules: { orderBy: { order: 'asc' } } } },
+              course: {
+                include: {
+                  modules: { orderBy: { order: 'asc' } },
+                  // Full material list from day one — never gated by class progress
+                  materials: {
+                    select: { id: true, moduleId: true, title: true, type: true, url: true, notes: true, createdAt: true },
+                    orderBy: { createdAt: 'asc' },
+                  },
+                },
+              },
               kraEntries: { select: { moduleId: true } },
             },
           },
@@ -235,13 +244,17 @@ export const studentPortalController = {
 
       const data = enrollments.map((e) => {
         const coveredModuleIds = new Set(e.schedule.kraEntries.map((k) => k.moduleId).filter(Boolean));
+        const materials = e.schedule.course.materials;
         return {
           scheduleId: e.scheduleId,
           courseId: e.schedule.course.id,
           courseName: e.schedule.course.name,
+          // Materials not pinned to a specific module (general course resources)
+          generalMaterials: materials.filter((m) => !m.moduleId),
           modules: e.schedule.course.modules.map((m) => ({
             id: m.id, order: m.order, title: m.title, hours: m.hours, dayRange: m.dayRange, topics: m.topics,
             covered: coveredModuleIds.has(m.id),
+            materials: materials.filter((mat) => mat.moduleId === m.id),
           })),
         };
       });

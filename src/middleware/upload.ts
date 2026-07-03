@@ -98,6 +98,32 @@ export const uploadProfilePhoto = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
 }).single('photo');
 
+// ── Course study materials (PDFs, slides, docs, images, archives) ────────────
+const MATERIAL_UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'materials');
+if (!fs.existsSync(MATERIAL_UPLOADS_DIR)) fs.mkdirSync(MATERIAL_UPLOADS_DIR, { recursive: true });
+
+const materialStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, MATERIAL_UPLOADS_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 60);
+    cb(null, `${Date.now()}_${base}${ext}`);
+  },
+});
+
+const materialFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowed = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.md', '.jpg', '.jpeg', '.png', '.webp', '.zip'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (allowed.includes(ext)) cb(null, true);
+  else cb(new Error('Allowed: PDF, Word, PowerPoint, Excel, text, images, or ZIP'));
+};
+
+export const uploadCourseMaterial = multer({
+  storage: materialStorage,
+  fileFilter: materialFilter,
+  limits: { fileSize: 40 * 1024 * 1024 }, // 40 MB
+}).single('file');
+
 /** Optional ad-platform dashboard screenshot attached to a daily report. */
 export const uploadCampaignDashboard = multer({
   storage: campaignStorage,

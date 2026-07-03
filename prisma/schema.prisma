@@ -516,6 +516,7 @@ model Employee {
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
   budgetsAllocated  BudgetAllocation[]  @relation("BudgetAllocator")
   certificatesIssued GeneratedCertificate[] @relation("CertificateIssuer")
+  materialsUploaded  CourseMaterial[]       @relation("MaterialUploader")
   hoFundsRecorded   HOFundReceipt[]     @relation("HOFundRecorder")
   vendorsCreated    Vendor[]            @relation("VendorCreator")
   recurringTemplatesCreated RecurringExpenseTemplate[] @relation("RecurringTemplateCreator")
@@ -1503,6 +1504,31 @@ model AcademyCourse {
   trainerFeedbacks TrainerFeedback[]
   certificates     Certificate[]
   courseFeedbacks  CourseFeedback[]
+  materials        CourseMaterial[]
+}
+
+enum MaterialType {
+  FILE
+  LINK
+  VIDEO
+}
+
+// Study material for a course — visible IN FULL to enrolled students from
+// day one (not gated by class progress). Optionally pinned to a module.
+model CourseMaterial {
+  id           String       @id @default(uuid())
+  courseId     String
+  moduleId     String?
+  title        String
+  type         MaterialType @default(FILE)
+  url          String // /uploads/materials/... for FILE, external URL for LINK/VIDEO
+  notes        String?
+  uploadedById String?
+  createdAt    DateTime     @default(now())
+
+  course     AcademyCourse  @relation(fields: [courseId], references: [id])
+  module     AcademyModule? @relation(fields: [moduleId], references: [id])
+  uploadedBy Employee?      @relation("MaterialUploader", fields: [uploadedById], references: [id])
 }
 
 model AcademyModule {
@@ -1518,6 +1544,7 @@ model AcademyModule {
   kraEntries KRAEntry[]
   tests      ModuleTest[]
   moduleFeedbacks ModuleFeedback[]
+  materials  CourseMaterial[]
 
   projects      Project[]
   feedbackForm  FeedbackForm?
