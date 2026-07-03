@@ -69,8 +69,14 @@ export const assetController = {
   // Create a new asset
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { name, type, serialNumber, brand, model, purchaseDate, warrantyDate, notes } = req.body;
+      const { name, type, serialNumber, brand, model, purchaseDate, warrantyDate, notes, employeeId } = req.body;
       if (!name || !type) throw new AppError('Name and type are required', 400);
+
+      // Validate the optional direct-assignment target before creating anything
+      if (employeeId) {
+        const emp = await prisma.employee.findUnique({ where: { id: employeeId } });
+        if (!emp) throw new AppError('Selected employee not found', 404);
+      }
 
       const asset = await prisma.asset.create({
         data: {
@@ -82,10 +88,18 @@ export const assetController = {
           purchaseDate: purchaseDate ? new Date(purchaseDate) : undefined,
           warrantyDate: warrantyDate ? new Date(warrantyDate) : undefined,
           notes,
+          status: employeeId ? 'ASSIGNED' : undefined,
         },
       });
 
-      res.status(201).json({ success: true, data: asset });
+      // Optional: assign to an employee in the same step
+      if (employeeId) {
+        await prisma.assetAssignment.create({
+          data: { assetId: asset.id, employeeId, notes: notes || undefined },
+        });
+      }
+
+      res.status(201).json({ success: true, data: asset, message: employeeId ? 'Asset created and assigned' : 'Asset created' });
     } catch (err) { next(err); }
   },
 
