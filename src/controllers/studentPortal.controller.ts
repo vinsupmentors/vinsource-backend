@@ -249,13 +249,20 @@ export const studentPortalController = {
           scheduleId: e.scheduleId,
           courseId: e.schedule.course.id,
           courseName: e.schedule.course.name,
-          // Materials not pinned to a specific module (general course resources)
+          // General (course-wide) materials are visible from enrollment
           generalMaterials: materials.filter((m) => !m.moduleId),
-          modules: e.schedule.course.modules.map((m) => ({
-            id: m.id, order: m.order, title: m.title, hours: m.hours, dayRange: m.dayRange, topics: m.topics,
-            covered: coveredModuleIds.has(m.id),
-            materials: materials.filter((mat) => mat.moduleId === m.id),
-          })),
+          modules: e.schedule.course.modules.map((m) => {
+            const covered = coveredModuleIds.has(m.id);
+            const moduleMaterials = materials.filter((mat) => mat.moduleId === m.id);
+            return {
+              id: m.id, order: m.order, title: m.title, hours: m.hours, dayRange: m.dayRange, topics: m.topics,
+              covered,
+              // Module materials UNLOCK only once the trainer has covered the module.
+              // Uncovered modules expose only a locked count — never the files/links.
+              materials: covered ? moduleMaterials : [],
+              lockedMaterialsCount: covered ? 0 : moduleMaterials.length,
+            };
+          }),
         };
       });
       res.json({ success: true, data });
