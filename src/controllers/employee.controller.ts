@@ -16,7 +16,9 @@ export const employeeController = {
       const where: Record<string, unknown> = { companyId: req.user!.companyId, isSystemAccount: false };
       if (departmentId) where.departmentId = departmentId;
       if (branchId) where.branchId = branchId;
-      if (status) where.status = status;
+      // Whitelist — an unknown status value (e.g. from an old client) must not crash the query
+      const VALID_EMP_STATUSES = ['ACTIVE', 'INACTIVE', 'ON_PROBATION', 'RESIGNED', 'TERMINATED', 'ON_LEAVE'];
+      if (status && VALID_EMP_STATUSES.includes(String(status))) where.status = status;
       if (search) {
         // NOTE: no `mode: 'insensitive'` — not supported on MySQL (throws at runtime);
         // MySQL default collation is already case-insensitive.
