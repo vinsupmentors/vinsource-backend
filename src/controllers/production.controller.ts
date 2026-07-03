@@ -15,6 +15,7 @@ function sendStudentWelcomeEmail(opts: { name?: string | null; studentCode: stri
   if (!email || email.endsWith('.local')) return; // no real inbox to send to
   emailService.send({
     to: email,
+    cc: 'v7032vinsup@gmail.com', // production team copy (Gaurav)
     subject: '🎓 Welcome to Vinsup Skill Academy — Your Student Portal Login',
     html: emailService.templates.studentWelcome({
       name: opts.name?.trim() || 'Student',

@@ -11,6 +11,7 @@ const transporter = nodemailer.createTransport({
 
 export interface EmailOptions {
   to: string | string[];
+  cc?: string | string[];
   bcc?: string | string[];
   subject: string;
   html: string;
@@ -23,6 +24,7 @@ export const emailService = {
       await transporter.sendMail({
         from: `"Vin-Source Portal" <${config.EMAIL_FROM}>`,
         to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
+        cc: opts.cc ? (Array.isArray(opts.cc) ? opts.cc.join(', ') : opts.cc) : undefined,
         bcc: opts.bcc ? (Array.isArray(opts.bcc) ? opts.bcc.join(', ') : opts.bcc) : undefined,
         subject: opts.subject,
         html: opts.html,
