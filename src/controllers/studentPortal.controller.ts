@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { computeGamification } from '../services/gamification.service';
 
 /** Every handler needs a real studentId before touching Prisma — a User with no
  * linked Student record (orphaned account, stale token) must get a clean 403,
@@ -265,6 +266,14 @@ export const studentPortalController = {
           }),
         };
       });
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /** Attendance streak + auto-badges — computed live by the gamification service. */
+  async gamification(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const data = await computeGamification(getStudentId(req));
       res.json({ success: true, data });
     } catch (err) { next(err); }
   },

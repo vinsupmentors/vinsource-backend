@@ -19,6 +19,7 @@ router.get('/certificates', studentPortalController.myCertificates);
 router.get('/placements', studentPortalController.myPlacements);
 router.get('/course-content', studentPortalController.courseContent);
 router.get('/rank-card', studentPortalController.rankCard);
+router.get('/gamification', studentPortalController.gamification);
 router.get('/feedback', studentPortalController.listFeedback);
 router.post('/feedback', studentPortalController.submitFeedback);
 router.get('/referrals', studentPortalController.listReferrals);

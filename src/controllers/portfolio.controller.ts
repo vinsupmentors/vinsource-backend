@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { computeGamification } from '../services/gamification.service';
 
 const studentSelect = {
   id: true, firstName: true, lastName: true, studentCode: true, track: true, photo: true, email: true, phone: true,
@@ -110,7 +111,10 @@ export const portfolioController = {
         include: { student: { select: studentSelect } },
       });
       if (!portfolio) throw new AppError('Portfolio not found', 404);
-      res.json({ success: true, data: portfolio });
+
+      // Earned achievement badges (computed live; only earned ones go public)
+      const { badges } = await computeGamification(portfolio.studentId).catch(() => ({ badges: [] as { earned: boolean }[] }));
+      res.json({ success: true, data: { ...portfolio, badges: badges.filter((b) => b.earned) } });
     } catch (err) { next(err); }
   },
 };
