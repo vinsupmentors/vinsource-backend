@@ -218,6 +218,7 @@ enum ModuleName {
   PRODUCTION_TRAINING
   PLACEMENTS
   DIGITAL_MARKETING
+  CERTIFICATES
 }
 
 enum AccessLevel {
@@ -514,6 +515,7 @@ model Employee {
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
   budgetsAllocated  BudgetAllocation[]  @relation("BudgetAllocator")
+  certificatesIssued GeneratedCertificate[] @relation("CertificateIssuer")
   hoFundsRecorded   HOFundReceipt[]     @relation("HOFundRecorder")
   vendorsCreated    Vendor[]            @relation("VendorCreator")
   recurringTemplatesCreated RecurringExpenseTemplate[] @relation("RecurringTemplateCreator")
@@ -1325,6 +1327,30 @@ model BudgetAllocation {
 
   employee    Employee  @relation("BudgetReceiver", fields: [employeeId], references: [id])
   allocatedBy Employee? @relation("BudgetAllocator", fields: [allocatedById], references: [id])
+}
+
+// ─── CERTIFICATE GENERATOR ────────────────────────────────────────────────────
+
+enum GeneratedCertType {
+  OD_INTERNSHIP_JOINING        // OD / internship joining letter for college
+  BONAFIDE                     // bonafide (proof of duration)
+  INTERNSHIP_COMPLETION_SHORT  // internship completion — short duration
+  COURSE_COMPLETION            // course completion certificate
+  INTERNSHIP_COMPLETION        // internship completion certificate
+}
+
+// Every certificate/letter generated via the Certificate Generator, for audit
+// and re-printing. `data` holds the exact field values used in the template.
+model GeneratedCertificate {
+  id          String            @id @default(uuid())
+  type        GeneratedCertType
+  studentName String
+  certNo      String            @unique
+  data        Json
+  issuedById  String?
+  createdAt   DateTime          @default(now())
+
+  issuedBy Employee? @relation("CertificateIssuer", fields: [issuedById], references: [id])
 }
 
 // HO (Head Office) funding — this entity is operated out of a separate
