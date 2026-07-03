@@ -3,6 +3,30 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { hashPassword } from '../utils/helpers';
+import { emailService } from '../services/email.service';
+import { config } from '../config/env';
+
+/**
+ * Sends the student welcome email (credentials + first-login steps).
+ * Skips synthetic placeholder addresses. Never blocks the request.
+ */
+function sendStudentWelcomeEmail(opts: { name?: string | null; studentCode: string; email?: string | null; batchLine?: string }) {
+  const email = (opts.email || '').trim();
+  if (!email || email.endsWith('.local')) return; // no real inbox to send to
+  emailService.send({
+    to: email,
+    subject: '🎓 Welcome to Vinsup Skill Academy — Your Student Portal Login',
+    html: emailService.templates.studentWelcome({
+      name: opts.name?.trim() || 'Student',
+      studentCode: opts.studentCode,
+      email: email.toLowerCase(),
+      loginUrl: `${config.FRONTEND_URL}/login`,
+      batchLine: opts.batchLine,
+      logoUrl: `${config.FRONTEND_URL}/vinsup-logo.png`,
+    }),
+    template: 'student_welcome',
+  }).catch((err) => console.error('Student welcome email failed:', err));
+}
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
@@ -395,7 +419,17 @@ export const productionController = {
           enrollments: { include: { schedule: { include: { course: true, batch: true } } } },
         },
       });
-      res.status(201).json({ success: true, data: student });
+
+      // Welcome email with credentials + first-login steps
+      const enr = student.enrollments[0];
+      sendStudentWelcomeEmail({
+        name: `${student.firstName} ${student.lastName}`.replace('Pending Update', '').trim() || undefined,
+        studentCode,
+        email,
+        batchLine: enr ? `${enr.schedule.batch.code} — ${enr.schedule.course.name} (${enr.schedule.timing})` : undefined,
+      });
+
+      res.status(201).json({ success: true, data: student, message: 'Student created. Login credentials emailed.' });
     } catch (err) { next(err); }
   },
 
@@ -522,6 +556,13 @@ export const productionController = {
               data: { studentId: student.id, scheduleId },
             }).catch(() => null);
           }
+
+          // Welcome email with credentials (skipped automatically when no real email)
+          sendStudentWelcomeEmail({
+            name: `${firstName} ${lastName}`.trim(),
+            studentCode,
+            email: rowEmail,
+          });
 
           results.push({ row: rowNum, status: 'created', studentId: student.id });
         } catch (rowErr) {

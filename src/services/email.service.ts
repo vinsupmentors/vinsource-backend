@@ -267,6 +267,46 @@ export const emailService = {
         <p style="font-family:Arial,sans-serif;color:#6b7280;font-size:12px;margin:16px 4px 0;">— With warm wishes from everyone at Vinsup Skill Academy</p>
       </div>`,
 
+    studentWelcome: (data: { name: string; studentCode: string; email: string; loginUrl: string; batchLine?: string; logoUrl?: string }) => `
+      <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e3a8a;padding:24px;text-align:center;">
+          ${data.logoUrl ? `<img src="${data.logoUrl}" alt="Vinsup Skill Academy" height="40" style="height:40px;width:auto;display:inline-block;background:#fff;padding:4px 10px;border-radius:6px;margin-bottom:10px;" /><br/>` : ''}
+          <h1 style="color:#fff;margin:0;font-size:22px;">🎓 Welcome to Vinsup Skill Academy!</h1>
+          <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Your student portal account is ready</p>
+        </div>
+        <div style="padding:26px;">
+          <p>Dear <strong>${data.name}</strong>,</p>
+          <p>Congratulations on joining <strong>Vinsup Skill Academy</strong>${data.batchLine ? ` — you have been enrolled in <strong>${data.batchLine}</strong>` : ''}! Your student portal account has been created. Here you'll track your attendance, marks, projects, tests, and more.</p>
+
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 8px;font-weight:700;color:#0369a1;">Your Login Credentials</p>
+            <table style="width:100%;border-collapse:collapse;">
+              <tr><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;"><strong>Portal</strong></td><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;"><a href="${data.loginUrl}" style="color:#1e40af;">${data.loginUrl}</a></td></tr>
+              <tr><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;"><strong>Email (Username)</strong></td><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;">${data.email}</td></tr>
+              <tr><td style="padding:8px 12px;background:#fff;border:1px solid #e5e7eb;"><strong>Temporary Password</strong></td><td style="padding:8px 12px;background:#fffbeb;border:1px solid #e5e7eb;font-family:monospace;font-size:16px;letter-spacing:2px;font-weight:700;color:#92400e;">${data.studentCode}</td></tr>
+            </table>
+            <p style="margin:8px 0 0;font-size:12px;color:#64748b;">Your temporary password is your Student ID.</p>
+          </div>
+
+          <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px;border-radius:0 6px 6px 0;margin:20px 0;">
+            <p style="margin:0;font-weight:700;color:#92400e;">⚠️ First login — 2 quick steps</p>
+            <ol style="margin:8px 0 0;padding-left:20px;color:#78350f;font-size:14px;line-height:1.8;">
+              <li><strong>Set a new password</strong> — you'll be asked to change the temporary one immediately.</li>
+              <li><strong>Complete your profile</strong> — fill in your name, phone, photo, and other details in the wizard that follows.</li>
+            </ol>
+          </div>
+
+          <p style="text-align:center;margin:24px 0;">
+            <a href="${data.loginUrl}" style="background:#1e3a8a;color:#fff;padding:13px 30px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:15px;">Log In to Student Portal →</a>
+          </p>
+
+          <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:20px;">
+            Trouble logging in? Contact your trainer or write to <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a><br/>
+            Student ID: <strong>${data.studentCode}</strong> — keep this for all academy communication.
+          </p>
+        </div>
+      </div>`,
+
     photoUploadRequest: (data: { firstName: string; loginUrl: string; deadline: string; logoUrl?: string }) => `
       <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#1e3a8a;padding:24px;text-align:center;">
