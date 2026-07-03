@@ -556,4 +556,123 @@ export const financeAdminController = {
       res.status(201).json({ success: true, data: created, message: `${created.length} expense(s) generated` });
     } catch (err) { next(err); }
   },
+
+  // ─── Budgets: SUPER_ADMIN allots spending money to employees ────────────────
+  // Running balance per employee = total allocated − total non-rejected expenses.
+
+  // SUPER_ADMIN: full picture — per-employee summary + all allocation entries
+  async budgetsSummary(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const [allocations, spentRows] = await Promise.all([
+        prisma.budgetAllocation.findMany({
+          include: {
+            employee: { select: employeeSelect },
+            allocatedBy: { select: employeeSelect },
+          },
+          orderBy: { allocatedDate: 'desc' },
+        }),
+        prisma.adminExpense.groupBy({
+          by: ['requestedById'],
+          where: { status: { not: 'REJECTED' }, requestedById: { not: null } },
+          _sum: { amount: true },
+        }),
+      ]);
+
+      const spentByEmp: Record<string, number> = {};
+      for (const r of spentRows) if (r.requestedById) spentByEmp[r.requestedById] = r._sum.amount || 0;
+
+      const byEmp: Record<string, { employee: unknown; allocated: number }> = {};
+      for (const a of allocations) {
+        if (!byEmp[a.employeeId]) byEmp[a.employeeId] = { employee: a.employee, allocated: 0 };
+        byEmp[a.employeeId].allocated += a.amount;
+      }
+
+      const summary = Object.entries(byEmp).map(([empId, v]) => ({
+        employeeId: empId,
+        employee: v.employee,
+        allocated: v.allocated,
+        spent: spentByEmp[empId] || 0,
+        balance: v.allocated - (spentByEmp[empId] || 0),
+      })).sort((a, b) => a.balance - b.balance);
+
+      res.json({ success: true, data: { summary, allocations } });
+    } catch (err) { next(err); }
+  },
+
+  // Any spender: own budget position
+  async myBudget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const emp = await prisma.employee.findUnique({ where: { userId: req.user!.userId }, select: { id: true } });
+      if (!emp) return res.json({ success: true, data: null });
+
+      const [allocs, spent] = await Promise.all([
+        prisma.budgetAllocation.findMany({
+          where: { employeeId: emp.id },
+          orderBy: { allocatedDate: 'desc' },
+          select: { id: true, amount: true, notes: true, allocatedDate: true },
+        }),
+        prisma.adminExpense.aggregate({
+          where: { requestedById: emp.id, status: { not: 'REJECTED' } },
+          _sum: { amount: true },
+        }),
+      ]);
+
+      const allocated = allocs.reduce((s: number, a: { amount: number }) => s + a.amount, 0);
+      const spentAmt = spent._sum.amount || 0;
+      res.json({
+        success: true,
+        data: allocs.length === 0
+          ? null // no budget allotted yet — UI hides the strip
+          : { allocated, spent: spentAmt, balance: allocated - spentAmt, allocations: allocs },
+      });
+    } catch (err) { next(err); }
+  },
+
+  // SUPER_ADMIN: allot budget
+  async createBudget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { employeeId, amount, notes, allocatedDate } = req.body;
+      if (!employeeId) throw new AppError('employeeId is required', 400);
+      if (!amount || Number(amount) <= 0) throw new AppError('A positive amount is required', 400);
+
+      const alloc = await prisma.budgetAllocation.create({
+        data: {
+          employeeId,
+          amount: Number(amount),
+          notes: notes || null,
+          allocatedDate: allocatedDate ? new Date(allocatedDate) : new Date(),
+          allocatedById: req.user!.employeeId || null,
+        },
+        include: { employee: { select: employeeSelect } },
+      });
+      res.status(201).json({ success: true, data: alloc, message: 'Budget allotted' });
+    } catch (err) { next(err); }
+  },
+
+  // SUPER_ADMIN: edit an allocation entry
+  async updateBudget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { amount, notes, allocatedDate } = req.body;
+      if (amount !== undefined && Number(amount) <= 0) throw new AppError('Amount must be positive', 400);
+
+      const alloc = await prisma.budgetAllocation.update({
+        where: { id: req.params.id },
+        data: {
+          amount: amount !== undefined ? Number(amount) : undefined,
+          notes: notes !== undefined ? (notes || null) : undefined,
+          allocatedDate: allocatedDate ? new Date(allocatedDate) : undefined,
+        },
+        include: { employee: { select: employeeSelect } },
+      });
+      res.json({ success: true, data: alloc });
+    } catch (err) { next(err); }
+  },
+
+  // SUPER_ADMIN: remove an allocation entry
+  async removeBudget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      await prisma.budgetAllocation.delete({ where: { id: req.params.id } });
+      res.json({ success: true, message: 'Budget allocation deleted' });
+    } catch (err) { next(err); }
+  },
 };

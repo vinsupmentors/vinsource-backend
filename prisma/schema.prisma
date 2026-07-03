@@ -512,6 +512,8 @@ model Employee {
   feeCollections    FeeCollection[]     @relation("FeeCollector")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
+  budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
+  budgetsAllocated  BudgetAllocation[]  @relation("BudgetAllocator")
   hoFundsRecorded   HOFundReceipt[]     @relation("HOFundRecorder")
   vendorsCreated    Vendor[]            @relation("VendorCreator")
   recurringTemplatesCreated RecurringExpenseTemplate[] @relation("RecurringTemplateCreator")
@@ -1306,6 +1308,23 @@ model AdminExpense {
   approvedBy        Employee?                 @relation("ExpenseApprover", fields: [approvedById], references: [id])
   vendor            Vendor?                   @relation(fields: [vendorId], references: [id])
   recurringTemplate RecurringExpenseTemplate? @relation(fields: [recurringTemplateId], references: [id])
+}
+
+// Spending budgets allotted by SUPER_ADMIN to individual employees.
+// Running balance: total allocated − total non-rejected expenses by that
+// employee. Overspend is allowed but surfaces as a negative (flagged) balance.
+model BudgetAllocation {
+  id            String   @id @default(uuid())
+  employeeId    String
+  amount        Float
+  notes         String?
+  allocatedDate DateTime @default(now())
+  allocatedById String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  employee    Employee  @relation("BudgetReceiver", fields: [employeeId], references: [id])
+  allocatedBy Employee? @relation("BudgetAllocator", fields: [allocatedById], references: [id])
 }
 
 // HO (Head Office) funding — this entity is operated out of a separate

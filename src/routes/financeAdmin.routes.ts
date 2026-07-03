@@ -21,6 +21,13 @@ router.put('/:id', requireRole('SUPER_ADMIN'), uploadExpenseAttachments, finance
 router.put('/:id/status', requireRole('SUPER_ADMIN'), financeAdminController.updateStatus);
 router.delete('/:id', requireRole('SUPER_ADMIN'), financeAdminController.remove);
 
+// Budgets — SUPER_ADMIN allots spending money to employees; spenders see only their own.
+router.get('/budgets/my', financeAdminController.myBudget);
+router.get('/budgets', requireRole('SUPER_ADMIN'), financeAdminController.budgetsSummary);
+router.post('/budgets', requireRole('SUPER_ADMIN'), financeAdminController.createBudget);
+router.put('/budgets/:id', requireRole('SUPER_ADMIN'), financeAdminController.updateBudget);
+router.delete('/budgets/:id', requireRole('SUPER_ADMIN'), financeAdminController.removeBudget);
+
 // Company-wide HO ledger / balance reconciliation — ADMIN-level only.
 router.get('/ledger', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.ledger);
 router.get('/category-summary', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.categorySummary);
