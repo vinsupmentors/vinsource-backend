@@ -29,6 +29,38 @@ async function buildStudentUserCreate(studentCode: string, email?: string | null
   };
 }
 
+/**
+ * Generates a readable, unique sub-batch code: <BATCH>-<COURSE INITIALS>-<TIMING>,
+ * e.g. "B14-DA-EVE". Numeric suffix on collision (B14-DA-EVE-2).
+ */
+async function generateSubBatchCode(db: typeof prisma, batchId: string, courseId: string, timing: string): Promise<string> {
+  const [batch, course] = await Promise.all([
+    db.batch.findUnique({ where: { id: batchId }, select: { code: true } }),
+    db.academyCourse.findUnique({ where: { id: courseId }, select: { name: true } }),
+  ]);
+  const batchPart = (batch?.code || 'B')
+    .toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^BATCH/, 'B') || 'B';
+  const coursePart = (course?.name || 'C')
+    .split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0].toUpperCase()).join('').slice(0, 4) || 'C';
+  const timingPart = String(timing).slice(0, 3).toUpperCase();
+
+  const base = `${batchPart}-${coursePart}-${timingPart}`;
+  let code = base;
+  let n = 2;
+  while (await db.batchCourseSchedule.findUnique({ where: { code } })) {
+    code = `${base}-${n++}`;
+  }
+  return code;
+}
+
+/** Resolves a sub-batch code (case-insensitive) to a schedule id. */
+async function resolveScheduleByCode(subBatchCode: string): Promise<string> {
+  const code = subBatchCode.trim().toUpperCase();
+  const schedule = await prisma.batchCourseSchedule.findUnique({ where: { code } });
+  if (!schedule) throw new AppError(`Sub-batch code "${code}" not found`, 404);
+  return schedule.id;
+}
+
 export const productionController = {
   // ── COURSES & MODULES ─────────────────────────────────────────────────────
   async listCourses(_req: AuthRequest, res: Response, next: NextFunction) {
@@ -158,9 +190,12 @@ export const productionController = {
         throw new AppError('courseId, timing, dayPattern, and mode are required', 400);
       }
 
+      const subBatchCode = await generateSubBatchCode(prisma, batchId, courseId, timing);
+
       const schedule = await prisma.$transaction(async (tx) => {
         const created = await tx.batchCourseSchedule.create({
           data: {
+            code: subBatchCode,
             batchId, courseId, timing, dayPattern, mode,
             startDate: startDate ? new Date(startDate) : new Date(),
             endDate: endDate ? new Date(endDate) : undefined,
@@ -333,10 +368,13 @@ export const productionController = {
    */
   async createStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { studentCode, firstName, lastName, email, phone, track, leadId, scheduleId } = req.body;
+      const { studentCode, firstName, lastName, email, phone, track, leadId, subBatchCode } = req.body;
+      let { scheduleId } = req.body;
       if (!studentCode || !email) {
         throw new AppError('studentCode and email are required', 400);
       }
+      // Sub-batch code is the friendly way to map the student to a schedule
+      if (!scheduleId && subBatchCode) scheduleId = await resolveScheduleByCode(subBatchCode);
       const createdById = req.user?.employeeId;
 
       const student = await prisma.student.create({
@@ -395,6 +433,9 @@ export const productionController = {
       ]);
       const batchByCode = new Map(allBatches.map((b) => [b.code.trim().toLowerCase(), b]));
       const courseByName = new Map(allCourses.map((c) => [c.name.trim().toLowerCase(), c]));
+      const scheduleByCode = new Map(
+        allBatches.flatMap((b) => b.schedules.filter((s) => s.code).map((s) => [s.code!.toUpperCase(), s.id] as [string, string]))
+      );
 
       const existingCodesCount = await prisma.student.count();
       let autoSeq = existingCodesCount;
@@ -430,15 +471,22 @@ export const productionController = {
           const trackRaw = String(row.track || 'JRP').trim().toUpperCase();
           const track = ['JRP', 'IOP', 'PAP'].includes(trackRaw) ? trackRaw : 'JRP';
 
+          // Preferred: direct sub-batch code (e.g. "B14-DA-EVE") maps the student exactly
+          const rowSubBatch = String(row.subBatchCode || row.subBatch || '').trim().toUpperCase();
+          if (rowSubBatch && !scheduleByCode.has(rowSubBatch)) {
+            results.push({ row: rowNum, status: 'error', message: `Sub-batch code "${rowSubBatch}" not found` });
+            continue;
+          }
+
           const batchCode = String(row.batch || row.batchCode || row.batchNumber || '').trim();
           const batch = batchCode ? batchByCode.get(batchCode.toLowerCase()) : undefined;
-          if (batchCode && !batch) {
+          if (!rowSubBatch && batchCode && !batch) {
             results.push({ row: rowNum, status: 'error', message: `Batch "${batchCode}" not found` });
             continue;
           }
 
-          let scheduleId: string | undefined;
-          if (batch) {
+          let scheduleId: string | undefined = rowSubBatch ? scheduleByCode.get(rowSubBatch) : undefined;
+          if (!scheduleId && batch) {
             const schedules = batch.schedules;
             const courseName = String(row.course || '').trim();
             if (courseName) {
@@ -488,8 +536,10 @@ export const productionController = {
 
   async enrollStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { studentId, scheduleId } = req.body;
-      if (!studentId || !scheduleId) throw new AppError('studentId and scheduleId are required', 400);
+      const { studentId, subBatchCode } = req.body;
+      let { scheduleId } = req.body;
+      if (!scheduleId && subBatchCode) scheduleId = await resolveScheduleByCode(subBatchCode);
+      if (!studentId || !scheduleId) throw new AppError('studentId and scheduleId (or subBatchCode) are required', 400);
 
       const enrollment = await prisma.studentBatchEnrollment.create({
         data: { studentId, scheduleId },

@@ -1544,6 +1544,7 @@ model Batch {
 // One course running inside a batch, with its own timing/day-pattern/mode.
 model BatchCourseSchedule {
   id        String       @id @default(uuid())
+  code      String?      @unique // human-friendly sub-batch code, e.g. B14-DA-EVE
   batchId   String
   courseId  String
   timing    BatchTiming
@@ -1569,7 +1570,9 @@ model BatchCourseSchedule {
   feedbackFormReleases FeedbackFormRelease[]
   onlineTestReleases   OnlineTestRelease[]
 
-  @@unique([batchId, courseId])
+  // Same course may run multiple times in a batch at different timings
+  // (e.g. morning + evening session, possibly with the same trainer).
+  @@unique([batchId, courseId, timing])
 }
 
 model TrainerAssignment {
