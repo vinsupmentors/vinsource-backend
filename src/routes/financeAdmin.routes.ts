@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { financeAdminController } from '../controllers/financeAdmin.controller';
 import { authenticate } from '../middleware/auth';
-import { requireModule } from '../middleware/rbac';
+import { requireModule, requireRole } from '../middleware/rbac';
 import { uploadExpenseAttachments } from '../middleware/upload';
 
 const router = Router();
@@ -15,9 +15,11 @@ router.get('/stats', financeAdminController.stats);
 router.get('/report', financeAdminController.report);
 router.get('/', financeAdminController.list);
 router.post('/', requireModule('FINANCE_ADMIN', 'EDIT'), uploadExpenseAttachments, financeAdminController.create);
-router.put('/:id', requireModule('FINANCE_ADMIN', 'EDIT'), uploadExpenseAttachments, financeAdminController.update);
-router.put('/:id/status', requireModule('FINANCE_ADMIN', 'EDIT'), financeAdminController.updateStatus);
-router.delete('/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.remove);
+// Modifying register entries (edit / approve / delete) is SUPER_ADMIN only —
+// other Finance (Admin) users can view and add expenses but never change them.
+router.put('/:id', requireRole('SUPER_ADMIN'), uploadExpenseAttachments, financeAdminController.update);
+router.put('/:id/status', requireRole('SUPER_ADMIN'), financeAdminController.updateStatus);
+router.delete('/:id', requireRole('SUPER_ADMIN'), financeAdminController.remove);
 
 // Company-wide HO ledger / balance reconciliation — ADMIN-level only.
 router.get('/ledger', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.ledger);
