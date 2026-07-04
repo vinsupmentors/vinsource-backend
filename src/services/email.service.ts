@@ -173,6 +173,31 @@ export const emailService = {
         </div>
       </div>`,
 
+    passwordResetEmail: (data: { firstName: string; resetUrl: string }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e3a8a;padding:28px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:24px;">Vin-Source Portal</h1>
+          <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Password Reset Request</p>
+        </div>
+        <div style="padding:28px;">
+          <h2 style="color:#1e3a8a;margin-top:0;">Reset Your Password 🔒</h2>
+          <p>Dear <strong>${data.firstName}</strong>,</p>
+          <p>We received a request to reset your Vin-Source Portal password. Click the button below to set a new password. This link is valid for <strong>1 hour</strong>.</p>
+
+          <p style="text-align:center;margin:28px 0;">
+            <a href="${data.resetUrl}" style="background:#1e3a8a;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:15px;">Reset My Password →</a>
+          </p>
+
+          <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px;border-radius:0 6px 6px 0;margin:20px 0;">
+            <p style="margin:0;font-size:13px;color:#92400e;">If you did not request a password reset, you can safely ignore this email. Your password will not change.</p>
+          </div>
+
+          <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:20px;">
+            This link will expire in 1 hour. If you need help, contact HR at <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a>
+          </p>
+        </div>
+      </div>`,
+
     hrPasswordReset: (data: { firstName: string; email: string; newPassword: string; loginUrl: string; resetBy: string }) => `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#0f766e;padding:24px;">

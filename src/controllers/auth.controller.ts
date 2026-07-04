@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import prisma from '../config/database';
 import { hashPassword, comparePassword } from '../utils/helpers';
 import { generateToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt';
@@ -235,6 +236,71 @@ export const authController = {
     } catch (err) {
       next(err);
     }
+  },
+
+  /** Self-service: send password reset link to email */
+  async forgotPassword(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { email } = req.body;
+      if (!email) throw new AppError('Email is required', 400);
+
+      const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+
+      // Always respond success — don't reveal whether the email exists
+      if (!user || !user.isActive) {
+        return res.json({ success: true, message: 'If that email is registered, you will receive a reset link.' });
+      }
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordResetToken: token, passwordResetExpiry: expiry },
+      });
+
+      // Determine first name for email greeting
+      const employee = await prisma.employee.findUnique({ where: { userId: user.id }, select: { firstName: true } });
+      const student = !employee ? await prisma.student.findUnique({ where: { userId: user.id }, select: { firstName: true } }) : null;
+      const firstName = employee?.firstName ?? student?.firstName ?? user.email.split('@')[0];
+
+      const resetUrl = `${config.FRONTEND_URL}/reset-password?token=${token}`;
+
+      await emailService.send({
+        to: user.email,
+        subject: 'Reset Your Vin-Source Portal Password',
+        html: emailService.templates.passwordResetEmail({ firstName, resetUrl }),
+        template: 'password_reset',
+      });
+
+      res.json({ success: true, message: 'If that email is registered, you will receive a reset link.' });
+    } catch (err) { next(err); }
+  },
+
+  /** Self-service: set new password using the reset token */
+  async resetPasswordWithToken(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { token, newPassword } = req.body;
+      if (!token || !newPassword) throw new AppError('Token and new password are required', 400);
+      if (newPassword.length < 6) throw new AppError('Password must be at least 6 characters', 400);
+
+      const user = await prisma.user.findUnique({ where: { passwordResetToken: token } });
+      if (!user || !user.passwordResetExpiry || user.passwordResetExpiry < new Date()) {
+        throw new AppError('Reset link is invalid or has expired. Please request a new one.', 400);
+      }
+
+      const hashed = await hashPassword(newPassword);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: hashed, passwordResetToken: null, passwordResetExpiry: null, mustChangePassword: false },
+      });
+
+      prisma.passwordLog.create({
+        data: { userId: user.id, plainText: newPassword, setBy: user.id, reason: 'self_reset' },
+      }).catch(() => {});
+
+      res.json({ success: true, message: 'Password reset successfully. You can now log in.' });
+    } catch (err) { next(err); }
   },
 
   /** HR/Admin: view password history for a user */
