@@ -9,6 +9,7 @@ import { birthdayService } from './services/birthday.service';
 import { releaseReminderService } from './services/releaseReminder.service';
 import { attendanceCronService } from './services/attendanceCron.service';
 import { passwordReminderService } from './services/passwordReminder.service';
+import { checkoutReminderService } from './services/checkoutReminder.service';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -98,22 +99,34 @@ const start = async () => {
       }
     });
 
+    // Checkout reminder — runs every 30 minutes during working hours (8 AM – 10 PM IST).
+    // Finds employees who checked in 8+ hours ago with no check-out and emails them once per day.
+    cron.schedule('*/30 8-22 * * *', async () => {
+      try {
+        const result = await checkoutReminderService.sendCheckoutReminders();
+        if (result.sent > 0) {
+          console.log(`⏰ Checkout reminders sent: ${result.sent} (skipped: ${result.skipped})`);
+        }
+      } catch (err) {
+        console.error('Checkout reminder cron job failed:', err);
+      }
+    }, { timezone: 'Asia/Kolkata' });
+
     // Student status sync — runs every day at 7:00 AM server time, flipping
     // each ACTIVE student to INACTIVE if their lifetime attendance % drops
     // below 60, and reverting any INACTIVE student back to ACTIVE the moment
-    // it recovers to 60% or above. Fully automatic, no PM action required.
     cron.schedule('0 7 * * *', async () => {
       try {
         const result = await attendanceCronService.syncStudentStatusByAttendance();
         if (result.toInactive > 0 || result.toActive > 0) {
-          console.log(`🔄 Student status sync: ${result.toInactive} → INACTIVE, ${result.toActive} → ACTIVE (checked ${result.checked})`);
+          console.log(`Student status sync: ${result.toInactive} -> INACTIVE, ${result.toActive} -> ACTIVE (checked ${result.checked})`);
         }
       } catch (err) {
         console.error('Student status sync cron job failed:', err);
       }
     });
   } catch (err) {
-    console.error('❌ Startup failed:', err);
+    console.error('Failed to start:', err);
     process.exit(1);
   }
 };

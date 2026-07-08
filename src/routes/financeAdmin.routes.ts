@@ -35,6 +35,7 @@ router.get('/category-summary', requireModule('FINANCE_ADMIN', 'ADMIN'), finance
 // HO fund receipts (credits) — viewing/recording HO funding is ADMIN-level only.
 router.get('/funds', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.listFunds);
 router.post('/funds', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.createFund);
+router.put('/funds/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.updateFund);
 router.delete('/funds/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.removeFund);
 
 // Vendors — list is VIEW-level (every spender can pick a vendor on their own
@@ -49,7 +50,6 @@ router.delete('/vendors/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAd
 router.get('/recurring', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.listRecurring);
 router.post('/recurring', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.createRecurring);
 router.put('/recurring/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.updateRecurring);
-router.delete('/recurring/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.removeRecurring);
 router.post('/recurring/generate', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.generateRecurring);
 
 export default router;

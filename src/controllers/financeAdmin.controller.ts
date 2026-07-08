@@ -394,6 +394,22 @@ export const financeAdminController = {
     } catch (err) { next(err); }
   },
 
+  async updateFund(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { amount, receivedDate, notes } = req.body;
+      const fund = await prisma.hOFundReceipt.update({
+        where: { id: req.params.id },
+        data: {
+          amount: amount !== undefined ? Number(amount) : undefined,
+          receivedDate: receivedDate ? new Date(receivedDate) : undefined,
+          notes: notes !== undefined ? (notes || null) : undefined,
+        },
+        include: { recordedBy: { select: employeeSelect } },
+      });
+      res.json({ success: true, data: fund });
+    } catch (err) { next(err); }
+  },
+
   async removeFund(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await prisma.hOFundReceipt.delete({ where: { id: req.params.id } });
@@ -659,7 +675,7 @@ export const financeAdminController = {
         where: { id: req.params.id },
         data: {
           amount: amount !== undefined ? Number(amount) : undefined,
-          notes: notes !== undefined ? (notes || null) : undefined,
+                 notes: notes !== undefined ? (notes || null) : undefined,
           allocatedDate: allocatedDate ? new Date(allocatedDate) : undefined,
         },
         include: { employee: { select: employeeSelect } },
