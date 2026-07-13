@@ -37,6 +37,7 @@ import digitalMarketingRoutes from './routes/digitalMarketing.routes';
 import studentPortalRoutes from './routes/studentPortal.routes';
 import trainerPortalRoutes from './routes/trainerPortal.routes';
 import publicRoutes from './routes/public.routes';
+import appointmentLetterRoutes from './routes/appointmentLetter.routes';
 
 const app = express();
 
@@ -101,6 +102,7 @@ app.use('/api/digital-marketing', digitalMarketingRoutes);
 app.use('/api/student-portal', studentPortalRoutes);
 app.use('/api/trainer-portal', trainerPortalRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/appointment-letters', appointmentLetterRoutes);
 app.use('/api/departments', buildDepartmentRouter());
 app.use('/api/designations', buildDesignationRouter());
 app.use('/api/branches', buildBranchRouter());

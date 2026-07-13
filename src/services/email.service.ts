@@ -9,6 +9,12 @@ const transporter = nodemailer.createTransport({
   auth: { user: config.SMTP_USER, pass: config.SMTP_PASS },
 });
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface EmailOptions {
   to: string | string[];
   cc?: string | string[];
@@ -16,6 +22,7 @@ export interface EmailOptions {
   subject: string;
   html: string;
   template?: string;
+  attachments?: EmailAttachment[];
 }
 
 export const emailService = {
@@ -28,6 +35,11 @@ export const emailService = {
         bcc: opts.bcc ? (Array.isArray(opts.bcc) ? opts.bcc.join(', ') : opts.bcc) : undefined,
         subject: opts.subject,
         html: opts.html,
+        attachments: opts.attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+          contentType: a.contentType ?? 'application/pdf',
+        })),
       });
       await prisma.emailLog.create({
         data: {
@@ -528,6 +540,93 @@ export const emailService = {
           </table>`
               : `<p style="background:#f0fdf4;padding:12px;border-radius:6px;border-left:4px solid #16a34a;">No absences recorded for this day. 🎉</p>`
           }
+        </div>
+      </div>`,
+
+    appointmentLetterApproval: (data: { approverName: string; employeeName: string; letterId: string; portalUrl: string }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e3a8a;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">Appointment Letter — Approval Required</h1>
+          <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Vin-Source Portal — Vinsup Skill Academy</p>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.approverName},</p>
+          <p>An appointment letter has been created for <strong>${data.employeeName}</strong> and is awaiting your approval.</p>
+          <p>Please log in to the portal to review and approve or reject the letter.</p>
+          <p style="text-align:center;margin:24px 0;">
+            <a href="${data.portalUrl}" style="background:#1e3a8a;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;">Review Letter →</a>
+          </p>
+          <p style="color:#6b7280;font-size:12px;">Vin-Source Portal — Vinsup Skill Academy</p>
+        </div>
+      </div>`,
+
+    appointmentLetterToEmployee: (data: { employeeName: string; joiningDate: string; designation: string; department: string }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e3a8a;padding:28px;text-align:center;">
+          <h1 style="color:#fff;margin:0;font-size:24px;letter-spacing:1px;">Vinsup Skill Academy</h1>
+          <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Appointment Letter</p>
+        </div>
+        <div style="padding:28px;">
+          <p>Dear <strong>${data.employeeName}</strong>,</p>
+          <p>We are pleased to offer you the position of <strong>${data.designation}</strong> in our <strong>${data.department}</strong> department at Vinsup Skill Academy.</p>
+          <p>Please find your official appointment letter attached to this email. Kindly review all the terms and conditions mentioned in the letter.</p>
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 6px;font-weight:700;color:#0369a1;">Key Details</p>
+            <table style="width:100%;border-collapse:collapse;">
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;"><strong>Position</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;">${data.designation}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;"><strong>Department</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;">${data.department}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;"><strong>Date of Joining</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;">${data.joiningDate}</td></tr>
+            </table>
+          </div>
+          <p>If you have any questions, please contact HR at <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a></p>
+          <p>We look forward to welcoming you to our team!</p>
+          <p style="margin-top:24px;">Warm regards,<br/><strong>Pooranam Annamalai</strong><br/>Chief Business and People Officer<br/>Vinsup Skill Academy</p>
+        </div>
+      </div>`,
+
+    attendanceEscalation: (data: {
+      studentName: string;
+      studentCode: string;
+      scheduleLabel: string;
+      courseName: string;
+      consecutiveDays: number;
+      lastAbsentDate: string;
+    }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#dc2626;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">🚨 ${data.consecutiveDays}-Day Absence Escalation</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>The following student has been marked <strong>absent for ${data.consecutiveDays} consecutive training days</strong> and requires follow-up:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Student</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.studentName}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Student Code</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.studentCode}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Batch / Schedule</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.scheduleLabel}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Course</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.courseName}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Last Absent Date</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.lastAbsentDate}</strong></td></tr>
+          </table>
+          <p style="background:#fef2f2;padding:12px;border-radius:6px;border-left:4px solid #dc2626;">
+            Please reach out to the student and/or escalate per the standard attendance follow-up process.
+          </p>
+        </div>
+      </div>`,
+  },
+};
+style="padding:28px;">
+          <p>Dear <strong>${data.employeeName}</strong>,</p>
+          <p>We are pleased to offer you the position of <strong>${data.designation}</strong> in our <strong>${data.department}</strong> department at Vinsup Skill Academy.</p>
+          <p>Please find your official appointment letter attached to this email. Kindly review all the terms and conditions mentioned in the letter.</p>
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 6px;font-weight:700;color:#0369a1;">Key Details</p>
+            <table style="width:100%;border-collapse:collapse;">
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;"><strong>Position</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;">${data.designation}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;"><strong>Department</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;">${data.department}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;"><strong>Date of Joining</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fff;">${data.joiningDate}</td></tr>
+            </table>
+          </div>
+          <p>If you have any questions, please contact HR at <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a></p>
+          <p>We look forward to welcoming you to our team!</p>
+          <p style="margin-top:24px;">Warm regards,<br/><strong>Pooranam Annamalai</strong><br/>Chief Business and People Officer<br/>Vinsup Skill Academy</p>
         </div>
       </div>`,
 
