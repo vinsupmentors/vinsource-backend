@@ -52,14 +52,14 @@ app.use(cors({
 const isDev = config.NODE_ENV !== 'production';
 app.use('/api/auth', rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isDev ? 500 : 30,
+  max: isDev ? 500 : 200, // raised from 30 → 200: handles ~100 concurrent users behind shared NAT
   message: { success: false, message: 'Too many requests, please try again later' },
   skip: () => isDev, // completely skip in dev
 }));
 
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isDev ? 5000 : 500,
+  max: isDev ? 5000 : 1000, // raised from 500 → 1000
   skip: () => isDev,
 }));
 
