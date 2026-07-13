@@ -10,6 +10,7 @@ router.use(authenticate);
 router.post('/',           compOffController.submit);
 router.get('/my',          compOffController.myRequests);
 router.get('/pending',     requireMinRole('MANAGER'), compOffController.pending);
+router.get('/team',        requireMinRole('MANAGER'), compOffController.teamAll);
 router.put('/:id/approve', requireMinRole('MANAGER'), compOffController.approve);
 router.put('/:id/reject',  requireMinRole('MANAGER'), compOffController.reject);
 

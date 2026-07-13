@@ -100,6 +100,28 @@ export const permissionController = {
     } catch (err) { next(err); }
   },
 
+  /** Manager: all permission/half-day requests (any status) for their team. */
+  async teamAll(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const manager = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
+      if (!manager) throw new AppError('Employee not found', 404);
+
+      const { status } = req.query;
+      const perms = await prisma.permission.findMany({
+        where: {
+          managerId: manager.id,
+          ...(status && status !== 'ALL' ? { status: status as string } : {}),
+        },
+        include: {
+          employee: { select: { firstName: true, lastName: true, employeeCode: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      res.json({ success: true, data: perms });
+    } catch (err) { next(err); }
+  },
+
   async approve(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const manager = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });

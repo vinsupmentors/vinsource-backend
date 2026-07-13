@@ -17,6 +17,7 @@ router.get('/my-requests', leaveController.myRequests);
 router.get('/my-balances', leaveController.myBalances);
 router.get('/calendar', leaveController.calendar);
 router.get('/pending', requireMinRole('MANAGER'), leaveController.pendingForManager);
+router.get('/team',    requireMinRole('MANAGER'), leaveController.teamAll);
 router.put('/:id/approve', requireMinRole('MANAGER'), leaveController.approve);
 router.put('/:id/reject', requireMinRole('MANAGER'), leaveController.reject);
 

@@ -10,6 +10,7 @@ router.get('/all',          requireRole('SUPER_ADMIN'), permissionController.all
 router.post('/',            permissionController.apply);
 router.get('/my',           permissionController.myPermissions);
 router.get('/pending',      requireMinRole('MANAGER'), permissionController.pending);
+router.get('/team',         requireMinRole('MANAGER'), permissionController.teamAll);
 router.put('/:id/approve',  requireMinRole('MANAGER'), permissionController.approve);
 router.put('/:id/reject',   requireMinRole('MANAGER'), permissionController.reject);
 
