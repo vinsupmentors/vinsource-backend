@@ -158,16 +158,19 @@ export const attendanceRegularizationController = {
   /** Manager: all requests (PENDING + APPROVED + REJECTED) for their team. */
   async teamAll(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const manager = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
-      if (!manager) throw new AppError('Employee not found', 404);
-
+      const isSuperAdmin = req.user?.role === 'SUPER_ADMIN';
       const { status } = req.query;
+      const where: Record<string, unknown> = {};
+
+      if (!isSuperAdmin) {
+        const manager = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
+        if (!manager) throw new AppError('Employee not found', 404);
+        where.managerId = manager.id;
+      }
+      if (status && status !== 'ALL') where.status = status as string;
 
       const requests = await prisma.attendanceRegularization.findMany({
-        where: {
-          managerId: manager.id,
-          ...(status && status !== 'ALL' ? { status: status as string } : {}),
-        },
+        where,
         include: {
           employee: { select: { firstName: true, lastName: true, employeeCode: true } },
         },
