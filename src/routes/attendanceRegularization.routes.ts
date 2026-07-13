@@ -9,6 +9,7 @@ router.use(authenticate);
 router.post('/',            attendanceRegularizationController.apply);
 router.get('/my',           attendanceRegularizationController.myRequests);
 router.get('/pending',      requireMinRole('MANAGER'), attendanceRegularizationController.pending);
+router.get('/team',         requireMinRole('MANAGER'), attendanceRegularizationController.teamAll);
 router.put('/:id/approve',  requireMinRole('MANAGER'), attendanceRegularizationController.approve);
 router.put('/:id/reject',   requireMinRole('MANAGER'), attendanceRegularizationController.reject);
 
