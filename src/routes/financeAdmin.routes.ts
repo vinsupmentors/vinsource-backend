@@ -15,13 +15,14 @@ router.get('/stats', financeAdminController.stats);
 router.get('/report', financeAdminController.report);
 router.get('/', financeAdminController.list);
 router.post('/', requireModule('FINANCE_ADMIN', 'EDIT'), uploadExpenseAttachments, financeAdminController.create);
-// Modifying register entries (edit / approve / delete) is SUPER_ADMIN only —
-// other Finance (Admin) users can view and add expenses but never change them.
-router.put('/:id', requireRole('SUPER_ADMIN'), uploadExpenseAttachments, financeAdminController.update);
-router.put('/:id/status', requireRole('SUPER_ADMIN'), financeAdminController.updateStatus);
-router.delete('/:id', requireRole('SUPER_ADMIN'), financeAdminController.remove);
-// Audit log — all edits/deletes on AdminExpense, SUPER_ADMIN only
-router.get('/audit', requireRole('SUPER_ADMIN'), financeAdminController.auditLog);
+// Modifying register entries (edit / approve / delete) requires FINANCE_ADMIN
+// ADMIN-level access — SUPER_ADMIN always passes; Finance Admin users granted
+// ADMIN level via Master Control also get these actions (e.g. Jayasoorya).
+router.put('/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), uploadExpenseAttachments, financeAdminController.update);
+router.put('/:id/status', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.updateStatus);
+router.delete('/:id', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.remove);
+// Audit log — visible to all FINANCE_ADMIN ADMIN-level users
+router.get('/audit', requireModule('FINANCE_ADMIN', 'ADMIN'), financeAdminController.auditLog);
 
 // Budgets — SUPER_ADMIN allots spending money to employees; spenders see only their own.
 router.get('/budgets/my', financeAdminController.myBudget);

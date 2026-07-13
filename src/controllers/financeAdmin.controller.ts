@@ -94,6 +94,19 @@ export const financeAdminController = {
       const billCopyUrl = files?.billCopy?.[0] ? `/uploads/expenses/${files.billCopy[0].filename}` : undefined;
       const paymentProofUrl = files?.paymentProof?.[0] ? `/uploads/expenses/${files.paymentProof[0].filename}` : undefined;
 
+      // Auto-generate voucher number if not provided: V{YYYYMMDD}-{seq}
+      // e.g. V20260701-01, V20260701-02 …
+      let finalVoucherNo = voucherNo || null;
+      if (!finalVoucherNo) {
+        const dateForVoucher = expenseDate ? new Date(expenseDate) : new Date();
+        const y = dateForVoucher.getFullYear();
+        const m = String(dateForVoucher.getMonth() + 1).padStart(2, '0');
+        const d = String(dateForVoucher.getDate()).padStart(2, '0');
+        const prefix = `V${y}${m}${d}-`;
+        const count = await prisma.adminExpense.count({ where: { voucherNo: { startsWith: prefix } } });
+        finalVoucherNo = `${prefix}${String(count + 1).padStart(2, '0')}`;
+      }
+
       const expense = await prisma.adminExpense.create({
         data: {
           title,
@@ -102,7 +115,7 @@ export const financeAdminController = {
           amount: Number(amount),
           requestedById: spenderId,
           notes,
-          voucherNo,
+          voucherNo: finalVoucherNo,
           billNo,
           paymentMode,
           billCopyUrl,
