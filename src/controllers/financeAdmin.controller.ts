@@ -142,6 +142,9 @@ export const financeAdminController = {
       const billCopyUrl = files?.billCopy?.[0] ? `/uploads/expenses/${files.billCopy[0].filename}` : undefined;
       const paymentProofUrl = files?.paymentProof?.[0] ? `/uploads/expenses/${files.paymentProof[0].filename}` : undefined;
 
+      // Snapshot before editing for audit trail
+      const before = await prisma.adminExpense.findUnique({ where: { id: req.params.id } });
+
       const expense = await prisma.adminExpense.update({
         where: { id: req.params.id },
         data: {
@@ -160,14 +163,77 @@ export const financeAdminController = {
         },
         include: { requestedBy: { select: employeeSelect }, vendor: { select: vendorSelect } },
       });
+
+      // Write audit log
+      if (req.user?.userId) {
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user.userId,
+            action: 'EDIT',
+            module: 'FINANCE_ADMIN',
+            entityId: req.params.id,
+            entityType: 'AdminExpense',
+            oldData: before as object,
+            newData: expense as object,
+          },
+        });
+      }
+
       res.json({ success: true, data: expense });
     } catch (err) { next(err); }
   },
 
   async remove(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      // Snapshot before deleting for audit trail
+      const before = await prisma.adminExpense.findUnique({ where: { id: req.params.id } });
+
       await prisma.adminExpense.delete({ where: { id: req.params.id } });
+
+      // Write audit log (after delete succeeds)
+      if (req.user?.userId && before) {
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user.userId,
+            action: 'DELETE',
+            module: 'FINANCE_ADMIN',
+            entityId: req.params.id,
+            entityType: 'AdminExpense',
+            oldData: before as object,
+            newData: undefined,
+          },
+        });
+      }
+
       res.json({ success: true, message: 'Expense deleted' });
+    } catch (err) { next(err); }
+  },
+
+  async auditLog(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { page = 1, limit = 50 } = req.query;
+      const p = Number(page), l = Number(limit);
+
+      const [logs, total] = await Promise.all([
+        prisma.auditLog.findMany({
+          where: { module: 'FINANCE_ADMIN', entityType: 'AdminExpense' },
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                employee: { select: { firstName: true, lastName: true, employeeCode: true } },
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: (p - 1) * l,
+          take: l,
+        }),
+        prisma.auditLog.count({ where: { module: 'FINANCE_ADMIN', entityType: 'AdminExpense' } }),
+      ]);
+
+      res.json({ success: true, data: logs, meta: { total, page: p, limit: l, pages: Math.ceil(total / l) } });
     } catch (err) { next(err); }
   },
 

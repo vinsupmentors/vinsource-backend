@@ -20,6 +20,8 @@ router.post('/', requireModule('FINANCE_ADMIN', 'EDIT'), uploadExpenseAttachment
 router.put('/:id', requireRole('SUPER_ADMIN'), uploadExpenseAttachments, financeAdminController.update);
 router.put('/:id/status', requireRole('SUPER_ADMIN'), financeAdminController.updateStatus);
 router.delete('/:id', requireRole('SUPER_ADMIN'), financeAdminController.remove);
+// Audit log — all edits/deletes on AdminExpense, SUPER_ADMIN only
+router.get('/audit', requireRole('SUPER_ADMIN'), financeAdminController.auditLog);
 
 // Budgets — SUPER_ADMIN allots spending money to employees; spenders see only their own.
 router.get('/budgets/my', financeAdminController.myBudget);
