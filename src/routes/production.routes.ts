@@ -53,6 +53,7 @@ router.post('/students/push-to-placements', requireModule('PRODUCTION_TRAINING',
 router.put('/students/bulk-status', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.bulkUpdateStudentStatus);
 
 router.put('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateStudent);
+router.delete('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.deleteStudent);
 router.post('/enrollments', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.enrollStudent);
 router.post('/enrollments/bulk', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.bulkEnrollStudents);
 router.put('/enrollments/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateEnrollment);

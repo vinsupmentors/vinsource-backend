@@ -510,6 +510,40 @@ export const productionController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Delete a student. Blocked if the student has any attendance, test attempts,
+   * KRA entries, or placement results — those must be removed first or the PM
+   * should use status="DROPPED" instead of deleting.
+   */
+  async deleteStudent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const student = await prisma.student.findUnique({
+        where: { id },
+        include: {
+          _count: {
+            select: {
+              attendances: true,
+              testAttempts: true,
+              kraEntries: true,
+              placementResults: true,
+            },
+          },
+        },
+      });
+      if (!student) throw new AppError('Student not found', 404);
+      const { attendances, testAttempts, kraEntries, placementResults } = student._count;
+      if (attendances + testAttempts + kraEntries + placementResults > 0) {
+        throw new AppError(
+          'Cannot delete a student who has attendance, test, KRA, or placement records. Set their status to DROPPED instead.',
+          409,
+        );
+      }
+      await prisma.student.delete({ where: { id } });
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
   async bulkUploadStudents(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { students } = req.body;
