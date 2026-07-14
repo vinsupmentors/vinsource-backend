@@ -98,6 +98,7 @@ export const checkoutReminderService = {
 
       const checkInTime = att.checkIn.toLocaleTimeString('en-IN', {
         hour: '2-digit', minute: '2-digit', hour12: true,
+        timeZone: 'Asia/Kolkata',
       });
       const hoursWorked = Math.floor(elapsed / (1000 * 60 * 60));
 
