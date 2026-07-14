@@ -74,6 +74,8 @@ export const trainerPortalController = {
               course: { select: { id: true, name: true, modules: { orderBy: { order: 'asc' } } } },
               batch: { select: { id: true, code: true, startDate: true, endDate: true, status: true } },
               _count: { select: { enrollments: true } },
+              code: true,
+              timing: true,
             },
           },
         },
