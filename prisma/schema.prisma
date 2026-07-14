@@ -1604,9 +1604,9 @@ model BatchCourseSchedule {
   feedbackFormReleases FeedbackFormRelease[]
   onlineTestReleases   OnlineTestRelease[]
 
-  // Same course may run multiple times in a batch at different timings
-  // (e.g. morning + evening session, possibly with the same trainer).
-  @@unique([batchId, courseId, timing])
+  // Multiple sub-batches of the same course+timing are allowed in a batch
+  // (e.g. DA-Morning with Trainer A and DA-Morning with Trainer B in parallel).
+  // Each schedule is uniquely identified by its `code` field above.
 }
 
 model TrainerAssignment {
