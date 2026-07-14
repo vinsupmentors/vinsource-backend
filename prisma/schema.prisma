@@ -1607,6 +1607,10 @@ model BatchCourseSchedule {
   // Multiple sub-batches of the same course+timing are allowed in a batch
   // (e.g. DA-Morning with Trainer A and DA-Morning with Trainer B in parallel).
   // Each schedule is uniquely identified by its `code` field above.
+  // Explicit indexes so MySQL FK constraints on batchId/courseId are satisfied
+  // after the old composite unique index was removed.
+  @@index([batchId])
+  @@index([courseId])
 }
 
 model TrainerAssignment {
