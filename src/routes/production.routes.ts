@@ -75,6 +75,7 @@ router.get('/online-tests', productionContentController.listOnlineTests);
 router.get('/online-tests/:id', productionContentController.getOnlineTest);
 router.post('/online-tests', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.createOnlineTest);
 router.put('/online-tests/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.updateOnlineTest);
+router.delete('/online-tests/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.deleteOnlineTest);
 router.post('/online-tests/:id/questions', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.addQuestion);
 router.post('/online-tests/:id/questions/bulk', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.bulkUploadQuestions);
 router.delete('/online-tests/:id/questions/:questionId', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.deleteQuestion);
@@ -97,7 +98,6 @@ router.post('/portfolios/:id/reject', requireModule('PRODUCTION_TRAINING', 'EDIT
 // Report recipients (settings) — who gets the daily attendance report / escalation emails.
 // Mutations require EDIT since this controls who receives sensitive student data.
 router.get('/report-recipients', productionReportsController.listRecipients);
-router.post('/report-recipients', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionReportsController.addRecipient);
 router.delete('/report-recipients/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionReportsController.removeRecipient);
 
 export default router;

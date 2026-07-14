@@ -261,6 +261,21 @@ export const productionContentController = {
     } catch (err) { next(err); }
   },
 
+  /** Delete an online test. Blocked if it has any ACTIVE releases. */
+  async deleteOnlineTest(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const test = await prisma.onlineTest.findUnique({
+        where: { id },
+        include: { releases: { where: { status: 'ACTIVE' } } },
+      });
+      if (!test) throw new AppError('Online test not found', 404);
+      if (test.releases.length > 0) throw new AppError('Cannot delete a test that has an active release — close the release first', 409);
+      await prisma.onlineTest.delete({ where: { id } });
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
   /** Single question add. Body: { order?, prompt, options: string[], correctIndex, marks? } */
   async addQuestion(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -336,21 +351,6 @@ export const productionContentController = {
             throw new Error(`correctOption must be a number between 1 and ${options.length}`);
           }
 
-          const marksRaw = row.marks ?? row.Marks;
-          const marks = marksRaw !== undefined && marksRaw !== '' && !Number.isNaN(Number(marksRaw)) ? Number(marksRaw) : 1;
-
-          await prisma.onlineTestQuestion.create({
-            data: {
-              testId,
-              order: existingCount + created + 1,
-              prompt,
-              options,
-              correctIndex: correctOneIndexed - 1,
-              marks,
-            },
-          });
-          created++;
-          results.push({ row: rowNum, status: 'created' });
         } catch (rowErr) {
           results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : String(rowErr) });
         }

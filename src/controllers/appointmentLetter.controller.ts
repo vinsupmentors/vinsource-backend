@@ -1,4 +1,6 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
+import { AuthRequest as Request } from '../types';
+// @ts-ignore – pdfkit has no bundled types; works fine at runtime
 import PDFDocument from 'pdfkit';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
@@ -50,7 +52,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 60, size: 'A4' });
     const chunks: Buffer[] = [];
-    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
@@ -635,7 +637,6 @@ export const appointmentLetterController = {
       if (existing.status !== 'DRAFT') {
         throw new AppError('Only DRAFT letters can be deleted', 400);
       }
-
       await prisma.appointmentLetter.delete({ where: { id: req.params.id } });
       res.json({ success: true, message: 'Deleted' });
     } catch (err) {
