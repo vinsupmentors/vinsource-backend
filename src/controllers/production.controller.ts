@@ -524,22 +524,38 @@ export const productionController = {
           _count: {
             select: {
               attendances: true,
-              testAttempts: true,
-              kraEntries: true,
+              onlineTestAttempts: true,
               placementResults: true,
             },
           },
         },
       });
       if (!student) throw new AppError('Student not found', 404);
-      const { attendances, testAttempts, kraEntries, placementResults } = student._count;
-      if (attendances + testAttempts + kraEntries + placementResults > 0) {
+      const { attendances, onlineTestAttempts, placementResults } = student._count;
+      if (attendances + onlineTestAttempts + placementResults > 0) {
         throw new AppError(
-          'Cannot delete a student who has attendance, test, KRA, or placement records. Set their status to DROPPED instead.',
+          'Cannot delete a student who has attendance, test, or placement records. Set their status to DROPPED instead.',
           409,
         );
       }
-      await prisma.student.delete({ where: { id } });
+      // Student passed safety check — cascade-delete FK-dependent records first,
+      // then delete the student (all inside one transaction).
+      await prisma.$transaction(async (tx) => {
+        await tx.feedbackFormResponse.deleteMany({ where: { studentId: id } });
+        await tx.projectSubmission.deleteMany({ where: { studentId: id } });
+        await tx.courseFeedback.deleteMany({ where: { studentId: id } });
+        await tx.trainerFeedback.deleteMany({ where: { studentId: id } });
+        await tx.moduleFeedback.deleteMany({ where: { studentId: id } });
+        await tx.moduleMark.deleteMany({ where: { studentId: id } });
+        await tx.certificate.deleteMany({ where: { studentId: id } });
+        await tx.referral.deleteMany({ where: { studentId: id } });
+        await tx.softskillAttendance.deleteMany({ where: { studentId: id } });
+        await tx.placementDriveCandidate.deleteMany({ where: { studentId: id } });
+        await tx.placementInterview.deleteMany({ where: { studentId: id } });
+        await tx.studentPortfolio.deleteMany({ where: { studentId: id } });
+        await tx.studentBatchEnrollment.deleteMany({ where: { studentId: id } });
+        await tx.student.delete({ where: { id } });
+      });
       res.json({ success: true });
     } catch (err) { next(err); }
   },

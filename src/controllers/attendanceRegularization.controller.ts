@@ -205,7 +205,7 @@ export const attendanceRegularizationController = {
           userId: emp.user.id,
           type: 'LEAVE_REQUEST',
           title: 'Attendance Request Rejected',
-          message: `Your attendance query for ${new Date(request.date).toDateString()} was rejected`,
+          message: `Your attendance query for ${new Date(request.date).toDateString()}  was rejected`,
         });
       }
 

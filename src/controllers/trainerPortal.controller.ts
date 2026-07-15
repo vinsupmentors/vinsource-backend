@@ -70,12 +70,13 @@ export const trainerPortalController = {
         where: { trainerId: employeeId },
         include: {
           schedule: {
-            include: {
+            select: {
+              id: true,
+              code: true,
+              timing: true,
               course: { select: { id: true, name: true, modules: { orderBy: { order: 'asc' } } } },
               batch: { select: { id: true, code: true, startDate: true, endDate: true, status: true } },
               _count: { select: { enrollments: true } },
-              code: true,
-              timing: true,
             },
           },
         },

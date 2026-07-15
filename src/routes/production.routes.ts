@@ -99,6 +99,7 @@ router.post('/portfolios/:id/reject', requireModule('PRODUCTION_TRAINING', 'EDIT
 // Report recipients (settings) — who gets the daily attendance report / escalation emails.
 // Mutations require EDIT since this controls who receives sensitive student data.
 router.get('/report-recipients', productionReportsController.listRecipients);
+router.post('/report-recipients', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionReportsController.addRecipient);
 router.delete('/report-recipients/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionReportsController.removeRecipient);
 
 export default router;

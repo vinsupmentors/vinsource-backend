@@ -487,7 +487,7 @@ export const leaveController = {
           startDate: { lte: new Date(y, m, 0) },
           endDate: { gte: new Date(y, m - 1, 1) },
         },
-        include: { leaveType: true },
+            include: { leaveType: true },
       });
 
       res.json({ success: true, data: leaves });

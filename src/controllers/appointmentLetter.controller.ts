@@ -16,7 +16,7 @@ function fmtDate(d: Date | string | null | undefined): string {
 }
 
 function fmtSalary(n: number): string {
-  return `₹${n.toLocaleString('en-IN')} per month`;
+  return `Rs. ${n.toLocaleString('en-IN')}/-`;
 }
 
 // ─── PDF generation ─────────────────────────────────────────────────────────
@@ -39,301 +39,224 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
 
   const emp = letter.employee;
   const fullName = `${emp.firstName} ${emp.lastName}`;
+  const firstName = emp.firstName;
   const empCode = emp.employeeCode || '';
   const joiningDate = fmtDate(emp.joiningDate);
   const department = emp.department?.name || '';
   const designation = emp.designation?.name || '';
-  const manager = emp.manager ? `${emp.manager.firstName} ${emp.manager.lastName}` : 'N/A';
+  const manager = emp.manager ? `${emp.manager.firstName} ${emp.manager.lastName}` : 'Pooranam Annamalai';
   const letterDateStr = fmtDate(letter.letterDate);
-  const salaryStr = fmtSalary(letter.salary);
+  const salaryAmt = fmtSalary(letter.salary);
   const workLocation = letter.workLocation;
   const employmentType = letter.employmentType;
 
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 60, size: 'A4' });
+    const doc = new PDFDocument({ margin: 72, size: 'A4' });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
     const pageW = doc.page.width;
-    const marginL = 60;
+    const marginL = 72;
     const contentW = pageW - marginL * 2;
-    const blue = '#1e3a8a';
     const black = '#000000';
-    const gray = '#555555';
+    const fs = 10.5; // base font size
 
-    // ── Header ────────────────────────────────────────────────────────────
-    doc
-      .fontSize(16)
-      .font('Helvetica-Bold')
-      .fillColor(blue)
-      .text('VINSUP SKILL ACADEMY', marginL, 60, { align: 'center', width: contentW });
-
-    doc
-      .fontSize(9)
-      .font('Helvetica')
-      .fillColor(gray)
-      .text(
-        '148 A,B, Gopalaswamy Kovil Street, Ganapathy, Coimbatore - 641006 | +91 88700 60607',
-        marginL,
-        doc.y + 2,
-        { align: 'center', width: contentW },
-      );
-
-    // Divider
-    doc
-      .moveDown(0.4)
-      .moveTo(marginL, doc.y)
-      .lineTo(pageW - marginL, doc.y)
-      .lineWidth(1)
-      .strokeColor(blue)
-      .stroke();
-
-    // Title
-    doc
-      .moveDown(0.6)
-      .fontSize(13)
-      .font('Helvetica-Bold')
-      .fillColor(blue)
-      .text('APPOINTMENT LETTER', marginL, doc.y, { align: 'center', width: contentW });
-
-    doc.moveDown(0.8);
-
-    // Date + Ref
-    doc
-      .fontSize(10)
-      .font('Helvetica')
-      .fillColor(black)
-      .text(`Date: ${letterDateStr}`, marginL);
-
-    doc.moveDown(0.5);
-
-    // Greeting
-    doc
-      .font('Helvetica-Bold')
-      .text(`Dear ${fullName},`, marginL)
-      .moveDown(0.4)
-      .font('Helvetica')
-      .text(
-        'We are pleased to offer you the position in our organisation on the following terms and conditions:',
-        marginL,
-        doc.y,
-        { width: contentW },
-      );
-
-    doc.moveDown(0.8);
-
-    // ── Details table ────────────────────────────────────────────────────
-    const rows: [string, string][] = [
-      ['Employee Name', fullName],
-      ['Employee ID', empCode],
-      ['Date of Joining', joiningDate],
-      ['Work Location', workLocation],
-      ['Department', department],
-      ['Designation', designation],
-      ['Reporting Manager', manager],
-      ['Employment Type', employmentType],
-      ['Monthly Salary (CTC)', salaryStr],
-    ];
-
-    const col1W = 160;
-    const col2W = contentW - col1W;
-    let rowY = doc.y;
-
-    rows.forEach(([label, value], idx) => {
-      const bg = idx % 2 === 0 ? '#f0f4ff' : '#ffffff';
-
-      // Row bg
-      doc.rect(marginL, rowY, contentW, 18).fillColor(bg).fill();
-
-      // Col divider
-      doc
-        .moveTo(marginL + col1W, rowY)
-        .lineTo(marginL + col1W, rowY + 18)
-        .lineWidth(0.5)
-        .strokeColor('#cccccc')
-        .stroke();
-
-      // Text
-      doc
-        .fontSize(9)
-        .font('Helvetica-Bold')
-        .fillColor('#1e3a8a')
-        .text(label, marginL + 4, rowY + 4, { width: col1W - 8 });
-
-      doc
-        .fontSize(9)
-        .font('Helvetica')
-        .fillColor(black)
-        .text(value, marginL + col1W + 6, rowY + 4, { width: col2W - 10 });
-
-      rowY += 18;
-    });
-
-    // Table border
-    doc
-      .rect(marginL, doc.y - rows.length * 18, contentW, rows.length * 18)
-      .lineWidth(0.8)
-      .strokeColor('#aaaaaa')
-      .stroke();
-
-    doc.y = rowY + 8;
-    doc.moveDown(0.6);
-
-    // ── Clauses ──────────────────────────────────────────────────────────
-    const clauses: { title: string; body: string }[] = [
-      {
-        title: '1. Leave Policy',
-        body: 'You will be entitled to leaves as per the company leave policy. The leave policy details will be shared during onboarding.',
-      },
-      {
-        title: '2. Probation Period',
-        body: 'You will be on probation for a period of 3 (three) months from the date of joining. During probation, either party may terminate employment with 7 days\' notice.',
-      },
-      {
-        title: '3. Confidentiality',
-        body: 'You shall keep confidential all proprietary information, business plans, client data, and trade secrets of the company, both during and after your employment.',
-      },
-      {
-        title: '4. Intellectual Property',
-        body: 'All work, inventions, discoveries, and improvements made during your employment shall be the exclusive property of Vinsup Skill Academy.',
-      },
-      {
-        title: '5. Code of Conduct',
-        body: 'You are expected to conduct yourself in a professional and ethical manner consistent with company policies and values.',
-      },
-      {
-        title: '6. Notice Period',
-        body: 'After confirmation, either party may terminate this employment by giving 30 (thirty) days\' written notice or payment of salary in lieu thereof.',
-      },
-      {
-        title: '7. Non-Compete & Non-Solicitation',
-        body: 'During your employment and for a period of 12 months thereafter, you shall not directly or indirectly solicit or engage with any client or employee of the company for competing purposes.',
-      },
-      {
-        title: '8. Company Policies',
-        body: 'This offer is subject to the terms of employment as per the company\'s HR policies. By accepting this letter, you agree to abide by all company policies as updated from time to time.',
-      },
-      {
-        title: '9. Governing Law',
-        body: 'This appointment letter shall be governed by the laws of India, and any disputes shall be subject to the exclusive jurisdiction of courts in Coimbatore.',
-      },
-    ];
-
-    // Check if we need a new page
-    const clauseEstHeight = clauses.length * 42;
-    if (doc.y + clauseEstHeight > doc.page.height - 140) {
-      doc.addPage();
-    }
-
-    doc
-      .fontSize(10)
-      .font('Helvetica-Bold')
-      .fillColor(blue)
-      .text('Terms and Conditions', marginL);
-    doc.moveDown(0.3);
-
-    clauses.forEach((clause) => {
-      // Check for page break per clause
-      if (doc.y > doc.page.height - 120) doc.addPage();
-
-      doc
-        .fontSize(9)
+    // helper: section heading
+    const sectionHead = (text: string) => {
+      if (doc.y > doc.page.height - 160) doc.addPage();
+      doc.moveDown(0.5)
+        .fontSize(fs)
         .font('Helvetica-Bold')
         .fillColor(black)
-        .text(clause.title, marginL, doc.y, { width: contentW });
+        .text(text, marginL, doc.y, { width: contentW });
+      doc.moveDown(0.3);
+    };
 
-      doc
-        .fontSize(9)
-        .font('Helvetica')
-        .fillColor(gray)
-        .text(clause.body, marginL + 10, doc.y + 2, { width: contentW - 10 });
+    // helper: indented paragraph
+    const para = (text: string, indent = 20) => {
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text(text, marginL + indent, doc.y, { width: contentW - indent, align: 'justify' });
+      doc.moveDown(0.3);
+    };
 
-      doc.moveDown(0.5);
-    });
+    // helper: bullet line — label bold, rest normal
+    const bullet = (label: string, rest: string, indent = 20) => {
+      const bx = marginL + indent;
+      const bw = contentW - indent;
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text('● ', bx, doc.y, { continued: true, width: bw });
+      doc.font('Helvetica-Bold').text(label, { continued: rest.length > 0 });
+      if (rest.length > 0) doc.font('Helvetica').text(rest, { width: bw });
+      doc.moveDown(0.3);
+    };
 
-    // Custom clauses if any
-    if (letter.customClauses) {
-      doc
-        .fontSize(9)
-        .font('Helvetica')
-        .fillColor(gray)
-        .text(letter.customClauses, marginL, doc.y, { width: contentW });
-      doc.moveDown(0.4);
-    }
+    // helper: lettered sub-item
+    const subItem = (ltr: string, txt: string, indent = 50) => {
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text(`${ltr})  ${txt}`, marginL + indent, doc.y, { width: contentW - indent });
+      doc.moveDown(0.25);
+    };
 
-    // ── Acceptance ───────────────────────────────────────────────────────
-    if (doc.y > doc.page.height - 140) doc.addPage();
+    // ── Header: logo area (top-right text block) ──────────────────────────
+    doc.fontSize(11).font('Helvetica-Bold').fillColor('#c00000')
+      .text('VINSUP', pageW - 160, 50, { width: 100 });
+    doc.fontSize(7).font('Helvetica-Bold').fillColor('#1e3a8a')
+      .text('SKILL  ACADEMY', pageW - 160, doc.y, { width: 100 });
+    doc.fontSize(6.5).font('Helvetica').fillColor('#c00000')
+      .text('Building Future — Ready Professionals', pageW - 165, doc.y, { width: 110 });
 
-    doc.moveDown(0.4);
-    doc
-      .fontSize(9)
-      .font('Helvetica')
-      .fillColor(black)
-      .text(
-        'Please sign and return a copy of this letter as a token of your acceptance of the terms and conditions mentioned herein.',
-        marginL,
-        doc.y,
-        { width: contentW },
-      );
+    // ── Title ─────────────────────────────────────────────────────────────
+    doc.fontSize(13).font('Helvetica-Bold').fillColor(black)
+      .text('Appointment Letter', marginL, 60, { align: 'center', width: contentW });
 
     doc.moveDown(1.2);
 
-    // Signature block
-    const sigY = doc.y;
-    const colW = contentW / 2;
+    // ── Date / Name / Employee ID ─────────────────────────────────────────
+    doc.fontSize(fs).font('Helvetica-Bold').fillColor(black)
+      .text(`Date: ${letterDateStr}`, marginL);
+    doc.moveDown(0.3);
+    doc.font('Helvetica-Bold').text(`Name: ${fullName}`, marginL);
+    doc.moveDown(0.3);
+    doc.font('Helvetica-Bold').text(`Employee ID: ${empCode}`, marginL);
+    doc.moveDown(0.6);
 
-    doc
-      .fontSize(9)
-      .font('Helvetica-Bold')
-      .fillColor(black)
-      .text('For Vinsup Skill Academy', marginL, sigY);
-    doc.moveDown(1.8);
-    doc
-      .moveTo(marginL, doc.y)
-      .lineTo(marginL + 140, doc.y)
-      .lineWidth(0.8)
-      .strokeColor(black)
-      .stroke();
-    doc.moveDown(0.2);
-    doc
-      .fontSize(9)
-      .font('Helvetica-Bold')
-      .fillColor(black)
-      .text('Pooranam Annamalai', marginL);
-    doc
-      .fontSize(8)
-      .font('Helvetica')
-      .fillColor(gray)
-      .text('Chief Business and People Officer (CBPO)', marginL);
+    // ── Salutation ────────────────────────────────────────────────────────
+    doc.font('Helvetica-Bold').text(`Dear ${firstName},`, marginL);
+    doc.moveDown(0.5);
 
-    // Employee acceptance
-    const empSigX = marginL + colW;
-    doc
-      .fontSize(9)
-      .font('Helvetica-Bold')
-      .fillColor(black)
-      .text('Employee Acceptance', empSigX, sigY);
-    doc.y = sigY;
-    doc.moveDown(1.8);
-    doc
-      .moveTo(empSigX, doc.y)
-      .lineTo(empSigX + 140, doc.y)
-      .lineWidth(0.8)
-      .strokeColor(black)
-      .stroke();
+    // Opening paragraph
+    doc.fontSize(fs).font('Helvetica').fillColor(black)
+      .text(
+        'With reference to your application and discussions you had with us, we are pleased to offer you an appointment in our company, on the following Terms and Conditions:',
+        marginL, doc.y, { width: contentW, align: 'justify' },
+      );
+    doc.moveDown(0.6);
+
+    // ── 1. Date of Joining & Work Location ───────────────────────────────
+    sectionHead('1. Date of Joining & Work Location:');
+    doc.fontSize(fs).font('Helvetica').fillColor(black)
+      .text('Your appointment becomes effective from ', marginL + 20, doc.y, { continued: true, width: contentW - 20 });
+    doc.font('Helvetica-Bold').text(joiningDate, { continued: true });
+    doc.font('Helvetica').text(' and your work location would be ', { continued: true });
+    doc.font('Helvetica-Bold').text(workLocation + '.', { continued: false });
+    doc.moveDown(0.3);
+    para('The company reserves the right to transfer you to any location, as the company may deem fit, from time to time.');
+
+    // ── 2. Department, Designation & Reporting Manager ────────────────────
+    sectionHead('2. Department, Designation & Reporting Manager:');
+    const indent2 = 30;
+    const labelW = 140;
+
+    const detailRow = (label: string, value: string) => {
+      const rowY = doc.y;
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text(label + ': ', marginL + indent2, rowY, { continued: true, width: labelW });
+      doc.font('Helvetica-Bold').text(value);
+      doc.moveDown(0.3);
+    };
+
+    detailRow('Department', department);
+    detailRow('Designation', designation);
+    detailRow('Reporting Manager', manager);
+    detailRow('Employment Type', employmentType);
+
+    // ── 3. Cost to the Company ────────────────────────────────────────────
+    sectionHead('3. Cost to the Company:');
+    doc.fontSize(fs).font('Helvetica').fillColor(black)
+      .text('● ', marginL + 20, doc.y, { continued: true, width: contentW - 20 });
+    doc.text('Your monthly compensation including performance pay and benefits is ', { continued: true });
+    doc.font('Helvetica-Bold').text(salaryAmt + '.', { continued: true });
+    doc.font('Helvetica').text(' Your salary will be revised yearly based on your satisfactory performance in the company determined at the sole discretion of the company.');
+    doc.moveDown(0.35);
+
+    para(
+      'The company shall be determined to deduct the remuneration payable to you post the probation period, the following statutory and compulsory deductions:',
+      0,
+    );
+    subItem('a', 'Provident Fund');
+    subItem('b', 'Income tax deducted at source at the rates applicable');
+    subItem('c', 'Professional Tax');
+
+    // ── 4. Work Schedule ──────────────────────────────────────────────────
+    sectionHead('4. Work Schedule:');
+    bullet('Working Hours : ', '9:00 AM to 6:00 PM, Monday to Saturday');
+    bullet('Weekly Off: ', 'Sunday');
     doc.moveDown(0.2);
-    doc
-      .fontSize(9)
-      .font('Helvetica-Bold')
-      .fillColor(black)
-      .text(fullName, empSigX);
-    doc
-      .fontSize(8)
-      .font('Helvetica')
-      .fillColor(gray)
-      .text(`Employee ID: ${empCode}`, empSigX);
+
+    // Note
+    doc.fontSize(fs).font('Helvetica-Bold').fillColor(black)
+      .text('Note: ', marginL, doc.y, { continued: true, width: contentW });
+    doc.font('Helvetica').text('The ', { continued: true });
+    doc.font('Helvetica-Bold').text('weekly off', { continued: true });
+    doc.font('Helvetica').text(' will be assigned on a ', { continued: true });
+    doc.font('Helvetica-Bold').text('rotational basis', { continued: true });
+    doc.font('Helvetica').text(' based on business requirements. The specific day may ', { continued: true });
+    doc.font('Helvetica-Bold').text('vary by department', { continued: true });
+    doc.font('Helvetica').text('. We appreciate your flexibility and cooperation.');
+    doc.moveDown(0.35);
+
+    // ── 5. Leave Policy ───────────────────────────────────────────────────
+    sectionHead('5. Leave Policy:');
+    bullet('Casual Leave: ', 'You are entitled to 1 day per month prior approval from the Reporting Manager. The unused leaves can be carried forward within the same financial year.');
+    bullet('Public Holidays: ', 'The company observes 10 public holidays per year as per the company calendar.');
+
+    // ── 6. Notice and Probation Period ────────────────────────────────────
+    if (doc.y > doc.page.height - 180) doc.addPage();
+    sectionHead('6. Notice and Probation Period:');
+    doc.fontSize(fs).font('Helvetica').fillColor(black)
+      .text('● ', marginL + 20, doc.y, { continued: true, width: contentW - 20 });
+    doc.text('You will be on a probation period of ', { continued: true });
+    doc.font('Helvetica-Bold').text('3 months', { continued: true });
+    doc.font('Helvetica').text(' from the date of joining. Based on satisfactory performance, you will be confirmed as a permanent employee. After confirmation, the notice period will be ', { continued: true });
+    doc.font('Helvetica-Bold').text('60 days', { continued: true });
+    doc.font('Helvetica').text(' from either side.');
+    doc.moveDown(0.35);
+    bullet('', 'During the probation period, no leaves are entertained other than your weekly-off and company declared holidays.');
+
+    // ── 7. Confidential Information ───────────────────────────────────────
+    sectionHead('7. Confidential Information:');
+    bullet('', "As an employee, you may come into possession of confidential information to the Company and agree to keep confidential, the Company's proprietary and confidential information obtained at any time during the period of your employment in the Company. Confidential information includes, and is not limited to; course material, videos, financial documents and other relevant documents. You shall not disclose such Confidential Information to any person. You shall not make any copies of the Confidential Information.");
+
+    // ── 8. Code of Conduct ────────────────────────────────────────────────
+    if (doc.y > doc.page.height - 200) doc.addPage();
+    sectionHead('8. Code of Conduct:');
+    bullet('', "You are expected to adhere to the company's Code of Conduct and uphold professional behavior at all times. Any breach of policy or misconduct may lead to disciplinary action, including termination.");
+
+    // ── 9. Retirement ─────────────────────────────────────────────────────
+    sectionHead('9. Retirement:');
+    bullet('', 'The age of Superannuating of an employee from Company Service is 60 years. You shall however, during your employment be required to be medically fit for the work for which you have been employed. As to whether an employee is medically fit, is an issue that will be professionally determined by the Company and the employee shall be bound by such determination. You will accordingly undergo periodic medical examination as and when intimated to you by the Company. The Company shall have the right to terminate your services immediately, in the event you are found to be medically unfit to perform your duties and responsibilities.');
+
+    // Custom clauses if any
+    if (letter.customClauses) {
+      doc.moveDown(0.3);
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text(letter.customClauses, marginL, doc.y, { width: contentW });
+    }
+
+    // ── Closing ───────────────────────────────────────────────────────────
+    if (doc.y > doc.page.height - 180) doc.addPage();
+    doc.moveDown(0.6);
+    doc.fontSize(fs).font('Helvetica').fillColor(black)
+      .text(
+        'We are excited to welcome you onboard and are confident that your association with the Company will offer you valuable challenges, professional satisfaction, and growth opportunities.',
+        marginL, doc.y, { width: contentW, align: 'justify' },
+      );
+
+    // ── Signature ─────────────────────────────────────────────────────────
+    doc.moveDown(1.2);
+    doc.fontSize(fs).font('Helvetica-Bold').fillColor(black).text('Sincerely,', marginL);
+    doc.moveDown(0.8);
+    doc.font('Helvetica-Bold').text('Pooranam Annamalai', marginL);
+    doc.moveDown(0.2);
+    doc.font('Helvetica-Bold').text('Chief Business & Production Officer', marginL);
+    doc.moveDown(0.2);
+    doc.font('Helvetica-Bold').text('Vinsup Skill Academy', marginL);
+    doc.moveDown(0.2);
+    doc.font('Helvetica-Bold').text('148 A,B, Gopalaswamy Kovil Street, Ganapathy, Coimbatore - 641006.', marginL);
+    doc.moveDown(0.2);
+    doc.font('Helvetica-Bold').text('+91 88700 60607', marginL);
 
     doc.end();
   });
@@ -440,7 +363,7 @@ export const appointmentLetterController = {
           ...(employmentType && { employmentType }),
           ...(workLocation && { workLocation }),
           ...(customClauses !== undefined && { customClauses }),
-          status: 'DRAFT', // reset to DRAFT if it was REJECTED
+          status: 'DRAFT',
         },
         include: {
           employee: { include: { department: true, designation: true } },
@@ -472,7 +395,7 @@ export const appointmentLetterController = {
         data: { status: 'PENDING_APPROVAL' },
       });
 
-      // Notify Pooranam — find her user account by name match via employee record
+      // Notify Pooranam
       try {
         const approver = await prisma.employee.findFirst({
           where: {

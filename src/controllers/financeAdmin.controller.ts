@@ -701,7 +701,7 @@ export const financeAdminController = {
       if (!emp) return res.json({ success: true, data: null });
 
       const [allocs, spent] = await Promise.all([
-        prisma.budgetAllocation.findMany({
+            prisma.budgetAllocation.findMany({
           where: { employeeId: emp.id },
           orderBy: { allocatedDate: 'desc' },
           select: { id: true, amount: true, notes: true, allocatedDate: true },
@@ -717,13 +717,12 @@ export const financeAdminController = {
       res.json({
         success: true,
         data: allocs.length === 0
-          ? null // no budget allotted yet — UI hides the strip
+          ? null
           : { allocated, spent: spentAmt, balance: allocated - spentAmt, allocations: allocs },
       });
     } catch (err) { next(err); }
   },
 
-  // SUPER_ADMIN: allot budget
   async createBudget(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { employeeId, amount, notes, allocatedDate } = req.body;
@@ -744,7 +743,6 @@ export const financeAdminController = {
     } catch (err) { next(err); }
   },
 
-  // SUPER_ADMIN: edit an allocation entry
   async updateBudget(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { amount, notes, allocatedDate } = req.body;
@@ -754,7 +752,7 @@ export const financeAdminController = {
         where: { id: req.params.id },
         data: {
           amount: amount !== undefined ? Number(amount) : undefined,
-                 notes: notes !== undefined ? (notes || null) : undefined,
+          notes: notes !== undefined ? (notes || null) : undefined,
           allocatedDate: allocatedDate ? new Date(allocatedDate) : undefined,
         },
         include: { employee: { select: employeeSelect } },
@@ -763,10 +761,14 @@ export const financeAdminController = {
     } catch (err) { next(err); }
   },
 
-  // SUPER_ADMIN: remove an allocation entry
   async removeBudget(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await prisma.budgetAllocation.delete({ where: { id: req.params.id } });
+      res.json({ success: true, message: 'Budget allocation deleted' });
+    } catch (err) { next(err); }
+  },
+};
+dgetAllocation.delete({ where: { id: req.params.id } });
       res.json({ success: true, message: 'Budget allocation deleted' });
     } catch (err) { next(err); }
   },
