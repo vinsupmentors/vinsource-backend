@@ -73,19 +73,19 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     // helper: section heading
     const sectionHead = (text: string) => {
       if (doc.y > doc.page.height - 160) doc.addPage();
-      doc.moveDown(0.65)
+      doc.moveDown(1.0)
         .fontSize(fs)
         .font('Helvetica-Bold')
         .fillColor(black)
         .text(text, marginL, doc.y, { width: contentW });
-      doc.moveDown(0.45);
+      doc.moveDown(0.55);
     };
 
     // helper: indented paragraph
     const para = (text: string, indent = 20) => {
       doc.fontSize(fs).font('Helvetica').fillColor(black)
         .text(text, marginL + indent, doc.y, { width: contentW - indent, align: 'justify' });
-      doc.moveDown(0.45);
+      doc.moveDown(0.55);
     };
 
     // helper: bullet — dot + bold label + normal rest
@@ -102,14 +102,14 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
         doc.fontSize(fs).font('Helvetica').fillColor(black)
           .text(rest, bx + 10, startY, { width: bw - 10, align: 'justify' });
       }
-      doc.moveDown(0.45);
+      doc.moveDown(0.55);
     };
 
     // helper: lettered sub-item
     const subItem = (ltr: string, txt: string, indent = 50) => {
       doc.fontSize(fs).font('Helvetica').fillColor(black)
         .text(`${ltr})  ${txt}`, marginL + indent, doc.y, { width: contentW - indent });
-      doc.moveDown(0.35);
+      doc.moveDown(0.45);
     };
 
     // ── Logo (top-right) ──────────────────────────────────────────────────
@@ -189,7 +189,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
         .text('Your monthly compensation including performance pay and benefits is ', marginL + 30, startY, { continued: true, width: contentW - 30 });
       doc.font('Helvetica-Bold').text(salaryAmt + '.', { continued: true });
       doc.font('Helvetica').text(' Your salary will be revised yearly based on your satisfactory performance in the company determined at the sole discretion of the company.');
-      doc.moveDown(0.45);
+      doc.moveDown(0.55);
     }
 
     para(
@@ -216,7 +216,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     doc.font('Helvetica').text(' based on business requirements. The specific day may ', { continued: true });
     doc.font('Helvetica-Bold').text('vary by department', { continued: true });
     doc.font('Helvetica').text('. We appreciate your flexibility and cooperation.');
-    doc.moveDown(0.45);
+    doc.moveDown(0.6);
 
     // ── 5. Leave Policy ───────────────────────────────────────────────────
     sectionHead('5. Leave Policy:');
@@ -235,7 +235,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
       doc.font('Helvetica').text(' from the date of joining. Based on satisfactory performance, you will be confirmed as a permanent employee. After confirmation, the notice period will be ', { continued: true });
       doc.font('Helvetica-Bold').text('60 days', { continued: true });
       doc.font('Helvetica').text(' from either side.');
-      doc.moveDown(0.45);
+      doc.moveDown(0.55);
     }
     bullet('', 'During the probation period, no leaves are entertained other than your weekly-off and company declared holidays.');
 
