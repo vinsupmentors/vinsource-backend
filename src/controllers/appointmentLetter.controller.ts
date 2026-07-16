@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest as Request } from '../types';
 // @ts-ignore – pdfkit has no bundled types; works fine at runtime
 import PDFDocument from 'pdfkit';
+import path from 'path';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { emailService } from '../services/email.service';
@@ -63,68 +64,86 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     const black = '#000000';
     const fs = 10.5; // base font size
 
+    // ── draw a filled circle bullet (avoids font-encoding issues with ● character) ──
+    const drawDot = (x: number, y: number) => {
+      doc.circle(x + 3, y + fs * 0.52, 2.5).fillColor(black).fill();
+      doc.fillColor(black);
+    };
+
     // helper: section heading
     const sectionHead = (text: string) => {
       if (doc.y > doc.page.height - 160) doc.addPage();
-      doc.moveDown(0.5)
+      doc.moveDown(0.65)
         .fontSize(fs)
         .font('Helvetica-Bold')
         .fillColor(black)
         .text(text, marginL, doc.y, { width: contentW });
-      doc.moveDown(0.3);
+      doc.moveDown(0.45);
     };
 
     // helper: indented paragraph
     const para = (text: string, indent = 20) => {
       doc.fontSize(fs).font('Helvetica').fillColor(black)
         .text(text, marginL + indent, doc.y, { width: contentW - indent, align: 'justify' });
-      doc.moveDown(0.3);
+      doc.moveDown(0.45);
     };
 
-    // helper: bullet line — label bold, rest normal
+    // helper: bullet — dot + bold label + normal rest
     const bullet = (label: string, rest: string, indent = 20) => {
       const bx = marginL + indent;
       const bw = contentW - indent;
-      doc.fontSize(fs).font('Helvetica').fillColor(black)
-        .text('● ', bx, doc.y, { continued: true, width: bw });
-      doc.font('Helvetica-Bold').text(label, { continued: rest.length > 0 });
-      if (rest.length > 0) doc.font('Helvetica').text(rest, { width: bw });
-      doc.moveDown(0.3);
+      const startY = doc.y;
+      drawDot(bx, startY);
+      if (label.length > 0) {
+        doc.fontSize(fs).font('Helvetica-Bold').fillColor(black)
+          .text(label, bx + 10, startY, { continued: rest.length > 0, width: bw - 10 });
+        if (rest.length > 0) doc.font('Helvetica').text(rest, { width: bw - 10 });
+      } else {
+        doc.fontSize(fs).font('Helvetica').fillColor(black)
+          .text(rest, bx + 10, startY, { width: bw - 10, align: 'justify' });
+      }
+      doc.moveDown(0.45);
     };
 
     // helper: lettered sub-item
     const subItem = (ltr: string, txt: string, indent = 50) => {
       doc.fontSize(fs).font('Helvetica').fillColor(black)
         .text(`${ltr})  ${txt}`, marginL + indent, doc.y, { width: contentW - indent });
-      doc.moveDown(0.25);
+      doc.moveDown(0.35);
     };
 
-    // ── Header: logo area (top-right text block) ──────────────────────────
-    doc.fontSize(11).font('Helvetica-Bold').fillColor('#c00000')
-      .text('VINSUP', pageW - 160, 50, { width: 100 });
-    doc.fontSize(7).font('Helvetica-Bold').fillColor('#1e3a8a')
-      .text('SKILL  ACADEMY', pageW - 160, doc.y, { width: 100 });
-    doc.fontSize(6.5).font('Helvetica').fillColor('#c00000')
-      .text('Building Future — Ready Professionals', pageW - 165, doc.y, { width: 110 });
+    // ── Logo (top-right) ──────────────────────────────────────────────────
+    const logoPath = path.join(process.cwd(), 'assets', 'vinsup-logo.png');
+    try {
+      doc.image(logoPath, pageW - 155, 30, { width: 110 });
+    } catch (_) {
+      // fallback text if logo file missing
+      doc.fontSize(11).font('Helvetica-Bold').fillColor('#c00000')
+        .text('VINSUP', pageW - 160, 40, { width: 110 });
+      doc.fontSize(7).font('Helvetica-Bold').fillColor('#1e3a8a')
+        .text('SKILL  ACADEMY', pageW - 160, doc.y, { width: 110 });
+      doc.fontSize(6.5).font('Helvetica').fillColor('#c00000')
+        .text('Building Future — Ready Professionals', pageW - 165, doc.y, { width: 115 });
+    }
 
     // ── Title ─────────────────────────────────────────────────────────────
     doc.fontSize(13).font('Helvetica-Bold').fillColor(black)
-      .text('Appointment Letter', marginL, 60, { align: 'center', width: contentW });
+      .text('Appointment Letter', marginL, 62, { align: 'center', width: contentW });
 
-    doc.moveDown(1.2);
+    doc.moveDown(1.4);
 
     // ── Date / Name / Employee ID ─────────────────────────────────────────
     doc.fontSize(fs).font('Helvetica-Bold').fillColor(black)
       .text(`Date: ${letterDateStr}`, marginL);
-    doc.moveDown(0.3);
+    doc.moveDown(0.4);
     doc.font('Helvetica-Bold').text(`Name: ${fullName}`, marginL);
-    doc.moveDown(0.3);
+    doc.moveDown(0.4);
     doc.font('Helvetica-Bold').text(`Employee ID: ${empCode}`, marginL);
-    doc.moveDown(0.6);
+    doc.moveDown(0.8);
 
     // ── Salutation ────────────────────────────────────────────────────────
     doc.font('Helvetica-Bold').text(`Dear ${firstName},`, marginL);
-    doc.moveDown(0.5);
+    doc.moveDown(0.6);
 
     // Opening paragraph
     doc.fontSize(fs).font('Helvetica').fillColor(black)
@@ -132,7 +151,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
         'With reference to your application and discussions you had with us, we are pleased to offer you an appointment in our company, on the following Terms and Conditions:',
         marginL, doc.y, { width: contentW, align: 'justify' },
       );
-    doc.moveDown(0.6);
+    doc.moveDown(0.7);
 
     // ── 1. Date of Joining & Work Location ───────────────────────────────
     sectionHead('1. Date of Joining & Work Location:');
@@ -141,20 +160,19 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     doc.font('Helvetica-Bold').text(joiningDate, { continued: true });
     doc.font('Helvetica').text(' and your work location would be ', { continued: true });
     doc.font('Helvetica-Bold').text(workLocation + '.', { continued: false });
-    doc.moveDown(0.3);
+    doc.moveDown(0.45);
     para('The company reserves the right to transfer you to any location, as the company may deem fit, from time to time.');
 
     // ── 2. Department, Designation & Reporting Manager ────────────────────
     sectionHead('2. Department, Designation & Reporting Manager:');
     const indent2 = 30;
-    const labelW = 140;
 
     const detailRow = (label: string, value: string) => {
-      const rowY = doc.y;
+      // Print "Label: " in normal weight then value in bold on the same line
       doc.fontSize(fs).font('Helvetica').fillColor(black)
-        .text(label + ': ', marginL + indent2, rowY, { continued: true, width: labelW });
-      doc.font('Helvetica-Bold').text(value);
-      doc.moveDown(0.3);
+        .text(`${label}: `, marginL + indent2, doc.y, { continued: true, width: contentW - indent2 });
+      doc.font('Helvetica-Bold').text(value, { width: contentW - indent2 });
+      doc.moveDown(0.4);
     };
 
     detailRow('Department', department);
@@ -164,12 +182,15 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
 
     // ── 3. Cost to the Company ────────────────────────────────────────────
     sectionHead('3. Cost to the Company:');
-    doc.fontSize(fs).font('Helvetica').fillColor(black)
-      .text('● ', marginL + 20, doc.y, { continued: true, width: contentW - 20 });
-    doc.text('Your monthly compensation including performance pay and benefits is ', { continued: true });
-    doc.font('Helvetica-Bold').text(salaryAmt + '.', { continued: true });
-    doc.font('Helvetica').text(' Your salary will be revised yearly based on your satisfactory performance in the company determined at the sole discretion of the company.');
-    doc.moveDown(0.35);
+    {
+      const startY = doc.y;
+      drawDot(marginL + 20, startY);
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text('Your monthly compensation including performance pay and benefits is ', marginL + 30, startY, { continued: true, width: contentW - 30 });
+      doc.font('Helvetica-Bold').text(salaryAmt + '.', { continued: true });
+      doc.font('Helvetica').text(' Your salary will be revised yearly based on your satisfactory performance in the company determined at the sole discretion of the company.');
+      doc.moveDown(0.45);
+    }
 
     para(
       'The company shall be determined to deduct the remuneration payable to you post the probation period, the following statutory and compulsory deductions:',
@@ -183,7 +204,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     sectionHead('4. Work Schedule:');
     bullet('Working Hours : ', '9:00 AM to 6:00 PM, Monday to Saturday');
     bullet('Weekly Off: ', 'Sunday');
-    doc.moveDown(0.2);
+    doc.moveDown(0.25);
 
     // Note
     doc.fontSize(fs).font('Helvetica-Bold').fillColor(black)
@@ -195,7 +216,7 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     doc.font('Helvetica').text(' based on business requirements. The specific day may ', { continued: true });
     doc.font('Helvetica-Bold').text('vary by department', { continued: true });
     doc.font('Helvetica').text('. We appreciate your flexibility and cooperation.');
-    doc.moveDown(0.35);
+    doc.moveDown(0.45);
 
     // ── 5. Leave Policy ───────────────────────────────────────────────────
     sectionHead('5. Leave Policy:');
@@ -205,14 +226,17 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
     // ── 6. Notice and Probation Period ────────────────────────────────────
     if (doc.y > doc.page.height - 180) doc.addPage();
     sectionHead('6. Notice and Probation Period:');
-    doc.fontSize(fs).font('Helvetica').fillColor(black)
-      .text('● ', marginL + 20, doc.y, { continued: true, width: contentW - 20 });
-    doc.text('You will be on a probation period of ', { continued: true });
-    doc.font('Helvetica-Bold').text('3 months', { continued: true });
-    doc.font('Helvetica').text(' from the date of joining. Based on satisfactory performance, you will be confirmed as a permanent employee. After confirmation, the notice period will be ', { continued: true });
-    doc.font('Helvetica-Bold').text('60 days', { continued: true });
-    doc.font('Helvetica').text(' from either side.');
-    doc.moveDown(0.35);
+    {
+      const startY = doc.y;
+      drawDot(marginL + 20, startY);
+      doc.fontSize(fs).font('Helvetica').fillColor(black)
+        .text('You will be on a probation period of ', marginL + 30, startY, { continued: true, width: contentW - 30 });
+      doc.font('Helvetica-Bold').text('3 months', { continued: true });
+      doc.font('Helvetica').text(' from the date of joining. Based on satisfactory performance, you will be confirmed as a permanent employee. After confirmation, the notice period will be ', { continued: true });
+      doc.font('Helvetica-Bold').text('60 days', { continued: true });
+      doc.font('Helvetica').text(' from either side.');
+      doc.moveDown(0.45);
+    }
     bullet('', 'During the probation period, no leaves are entertained other than your weekly-off and company declared holidays.');
 
     // ── 7. Confidential Information ───────────────────────────────────────
@@ -230,14 +254,14 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
 
     // Custom clauses if any
     if (letter.customClauses) {
-      doc.moveDown(0.3);
+      doc.moveDown(0.4);
       doc.fontSize(fs).font('Helvetica').fillColor(black)
         .text(letter.customClauses, marginL, doc.y, { width: contentW });
     }
 
     // ── Closing ───────────────────────────────────────────────────────────
     if (doc.y > doc.page.height - 180) doc.addPage();
-    doc.moveDown(0.6);
+    doc.moveDown(0.8);
     doc.fontSize(fs).font('Helvetica').fillColor(black)
       .text(
         'We are excited to welcome you onboard and are confident that your association with the Company will offer you valuable challenges, professional satisfaction, and growth opportunities.',
@@ -245,17 +269,17 @@ async function generateAppointmentLetterPDF(letterId: string): Promise<Buffer> {
       );
 
     // ── Signature ─────────────────────────────────────────────────────────
-    doc.moveDown(1.2);
+    doc.moveDown(1.5);
     doc.fontSize(fs).font('Helvetica-Bold').fillColor(black).text('Sincerely,', marginL);
-    doc.moveDown(0.8);
+    doc.moveDown(1.0);
     doc.font('Helvetica-Bold').text('Pooranam Annamalai', marginL);
-    doc.moveDown(0.2);
+    doc.moveDown(0.25);
     doc.font('Helvetica-Bold').text('Chief Business & Production Officer', marginL);
-    doc.moveDown(0.2);
+    doc.moveDown(0.25);
     doc.font('Helvetica-Bold').text('Vinsup Skill Academy', marginL);
-    doc.moveDown(0.2);
+    doc.moveDown(0.25);
     doc.font('Helvetica-Bold').text('148 A,B, Gopalaswamy Kovil Street, Ganapathy, Coimbatore - 641006.', marginL);
-    doc.moveDown(0.2);
+    doc.moveDown(0.25);
     doc.font('Helvetica-Bold').text('+91 88700 60607', marginL);
 
     doc.end();
