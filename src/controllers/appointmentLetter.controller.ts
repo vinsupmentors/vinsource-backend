@@ -576,12 +576,13 @@ export const appointmentLetterController = {
     }
   },
 
-  // DELETE /api/appointment-letters/:id  — delete DRAFT only
+  // DELETE /api/appointment-letters/:id  — SUPER_ADMIN can delete any; others only DRAFT
   async remove(req: Request, res: Response, next: NextFunction) {
     try {
       const existing = await prisma.appointmentLetter.findUnique({ where: { id: req.params.id } });
       if (!existing) throw new AppError('Letter not found', 404);
-      if (existing.status !== 'DRAFT') {
+      const isSuperAdmin = req.user?.role === 'SUPER_ADMIN';
+      if (!isSuperAdmin && existing.status !== 'DRAFT') {
         throw new AppError('Only DRAFT letters can be deleted', 400);
       }
       await prisma.appointmentLetter.delete({ where: { id: req.params.id } });
