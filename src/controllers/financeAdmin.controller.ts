@@ -768,8 +768,3 @@ export const financeAdminController = {
     } catch (err) { next(err); }
   },
 };
-dgetAllocation.delete({ where: { id: req.params.id } });
-      res.json({ success: true, message: 'Budget allocation deleted' });
-    } catch (err) { next(err); }
-  },
-};
