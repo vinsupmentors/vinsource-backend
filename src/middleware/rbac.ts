@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import { Role, ModuleName, AccessLevel } from '@prisma/client';
 import { AuthRequest } from '../types';
 import { getEffectiveAccess } from '../utils/moduleAccess';
+import prisma from '../config/database';
 
 const ROLE_HIERARCHY: Record<Role, number> = {
   SUPER_ADMIN: 5,
@@ -58,17 +59,42 @@ export const requireMasterControl = (req: AuthRequest, res: Response, next: Next
 /**
  * Student-portal gate — STUDENT role sits outside the employee role
  * hierarchy / module-access system entirely, so it gets its own simple check.
+ *
+ * Falls back to a DB lookup when studentId is missing from the JWT (this
+ * happens when the JWT was issued before the student profile was linked to the
+ * user account — e.g. an existing session before admin created the student
+ * record). The looked-up studentId is attached to req.user so downstream
+ * handlers (getStudentId) don't need to change.
  */
-export const requireStudent = (req: AuthRequest, res: Response, next: NextFunction): void => {
+export const requireStudent = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   if (!req.user) {
     res.status(401).json({ success: false, message: 'Unauthorized' });
     return;
   }
-  if (req.user.role !== 'STUDENT' || !req.user.studentId) {
+  if (req.user.role !== 'STUDENT') {
     res.status(403).json({ success: false, message: 'Student access only' });
     return;
   }
-  next();
+  // Happy path: studentId already in JWT
+  if (req.user.studentId) {
+    next();
+    return;
+  }
+  // Stale token: look up the student record by userId and patch it in
+  try {
+    const student = await prisma.student.findUnique({
+      where: { userId: req.user.userId },
+      select: { id: true },
+    });
+    if (!student) {
+      res.status(403).json({ success: false, message: 'Student access only' });
+      return;
+    }
+    req.user.studentId = student.id;
+    next();
+  } catch (err) {
+    next(err);
+  }
 };
 
 const LEVEL_RANK: Record<AccessLevel, number> = { NONE: 0, VIEW: 1, EDIT: 2, ADMIN: 3 };
