@@ -26,9 +26,11 @@ export const errorHandler = (
     return;
   }
 
-  // Multer file size limit exceeded
+  // Multer file size limit exceeded (limit varies by upload type - student
+  // photos are capped at 5 MB, documents at 10-40 MB - so don't hardcode a
+  // number here that may be wrong for the route that actually rejected it).
   if ((err as any).code === 'LIMIT_FILE_SIZE') {
-    res.status(413).json({ success: false, message: 'File too large. Maximum size is 10 MB.' });
+    res.status(413).json({ success: false, message: 'File too large for this upload. Please choose a smaller file.' });
     return;
   }
 

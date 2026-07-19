@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { Request } from 'express';
 import { isCloudStorageEnabled } from '../services/storage.service';
+import { AppError } from './errorHandler';
 
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads', 'documents');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -20,7 +21,7 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
   const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.xls', '.xlsx', '.csv'];
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowed.includes(ext)) cb(null, true);
-  else cb(new Error('Only PDF, images, Word, and Excel documents are allowed'));
+  else cb(new AppError('Only PDF, images, Word, and Excel documents are allowed', 400));
 };
 
 // Use memoryStorage when R2 is configured (buffer needed for cloud upload),
@@ -89,7 +90,7 @@ const photoFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFi
   const allowed = ['.jpg', '.jpeg', '.png', '.webp'];
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowed.includes(ext)) cb(null, true);
-  else cb(new Error('Only JPG, PNG, or WebP images are allowed'));
+  else cb(new AppError('Only JPG, PNG, or WebP images are allowed', 400));
 };
 
 export const uploadProfilePhoto = multer({
@@ -115,7 +116,7 @@ const materialFilter = (_req: Request, file: Express.Multer.File, cb: multer.Fil
   const allowed = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.md', '.jpg', '.jpeg', '.png', '.webp', '.zip'];
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowed.includes(ext)) cb(null, true);
-  else cb(new Error('Allowed: PDF, Word, PowerPoint, Excel, text, images, or ZIP'));
+  else cb(new AppError('Allowed: PDF, Word, PowerPoint, Excel, text, images, or ZIP', 400));
 };
 
 export const uploadCourseMaterial = multer({
@@ -158,7 +159,7 @@ const imageOnlyFilter = (_req: Request, file: Express.Multer.File, cb: multer.Fi
   const allowed = ['.jpg', '.jpeg', '.png', '.webp'];
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowed.includes(ext)) cb(null, true);
-  else cb(new Error('Only JPG, PNG, or WEBP images are allowed for the profile photo'));
+  else cb(new AppError(`Only JPG, PNG, or WEBP images are allowed (got "${ext || 'unknown'}"). If this was taken on an iPhone, switch Camera settings to "Most Compatible" so photos save as .jpg instead of .heic.`, 400));
 };
 
 export const uploadStudentPhoto = multer({
@@ -202,7 +203,7 @@ const projectResourceStorage = multer.diskStorage({
 const pdfOnlyFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
   const ext = path.extname(file.originalname).toLowerCase();
   if (ext === '.pdf') cb(null, true);
-  else cb(new Error('Only PDF files are allowed for the project brief'));
+  else cb(new AppError('Only PDF files are allowed for the project brief', 400));
 };
 
 export const uploadProjectResource = multer({
