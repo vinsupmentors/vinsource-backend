@@ -100,11 +100,17 @@ export function calcSalaryFromNet(netMonthly: number, hasPf = false): SalaryComp
   let pf: number;
 
   if (!hasPf) {
-    // No PF — gross is simply net + PT (ESI unlikely without PF, TDS only at very high salaries)
-    // Check TDS threshold
-    const grossNoPF = netMonthly + PT;
-    const tdsCheck = grossNoPF > 20833 ? Math.round(Math.max(0, (grossNoPF * 12 - 250000) * 0.05 / 12)) : 0;
-    gross = Math.round(netMonthly + PT + tdsCheck);
+    // No PF. Solve gross - PT - TDS(gross) = net directly, where TDS(gross) is the
+    // linear form of the annual-slab formula below (0.05*gross - 1041.67) once gross
+    // crosses the taxable threshold — i.e. gross*(1-0.05) - PT + 1041.67 = net.
+    // (Previously this estimated TDS from a *different*, lower base — netMonthly + PT,
+    // which ignores TDS itself — then recomputed the real deduction from the final,
+    // higher gross. That mismatch always left the actual net take-home short of the
+    // target by the gap between the two estimates, e.g. ~₹200 on a ₹1,00,000 target.)
+    gross = Math.round((netMonthly - 841.67) / 0.95);
+    if (gross <= 20833) {
+      gross = Math.round(netMonthly + PT);
+    }
     pf = 0;
   } else {
     // With PF: PF = 12% of basic = 12% of (40% of gross) = 4.8% of gross
