@@ -82,10 +82,34 @@ export const requireStudent = async (req: AuthRequest, res: Response, next: Next
   }
   // Stale token: look up the student record by userId and patch it in
   try {
-    const student = await prisma.student.findUnique({
+    let student = await prisma.student.findUnique({
       where: { userId: req.user.userId },
       select: { id: true },
     });
+
+    // If userId lookup failed (Student.userId is null — broken link), fall back
+    // to matching by the user's email and auto-repair the link so future
+    // requests don't need this expensive path.
+    if (!student) {
+      const userRecord = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { email: true },
+      });
+      if (userRecord?.email) {
+        student = await prisma.student.findFirst({
+          where: { email: userRecord.email },
+          select: { id: true },
+        });
+        if (student) {
+          // Auto-repair: link the student record to this user account
+          await prisma.student.update({
+            where: { id: student.id },
+            data: { userId: req.user.userId },
+          });
+        }
+      }
+    }
+
     if (!student) {
       res.status(403).json({ success: false, message: 'Student access only' });
       return;

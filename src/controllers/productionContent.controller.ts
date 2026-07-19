@@ -351,6 +351,24 @@ export const productionContentController = {
             throw new Error(`correctOption must be a number between 1 and ${options.length}`);
           }
 
+          const rawMarks = row.marks ?? row.Marks;
+          const marks =
+            rawMarks !== undefined && rawMarks !== null && String(rawMarks).trim() !== '' && !Number.isNaN(Number(rawMarks))
+              ? Number(rawMarks)
+              : 1;
+
+          await prisma.onlineTestQuestion.create({
+            data: {
+              testId,
+              order: existingCount + created + 1,
+              prompt,
+              options,
+              correctIndex: correctOneIndexed - 1, // stored 0-indexed; spreadsheet column is 1-indexed
+              marks,
+            },
+          });
+          created++;
+          results.push({ row: rowNum, status: 'created' });
         } catch (rowErr) {
           results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : String(rowErr) });
         }
