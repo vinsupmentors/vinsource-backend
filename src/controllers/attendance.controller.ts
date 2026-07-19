@@ -225,8 +225,21 @@ export const attendanceController = {
 
   async history(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      if (req.user!.role === 'SUPER_ADMIN') return res.json({ success: true, data: [] });
-      const employee = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
+      const { employeeId: targetEmployeeId } = req.query as Record<string, string | undefined>;
+      let employee;
+      if (targetEmployeeId) {
+        // HR/Manager/SUPER_ADMIN viewing a specific employee's attendance
+        // (e.g. the Attendance tab on an employee's detail page).
+        if (!['SUPER_ADMIN', 'HR', 'MANAGER'].includes(req.user!.role)) {
+          throw new AppError("Not authorized to view this employee's attendance", 403);
+        }
+        employee = await prisma.employee.findUnique({ where: { id: targetEmployeeId } });
+      } else {
+        // Self-service: "My Attendance". SUPER_ADMIN has no Employee record of
+        // their own, so there's nothing to return here.
+        if (req.user!.role === 'SUPER_ADMIN') return res.json({ success: true, data: [] });
+        employee = await prisma.employee.findUnique({ where: { userId: req.user!.userId } });
+      }
       if (!employee) throw new AppError('Employee not found', 404);
 
       const { page = 1, limit = 60, month, year } = req.query;
