@@ -389,11 +389,19 @@ export const productionController = {
   // ── STUDENTS & ENROLLMENTS ─────────────────────────────────────────────────
   async listStudents(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { track, status, phone, batchId, courseId, page, pageSize } = req.query;
+      const { track, status, phone, search, batchId, courseId, page, pageSize } = req.query;
       const where: Record<string, unknown> = {};
       if (track) where.track = track;
       if (status) where.status = status;
       if (phone) where.phone = { contains: String(phone) };
+      if (search) {
+        where.OR = [
+          { firstName: { contains: String(search) } },
+          { lastName: { contains: String(search) } },
+          { studentCode: { contains: String(search) } },
+          { phone: { contains: String(search) } },
+        ];
+      }
 
       if (batchId || courseId) {
         const scheduleWhere: Record<string, unknown> = {};
