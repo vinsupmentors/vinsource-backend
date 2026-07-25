@@ -169,10 +169,15 @@ export const productionController = {
 
   async updateCourse(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { name, description, totalHours, isActive } = req.body;
+      const { name, description, totalHours, isActive, isCustom } = req.body;
       const course = await prisma.academyCourse.update({
         where: { id: req.params.id },
-        data: { name, description, totalHours: totalHours !== undefined ? Number(totalHours) : undefined, isActive },
+        data: {
+          name, description,
+          totalHours: totalHours !== undefined ? Number(totalHours) : undefined,
+          isActive,
+          isCustom: isCustom !== undefined ? !!isCustom : undefined,
+        },
       });
       res.json({ success: true, data: course });
     } catch (err) { next(err); }
