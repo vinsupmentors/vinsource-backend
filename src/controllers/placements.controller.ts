@@ -743,6 +743,18 @@ export const placementsController = {
             t.obtained += m.marksObtained;
             t.max += m.test.maxMarks;
           }
+          // Online (self-administered) test scores count toward marks/rank too —
+          // previously only offline ModuleMark entries were counted here.
+          const onlineAttemptTotals = await prisma.onlineTestAttempt.findMany({
+            where: { studentId: { in: classmateIds }, release: { scheduleId }, score: { not: null }, totalMarks: { not: null } },
+            select: { studentId: true, score: true, totalMarks: true },
+          });
+          for (const a of onlineAttemptTotals) {
+            const t = totalsByStudent.get(a.studentId);
+            if (!t) continue;
+            t.obtained += a.score ?? 0;
+            t.max += a.totalMarks ?? 0;
+          }
 
           const ranked = Array.from(totalsByStudent.entries())
             .map(([sid, t]) => ({ id: sid, pct: t.max ? (t.obtained / t.max) * 100 : 0 }))
