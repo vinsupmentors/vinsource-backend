@@ -696,10 +696,55 @@ export const studentPortalController = {
   },
 
   /**
-   * Submit (finish) my attempt and reveal the score immediately, per product
-   * decision. Body: { violation?: boolean } — set by the frontend the instant
-   * a tab-switch/blur is detected during an active attempt, which forces an
-   * AUTO_SUBMITTED_VIOLATION outcome (strictest policy, confirmed by product).
+   * Record a tab-switch/blur violation during an in-progress attempt.
+   * Server-counted (not client-trusted): the first two violations are just
+   * warnings and the attempt keeps going; the third ends it, marking the
+   * attempt AUTO_SUBMITTED_VIOLATION via the same gradeAndCloseAttempt path
+   * submit/expire use. Returns the running count and what happened so the
+   * frontend can show "warning 1/2", "warning 2/2 — next one ends the test",
+   * or "test ended" accordingly.
+   */
+  async recordTestViolation(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+      const MAX_WARNINGS = 2; // 1st + 2nd violation = warning, 3rd ends the test
+
+      const attempt = await prisma.onlineTestAttempt.findUnique({ where: { id: attemptId } });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+
+      if (attempt.status !== 'IN_PROGRESS') {
+        // Already ended for some other reason (e.g. expired) — nothing to warn about.
+        res.json({ success: true, data: { attempt, action: 'none', violationCount: attempt.violationCount } });
+        return;
+      }
+      if (attempt.deadlineAt.getTime() <= Date.now()) {
+        const graded = await gradeAndCloseAttempt(attemptId, 'EXPIRED');
+        res.json({ success: true, data: { attempt: graded, action: 'ended', violationCount: attempt.violationCount } });
+        return;
+      }
+
+      const violationCount = attempt.violationCount + 1;
+
+      if (violationCount > MAX_WARNINGS) {
+        const graded = await gradeAndCloseAttempt(attemptId, 'AUTO_SUBMITTED_VIOLATION');
+        res.json({ success: true, data: { attempt: graded, action: 'ended', violationCount } });
+        return;
+      }
+
+      const updated = await prisma.onlineTestAttempt.update({
+        where: { id: attemptId },
+        data: { violationCount },
+      });
+      res.json({ success: true, data: { attempt: updated, action: 'warning', violationCount } });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Submit (finish) my attempt and reveal the score immediately. Body:
+   * { violation?: boolean } is kept for backward compatibility, but the
+   * frontend no longer sends violation:true directly on the first tab
+   * switch — see recordTestViolation, which owns the warn/end decision now.
    */
   async submitOnlineTestAttempt(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -718,6 +763,60 @@ export const studentPortalController = {
       const finalStatus = violation ? 'AUTO_SUBMITTED_VIOLATION' : expired ? 'EXPIRED' : 'SUBMITTED';
       const graded = await gradeAndCloseAttempt(attemptId, finalStatus);
       res.json({ success: true, data: graded });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Review my own completed attempt — per-question breakdown showing what I
+   * picked vs. the correct answer. Only available once the attempt is no
+   * longer IN_PROGRESS (i.e. the test is over for me), so it can never be
+   * used to see answers mid-test.
+   */
+  async getOnlineTestAttemptReview(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+
+      const attempt = await prisma.onlineTestAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          release: { include: { test: { include: { questions: { orderBy: { order: 'asc' } } } } } },
+          answers: true,
+        },
+      });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+      if (attempt.status === 'IN_PROGRESS') throw new AppError('This test is still in progress', 400);
+
+      const answersByQuestion = new Map(attempt.answers.map((a) => [a.questionId, a]));
+      const questions = attempt.release.test.questions.map((q) => {
+        const a = answersByQuestion.get(q.id);
+        return {
+          id: q.id,
+          order: q.order,
+          prompt: q.prompt,
+          options: q.options,
+          marks: q.marks,
+          correctIndex: q.correctIndex,
+          selectedIndex: a?.selectedIndex ?? null,
+          isCorrect: a?.isCorrect ?? false,
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          attempt: {
+            id: attempt.id,
+            status: attempt.status,
+            score: attempt.score,
+            totalMarks: attempt.totalMarks,
+            startedAt: attempt.startedAt,
+            submittedAt: attempt.submittedAt,
+          },
+          testTitle: attempt.release.test.title,
+          questions,
+        },
+      });
     } catch (err) { next(err); }
   },
 

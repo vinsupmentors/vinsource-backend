@@ -874,4 +874,141 @@ export const trainerPortalController = {
       res.json({ success: true, data: { release, roster } });
     } catch (err) { next(err); }
   },
+
+  /**
+   * Per-question breakdown of one student's completed attempt — what they
+   * picked vs. the correct answer — so the trainer can discuss it with them
+   * 1-on-1. Only available once the attempt is no longer IN_PROGRESS.
+   */
+  async studentTestReview(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId!;
+      const { scheduleId, releaseId, studentId } = req.params;
+      await assertOwnsSchedule(employeeId, scheduleId);
+
+      const release = await prisma.onlineTestRelease.findUnique({
+        where: { id: releaseId },
+        include: { test: { include: { questions: { orderBy: { order: 'asc' } } } } },
+      });
+      if (!release || release.scheduleId !== scheduleId) throw new AppError('Release not found for this schedule', 404);
+
+      const enrolled = await prisma.studentBatchEnrollment.findUnique({
+        where: { studentId_scheduleId: { studentId, scheduleId } },
+        include: { student: { select: { id: true, studentCode: true, firstName: true, lastName: true } } },
+      });
+      if (!enrolled) throw new AppError('That student is not enrolled in this schedule', 404);
+
+      const attempt = await prisma.onlineTestAttempt.findUnique({
+        where: { releaseId_studentId: { releaseId, studentId } },
+        include: { answers: true },
+      });
+      if (!attempt) throw new AppError('This student has not attempted this test yet', 404);
+      if (attempt.status === 'IN_PROGRESS') throw new AppError('This attempt is still in progress', 400);
+
+      const answersByQuestion = new Map(attempt.answers.map((a) => [a.questionId, a]));
+      const questions = release.test.questions.map((q) => {
+        const a = answersByQuestion.get(q.id);
+        return {
+          id: q.id,
+          order: q.order,
+          prompt: q.prompt,
+          options: q.options,
+          marks: q.marks,
+          correctIndex: q.correctIndex,
+          selectedIndex: a?.selectedIndex ?? null,
+          isCorrect: a?.isCorrect ?? false,
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          student: enrolled.student,
+          attempt: {
+            id: attempt.id,
+            status: attempt.status,
+            score: attempt.score,
+            totalMarks: attempt.totalMarks,
+            startedAt: attempt.startedAt,
+            submittedAt: attempt.submittedAt,
+          },
+          testTitle: release.test.title,
+          questions,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Reassign (allow a retake of) an online test release. Deletes the
+   * existing attempt row (cascades to its saved answers) so the student's
+   * next /start call creates a brand-new attempt — fresh deadline, fresh
+   * violationCount. Body: { studentId? } - pass a specific student's id to
+   * reassign just them, or omit it to reassign every enrolled student who
+   * has a completed attempt (whole-class reassign).
+   *
+   * Skips anyone whose attempt is still IN_PROGRESS, so this can't be used
+   * to accidentally wipe out a live attempt from the results screen.
+   *
+   * Note: this does not keep a record of the previous score once
+   * reassigned — it's a clean retake, not an additional-attempt history.
+   */
+  async reassignTestAttempt(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId!;
+      const { scheduleId, releaseId } = req.params;
+      const { studentId } = req.body as { studentId?: string };
+      await assertOwnsSchedule(employeeId, scheduleId);
+
+      const release = await prisma.onlineTestRelease.findUnique({ where: { id: releaseId } });
+      if (!release || release.scheduleId !== scheduleId) throw new AppError('Release not found for this schedule', 404);
+
+      if (studentId) {
+        const enrolled = await prisma.studentBatchEnrollment.findUnique({
+          where: { studentId_scheduleId: { studentId, scheduleId } },
+        });
+        if (!enrolled) throw new AppError('That student is not enrolled in this schedule', 404);
+      }
+
+      const toReset = await prisma.onlineTestAttempt.findMany({
+        where: {
+          releaseId,
+          status: { not: 'IN_PROGRESS' },
+          ...(studentId ? { studentId } : {}),
+        },
+        select: { id: true, studentId: true },
+      });
+
+      if (toReset.length === 0) {
+        res.json({
+          success: true,
+          data: {
+            reassignedCount: 0,
+            message: studentId
+              ? "That student has no completed attempt to reassign (or their attempt is still in progress)."
+              : 'No completed attempts to reassign — either nobody has attempted yet, or everyone is still in progress.',
+          },
+        });
+        return;
+      }
+
+      await prisma.onlineTestAttempt.deleteMany({ where: { id: { in: toReset.map((a) => a.id) } } });
+
+      const students = await prisma.student.findMany({
+        where: { id: { in: toReset.map((a) => a.studentId) } },
+        select: { userId: true },
+      });
+      await notificationService.bulkCreate(
+        students.map((s) => s.userId).filter((id): id is string => id !== null),
+        {
+          type: 'TEST_ACTIVATED',
+          title: 'Test reassigned',
+          message: 'Your trainer has reassigned this test to you — you can attempt it again.',
+          data: { releaseId, scheduleId },
+        }
+      );
+
+      res.json({ success: true, data: { reassignedCount: toReset.length } });
+    } catch (err) { next(err); }
+  },
 };

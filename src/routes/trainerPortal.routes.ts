@@ -37,5 +37,7 @@ router.post('/schedules/:scheduleId/project-submissions/:submissionId/review', t
 // Feedback form responses are intentionally NOT exposed to trainers — only the
 // Production Manager may read what students submitted (see production.routes.ts).
 router.get('/schedules/:scheduleId/test-releases/:releaseId/results', trainerPortalController.onlineTestResults);
+router.get('/schedules/:scheduleId/test-releases/:releaseId/students/:studentId/review', trainerPortalController.studentTestReview);
+router.post('/schedules/:scheduleId/test-releases/:releaseId/reassign', trainerPortalController.reassignTestAttempt);
 
 export default router;

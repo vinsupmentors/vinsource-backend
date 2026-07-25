@@ -33,7 +33,9 @@ router.post('/feedback-forms/:releaseId/submit', studentPortalController.submitF
 router.get('/online-tests', studentPortalController.myOnlineTests);
 router.post('/online-tests/:releaseId/start', studentPortalController.startOnlineTestAttempt);
 router.get('/online-tests/attempts/:attemptId', studentPortalController.getOnlineTestAttempt);
+router.get('/online-tests/attempts/:attemptId/review', studentPortalController.getOnlineTestAttemptReview);
 router.post('/online-tests/attempts/:attemptId/answer', studentPortalController.saveOnlineTestAnswer);
+router.post('/online-tests/attempts/:attemptId/violation', studentPortalController.recordTestViolation);
 router.post('/online-tests/attempts/:attemptId/submit', studentPortalController.submitOnlineTestAttempt);
 
 // Portfolio
