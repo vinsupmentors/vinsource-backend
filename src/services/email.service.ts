@@ -489,10 +489,10 @@ export const emailService = {
 
     dailyAttendanceReport: (data: {
       dateLabel: string;
-      rows: { scheduleLabel: string; courseName: string; present: number; absent: number; total: number }[];
-      absentees: { studentName: string; studentCode: string; scheduleLabel: string }[];
+      rows: { scheduleLabel: string; subBatchCode: string; trainerName: string; courseName: string; present: number; absent: number; total: number }[];
+      absentees: { studentName: string; studentCode: string; scheduleLabel: string; subBatchCode: string }[];
     }) => `
-      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <div style="font-family:sans-serif;max-width:700px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#2563eb;padding:24px;">
           <h1 style="color:#fff;margin:0;font-size:22px;">📋 Daily Attendance Report</h1>
           <p style="color:#dbeafe;margin:4px 0 0;">${data.dateLabel}</p>
@@ -501,8 +501,9 @@ export const emailService = {
           <p>Attendance summary for <strong>${data.dateLabel}</strong> across all active batches:</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
             <tr>
-              <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Batch / Schedule</strong></td>
+              <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Batch / Sub-batch</strong></td>
               <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Course</strong></td>
+              <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Trainer</strong></td>
               <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Present</strong></td>
               <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Absent</strong></td>
               <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Total</strong></td>
@@ -510,8 +511,9 @@ export const emailService = {
             ${data.rows
               .map(
                 (r) => `<tr>
-              <td style="padding:8px;border:1px solid #e5e7eb;">${r.scheduleLabel}</td>
+              <td style="padding:8px;border:1px solid #e5e7eb;">${r.scheduleLabel} (${r.subBatchCode})</td>
               <td style="padding:8px;border:1px solid #e5e7eb;">${r.courseName}</td>
+              <td style="padding:8px;border:1px solid #e5e7eb;">${r.trainerName}</td>
               <td style="padding:8px;border:1px solid #e5e7eb;">${r.present}</td>
               <td style="padding:8px;border:1px solid #e5e7eb;">${r.absent}</td>
               <td style="padding:8px;border:1px solid #e5e7eb;">${r.total}</td>
@@ -526,14 +528,14 @@ export const emailService = {
             <tr>
               <td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Student</strong></td>
               <td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Student Code</strong></td>
-              <td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Batch / Schedule</strong></td>
+              <td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Batch / Sub-batch</strong></td>
             </tr>
             ${data.absentees
               .map(
                 (a) => `<tr>
               <td style="padding:8px;border:1px solid #e5e7eb;">${a.studentName}</td>
               <td style="padding:8px;border:1px solid #e5e7eb;">${a.studentCode}</td>
-              <td style="padding:8px;border:1px solid #e5e7eb;">${a.scheduleLabel}</td>
+              <td style="padding:8px;border:1px solid #e5e7eb;">${a.scheduleLabel} (${a.subBatchCode})</td>
             </tr>`
               )
               .join('')}

@@ -427,7 +427,7 @@ export const productionReportsController = {
   /** Lightweight list for the Reports tab's student picker. */
   async studentList(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { batchId, scheduleId, courseId, track, search } = req.query;
+      const { batchId, scheduleId, courseId, track, trainerId, search } = req.query;
       const where: Record<string, unknown> = {};
       if (track) where.track = String(track);
       if (search) {
@@ -437,11 +437,12 @@ export const productionReportsController = {
           { studentCode: { contains: String(search) } },
         ];
       }
-      if (batchId || scheduleId || courseId) {
+      if (batchId || scheduleId || courseId || trainerId) {
         const scheduleWhere: Record<string, unknown> = {};
         if (scheduleId) scheduleWhere.id = String(scheduleId);
         if (batchId) scheduleWhere.batchId = String(batchId);
         if (courseId) scheduleWhere.courseId = String(courseId);
+        if (trainerId) scheduleWhere.trainers = { some: { trainerId: String(trainerId) } };
         where.enrollments = { some: { schedule: scheduleWhere } };
       }
       const students = await prisma.student.findMany({

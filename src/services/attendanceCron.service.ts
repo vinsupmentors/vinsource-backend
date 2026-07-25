@@ -62,7 +62,15 @@ export const attendanceCronService = {
       where: { date: { gte: dayStart, lte: dayEnd } },
       include: {
         student: { select: { firstName: true, lastName: true, studentCode: true } },
-        schedule: { select: { id: true, batch: { select: { code: true } }, course: { select: { name: true } } } },
+        schedule: {
+          select: {
+            id: true,
+            code: true,
+            batch: { select: { code: true } },
+            course: { select: { name: true } },
+            trainers: { include: { trainer: { select: { firstName: true, lastName: true } } } },
+          },
+        },
       },
     });
 
@@ -74,22 +82,27 @@ export const attendanceCronService = {
       byScheduleId.get(a.scheduleId)!.push(a);
     }
 
-    const rows: { scheduleLabel: string; courseName: string; present: number; absent: number; total: number }[] = [];
-    const absentees: { studentName: string; studentCode: string; scheduleLabel: string }[] = [];
+    const rows: { scheduleLabel: string; subBatchCode: string; trainerName: string; courseName: string; present: number; absent: number; total: number }[] = [];
+    const absentees: { studentName: string; studentCode: string; scheduleLabel: string; subBatchCode: string }[] = [];
 
     for (const [, records] of byScheduleId) {
       const first = records[0];
       const scheduleLabel = first.schedule.batch.code;
+      const subBatchCode = first.schedule.code || '—';
+      const trainerName = first.schedule.trainers.length
+        ? first.schedule.trainers.map((t) => `${t.trainer.firstName} ${t.trainer.lastName}`).join(', ')
+        : '—';
       const courseName = first.schedule.course.name;
       const present = records.filter((r) => r.status === 'PRESENT' || r.status === 'LATE').length;
       const absent = records.filter((r) => r.status === 'ABSENT').length;
-      rows.push({ scheduleLabel, courseName, present, absent, total: records.length });
+      rows.push({ scheduleLabel, subBatchCode, trainerName, courseName, present, absent, total: records.length });
 
       for (const r of records.filter((r) => r.status === 'ABSENT')) {
         absentees.push({
           studentName: `${r.student.firstName} ${r.student.lastName}`,
           studentCode: r.student.studentCode,
           scheduleLabel,
+          subBatchCode,
         });
       }
     }
