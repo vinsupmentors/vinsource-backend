@@ -1,9 +1,57 @@
 import { Response, NextFunction } from 'express';
+import { LeadStatus, LeadLostReason, DemoStatus } from '@prisma/client';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { paginate, formatPagination } from '../utils/helpers';
 import { computeSalesPulse } from '../services/salesPulse.service';
+
+// Case/space-insensitive column lookup — lets the bulk-upload endpoint accept
+// both the simple manual-entry template (name, phone, assignedToCode, ...)
+// AND a direct export from a legacy CRM (Name, Phone, Assigned, Status,
+// Reminder, Last Contact, Created, Demo, Date Of Demo, ...) unchanged, since
+// XLSX rows come in keyed exactly by whatever header row the file has.
+function field(row: Record<string, unknown>, ...aliases: string[]): string {
+  const normalized: Record<string, unknown> = {};
+  for (const key of Object.keys(row)) {
+    normalized[key.trim().toLowerCase().replace(/\s+/g, '')] = row[key];
+  }
+  for (const alias of aliases) {
+    const v = normalized[alias];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+function parseFlexDate(raw: string): Date | undefined {
+  if (!raw) return undefined;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+// Legacy CRM status text -> our pipeline. Anything not in this list falls
+// back to NEW, with the original text preserved in the imported lead's notes
+// so nothing is silently lost on import.
+const LEGACY_STATUS_MAP: Record<string, { status: LeadStatus; lostReason?: LeadLostReason }> = {
+  'new lead': { status: LeadStatus.NEW },
+  'dnp': { status: LeadStatus.CONTACTED },
+  'followup': { status: LeadStatus.CONTACTED },
+  'my base': { status: LeadStatus.CONTACTED },
+  'not interested': { status: LeadStatus.LOST, lostReason: LeadLostReason.NOT_INTERESTED },
+  'unresponsive': { status: LeadStatus.LOST, lostReason: LeadLostReason.UNREACHABLE },
+  'disqualified': { status: LeadStatus.LOST, lostReason: LeadLostReason.OTHER },
+  'language barrier': { status: LeadStatus.LOST, lostReason: LeadLostReason.OTHER },
+  'online appointment fixed': { status: LeadStatus.DEMO_SCHEDULED },
+  'direct appointment fixed': { status: LeadStatus.DEMO_SCHEDULED },
+  'demo fixed - no show': { status: LeadStatus.DEMO_SCHEDULED },
+  'demo conducted - followup': { status: LeadStatus.DEMO_DONE },
+  'online appointment over': { status: LeadStatus.DEMO_DONE },
+  'direct appointment over': { status: LeadStatus.DEMO_DONE },
+  'positive': { status: LeadStatus.NEGOTIATION },
+  'may buy later': { status: LeadStatus.NEGOTIATION },
+  'demo conducted - positive': { status: LeadStatus.NEGOTIATION },
+  'student': { status: LeadStatus.ENROLLED },
+};
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
@@ -66,7 +114,7 @@ export const salesController = {
       }
 
       const [allEmployees, allCampaigns, existingLeads] = await Promise.all([
-        prisma.employee.findMany({ select: { id: true, employeeCode: true } }),
+        prisma.employee.findMany({ select: { id: true, employeeCode: true, firstName: true, lastName: true } }),
         prisma.campaign.findMany({ select: { id: true, name: true } }),
         prisma.lead.findMany({ select: { phone: true } }),
       ]);
@@ -74,14 +122,32 @@ export const salesController = {
       const campaignByName = new Map(allCampaigns.map((c) => [c.name.trim().toLowerCase(), c.id]));
       const existingPhones = new Set(existingLeads.map((l) => l.phone.trim()));
 
+      // Name-based employee lookup — the legacy CRM export assigns leads by
+      // full name ("Jothimalar S") rather than employee code, so match on
+      // normalized full name, falling back to first name if it's unambiguous.
+      const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+      const employeeByFullName = new Map<string, string>();
+      const employeeIdsByFirstName = new Map<string, string[]>();
+      for (const e of allEmployees) {
+        employeeByFullName.set(normName(`${e.firstName} ${e.lastName}`), e.id);
+        const fn = normName(e.firstName);
+        employeeIdsByFirstName.set(fn, [...(employeeIdsByFirstName.get(fn) || []), e.id]);
+      }
+      const resolveEmployeeByName = (raw: string): string | undefined => {
+        const n = normName(raw);
+        if (employeeByFullName.has(n)) return employeeByFullName.get(n);
+        const matches = employeeIdsByFirstName.get(n);
+        return matches && matches.length === 1 ? matches[0] : undefined;
+      };
+
       const results: Array<{ row: number; status: 'created' | 'error'; message?: string; leadId?: string }> = [];
 
       for (let i = 0; i < leads.length; i++) {
-        const row = leads[i] || {};
+        const row = (leads[i] || {}) as Record<string, unknown>;
         const rowNum = i + 1;
         try {
-          const name = String(row.name || '').trim();
-          const phone = String(row.phone || '').trim();
+          const name = field(row, 'name');
+          const phone = field(row, 'phone', 'phonenumber', 'mobile');
           if (!name || !phone) {
             results.push({ row: rowNum, status: 'error', message: 'name and phone are required' });
             continue;
@@ -91,34 +157,92 @@ export const salesController = {
             continue;
           }
 
-          const assignedRaw = String(row.assignedToCode || row.assignedTo || '').trim();
-          const assignedToId = assignedRaw ? employeeByCode.get(assignedRaw.toLowerCase()) : undefined;
-          if (assignedRaw && !assignedToId) {
-            results.push({ row: rowNum, status: 'error', message: `Employee code "${assignedRaw}" not found` });
-            continue;
+          const warnings: string[] = [];
+
+          const assignedCode = field(row, 'assignedtocode');
+          const assignedName = field(row, 'assigned', 'assignedto');
+          let assignedToId: string | undefined;
+          if (assignedCode) {
+            assignedToId = employeeByCode.get(assignedCode.toLowerCase());
+            if (!assignedToId) {
+              results.push({ row: rowNum, status: 'error', message: `Employee code "${assignedCode}" not found` });
+              continue;
+            }
+          } else if (assignedName) {
+            assignedToId = resolveEmployeeByName(assignedName);
+            if (!assignedToId) warnings.push(`rep "${assignedName}" not matched — left unassigned`);
           }
 
-          const campaignRaw = String(row.campaign || '').trim();
-          const campaignId = campaignRaw ? campaignByName.get(campaignRaw.toLowerCase()) : undefined;
-          if (campaignRaw && !campaignId) {
-            results.push({ row: rowNum, status: 'error', message: `Campaign "${campaignRaw}" not found` });
-            continue;
+          const campaignRaw = field(row, 'campaign');
+          let campaignId: string | undefined;
+          if (campaignRaw) {
+            campaignId = campaignByName.get(campaignRaw.toLowerCase());
+            if (!campaignId) warnings.push(`campaign "${campaignRaw}" not found — left blank`);
           }
+
+          // Legacy status text -> our pipeline (see LEGACY_STATUS_MAP above).
+          const legacyStatusRaw = field(row, 'status');
+          const legacyStatusKey = legacyStatusRaw.toLowerCase();
+          const mapped = LEGACY_STATUS_MAP[legacyStatusKey];
+          const status: LeadStatus = mapped?.status || LeadStatus.NEW;
+          const lostReason = mapped?.lostReason;
+          if (legacyStatusRaw && !mapped) warnings.push(`status "${legacyStatusRaw}" not recognized — imported as New`);
+
+          const createdAt = parseFlexDate(field(row, 'created'));
+          const lastContactAt = parseFlexDate(field(row, 'lastcontact'));
+          const nextFollowUpAt = parseFlexDate(field(row, 'reminder'));
+
+          const notesParts: string[] = [];
+          const notesField = field(row, 'notes');
+          if (notesField) notesParts.push(notesField);
+          if (legacyStatusRaw) notesParts.push(`Imported from legacy CRM — original status: "${legacyStatusRaw}"`);
 
           const lead = await prisma.lead.create({
             data: {
               name,
               phone,
-              email: row.email ? String(row.email).trim() : undefined,
-              source: row.source ? String(row.source).trim() : undefined,
-              courseInterest: row.courseInterest ? String(row.courseInterest).trim() : undefined,
-              notes: row.notes ? String(row.notes).trim() : undefined,
+              email: field(row, 'email') || undefined,
+              source: field(row, 'source') || undefined,
+              courseInterest: field(row, 'courseinterest') || undefined,
+              notes: notesParts.length ? notesParts.join(' — ') : undefined,
               assignedToId,
               campaignId,
+              status,
+              lostReason,
+              lastContactAt,
+              nextFollowUpAt,
+              ...(createdAt ? { createdAt } : {}),
             },
           });
+
+          // Legacy exports carry a Demo column (Online/Offline) + Date Of Demo —
+          // recreate that as a real Demo row so the Demos tab / pulse reports
+          // aren't blind to demos that already happened before the migration.
+          const demoModeRaw = field(row, 'demo').toLowerCase();
+          const demoDate = parseFlexDate(field(row, 'dateofdemo'));
+          if (demoModeRaw && demoDate) {
+            let demoStatus: DemoStatus = DemoStatus.SCHEDULED;
+            if (legacyStatusKey.includes('no show')) demoStatus = DemoStatus.NO_SHOW;
+            else if (legacyStatusKey.startsWith('demo conducted') || legacyStatusKey.includes('appointment over')) demoStatus = DemoStatus.COMPLETED;
+            else if (demoDate.getTime() < Date.now()) demoStatus = DemoStatus.COMPLETED;
+
+            await prisma.demo.create({
+              data: {
+                leadId: lead.id,
+                scheduledAt: demoDate,
+                mode: demoModeRaw === 'online' ? 'ONLINE' : 'OFFLINE',
+                status: demoStatus,
+              },
+            });
+          }
+
           existingPhones.add(phone);
-          results.push({ row: rowNum, status: 'created', leadId: lead.id });
+          results.push({
+            row: rowNum,
+            status: 'created',
+            leadId: lead.id,
+            message: warnings.length ? warnings.join('; ') : undefined,
+          });
         } catch (rowErr) {
           results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : 'Unknown error' });
         }
