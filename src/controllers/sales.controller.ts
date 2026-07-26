@@ -5,6 +5,30 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { paginate, formatPagination } from '../utils/helpers';
 import { computeSalesPulse } from '../services/salesPulse.service';
+import { getEffectiveAccess } from '../utils/moduleAccess';
+
+// BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
+// leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
+// gated to ADMIN at the route level instead. SUPER_ADMIN and anyone with
+// SALES=ADMIN sees everything, same as before.
+async function isSalesAdmin(req: AuthRequest): Promise<boolean> {
+  if (!req.user) return false;
+  const access = await getEffectiveAccess(req.user.userId);
+  return access.SALES === 'ADMIN';
+}
+
+/** Throws if a non-admin caller is trying to read/write a lead (or its calls/
+ * demos) that isn't assigned to them — enforced server-side so a BDA can't
+ * reach a teammate's lead just by knowing/guessing its id, even though the
+ * UI never surfaces those ids to them in the first place. */
+async function assertLeadAccess(req: AuthRequest, leadId: string): Promise<void> {
+  if (await isSalesAdmin(req)) return;
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { assignedToId: true } });
+  if (!lead) throw new AppError('Lead not found', 404);
+  if (lead.assignedToId !== req.user?.employeeId) {
+    throw new AppError('You do not have access to this lead', 403);
+  }
+}
 
 // Case/space-insensitive column lookup — lets the bulk-upload endpoint accept
 // both the simple manual-entry template (name, phone, assignedToCode, ...)
@@ -77,6 +101,13 @@ export const salesController = {
         const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
         const endOfToday = new Date(startOfToday); endOfToday.setDate(endOfToday.getDate() + 1);
         where.nextFollowUpAt = followUp === 'overdue' ? { lt: startOfToday } : { gte: startOfToday, lt: endOfToday };
+      }
+
+      // A BDA (SALES=EDIT) only ever sees leads assigned to them — this
+      // overrides any assignedToId query param so they can't page through
+      // teammates' leads by editing the request.
+      if (!(await isSalesAdmin(req))) {
+        where.assignedToId = req.user?.employeeId || '__none__';
       }
 
       const [leads, total] = await Promise.all([
@@ -253,6 +284,29 @@ export const salesController = {
     } catch (err) { next(err); }
   },
 
+  /** Single-lead fetch — used by the frontend to hydrate the detail modal
+   * when it's opened from somewhere other than the Leads table (e.g. a Demo
+   * Booked row), where the full lead object isn't already in memory. */
+  async getLead(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const lead = await prisma.lead.findUnique({
+        where: { id: req.params.id },
+        include: {
+          assignedTo: { select: employeeSelect },
+          campaign: { select: { id: true, name: true } },
+          demos: { orderBy: { scheduledAt: 'desc' }, take: 1 },
+          _count: { select: { demos: true, callLogs: true } },
+        },
+      });
+      if (!lead) throw new AppError('Lead not found', 404);
+      // A BDA (SALES=EDIT) may only open leads assigned to them.
+      if (!(await isSalesAdmin(req)) && lead.assignedToId !== req.user?.employeeId) {
+        throw new AppError('You do not have access to this lead', 403);
+      }
+      res.json({ success: true, data: lead });
+    } catch (err) { next(err); }
+  },
+
   async createLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { name, phone, email, source, courseInterest, assignedToId, campaignId, notes } = req.body;
@@ -268,6 +322,7 @@ export const salesController = {
 
   async updateLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      await assertLeadAccess(req, req.params.id);
       const { name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes, lostReason } = req.body;
       if (status === 'LOST' && !lostReason) {
         throw new AppError('A reason is required when marking a lead as Lost', 400);
@@ -300,6 +355,7 @@ export const salesController = {
   // previous one logged.
   async listCallLogs(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      await assertLeadAccess(req, req.params.id);
       const logs = await prisma.leadCallLog.findMany({
         where: { leadId: req.params.id },
         include: { calledBy: { select: employeeSelect } },
@@ -311,6 +367,7 @@ export const salesController = {
 
   async addCallLog(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      await assertLeadAccess(req, req.params.id);
       const { notes, nextFollowUpAt, status, lostReason } = req.body;
       if (!notes) throw new AppError('Call notes are required', 400);
       if (status === 'LOST' && !lostReason) {
@@ -350,6 +407,13 @@ export const salesController = {
       if (leadId) where.leadId = leadId;
       if (status) where.status = status;
 
+      // A BDA only ever sees demos on their own assigned leads — this powers
+      // their Demo Booked / Demo Rescheduled / Demo Conducted tabs (each is
+      // just this same endpoint with a different ?status=).
+      if (!(await isSalesAdmin(req))) {
+        where.lead = { assignedToId: req.user?.employeeId || '__none__' };
+      }
+
       const demos = await prisma.demo.findMany({
         where,
         include: {
@@ -366,6 +430,7 @@ export const salesController = {
     try {
       const { leadId, scheduledAt, mode, conductedById, status, feedback } = req.body;
       if (!leadId || !scheduledAt) throw new AppError('leadId and scheduledAt are required', 400);
+      await assertLeadAccess(req, leadId);
 
       const [demo] = await prisma.$transaction([
         prisma.demo.create({
@@ -380,6 +445,10 @@ export const salesController = {
 
   async updateDemo(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const existingDemo = await prisma.demo.findUnique({ where: { id: req.params.id }, select: { leadId: true } });
+      if (!existingDemo) throw new AppError('Demo not found', 404);
+      await assertLeadAccess(req, existingDemo.leadId);
+
       const { scheduledAt, mode, conductedById, status, feedback } = req.body;
       const demo = await prisma.demo.update({
         where: { id: req.params.id },
@@ -411,6 +480,7 @@ export const salesController = {
 
       const original = await prisma.demo.findUnique({ where: { id: req.params.id } });
       if (!original) throw new AppError('Demo not found', 404);
+      await assertLeadAccess(req, original.leadId);
 
       const [, , newDemo] = await prisma.$transaction([
         prisma.demo.update({ where: { id: original.id }, data: { status: 'RESCHEDULED' } }),
@@ -432,16 +502,21 @@ export const salesController = {
   },
 
   // ── Summary stats ────────────────────────────────────────────────────────
-  async stats(_req: AuthRequest, res: Response, next: NextFunction) {
+  async stats(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      const admin = await isSalesAdmin(req);
+      const ownLeadWhere: Record<string, unknown> = admin ? {} : { assignedToId: req.user?.employeeId || '__none__' };
+      const ownDemoWhere: Record<string, unknown> = admin ? {} : { lead: { assignedToId: req.user?.employeeId || '__none__' } };
+
       const [byStatus, totalLeads, upcomingDemos, enrolledThisMonth] = await Promise.all([
-        prisma.lead.groupBy({ by: ['status'], _count: { _all: true } }),
-        prisma.lead.count(),
+        prisma.lead.groupBy({ by: ['status'], where: ownLeadWhere, _count: { _all: true } }),
+        prisma.lead.count({ where: ownLeadWhere }),
         prisma.demo.count({
-          where: { status: 'SCHEDULED', scheduledAt: { gte: new Date() } },
+          where: { ...ownDemoWhere, status: 'SCHEDULED', scheduledAt: { gte: new Date() } },
         }),
         prisma.lead.count({
           where: {
+            ...ownLeadWhere,
             status: 'ENROLLED',
             updatedAt: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
           },

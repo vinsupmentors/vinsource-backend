@@ -12,6 +12,7 @@ router.get('/stats', salesController.stats);
 router.get('/leads', salesController.listLeads);
 router.post('/leads', requireModule('SALES', 'EDIT'), salesController.createLead);
 router.post('/leads/bulk', requireModule('SALES', 'EDIT'), salesController.bulkUploadLeads);
+router.get('/leads/:id', salesController.getLead);
 router.put('/leads/:id', requireModule('SALES', 'EDIT'), salesController.updateLead);
 router.delete('/leads/:id', requireModule('SALES', 'ADMIN'), salesController.deleteLead);
 
@@ -23,12 +24,16 @@ router.post('/demos', requireModule('SALES', 'EDIT'), salesController.createDemo
 router.put('/demos/:id', requireModule('SALES', 'EDIT'), salesController.updateDemo);
 router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesController.rescheduleDemo);
 
-router.get('/pulse', salesController.pulse);
-router.get('/lead-quality', salesController.leadQuality);
+// Sales Pulse / Lead Quality are management-level views (aggregate numbers
+// across every rep) — restricted to SALES ADMIN. BDAs get their own
+// assigned-leads-only Leads tab plus the Demo Booked/Rescheduled/Conducted
+// views instead (see listLeads/listDemos self-scoping in the controller).
+router.get('/pulse', requireModule('SALES', 'ADMIN'), salesController.pulse);
+router.get('/lead-quality', requireModule('SALES', 'ADMIN'), salesController.leadQuality);
 
 // Report recipients — who gets the Sales Pulse / EOD emails (11,12,1,2,4,5,6).
-router.get('/report-recipients', salesController.listReportRecipients);
-router.post('/report-recipients', requireModule('SALES', 'EDIT'), salesController.addReportRecipient);
-router.delete('/report-recipients/:id', requireModule('SALES', 'EDIT'), salesController.removeReportRecipient);
+router.get('/report-recipients', requireModule('SALES', 'ADMIN'), salesController.listReportRecipients);
+router.post('/report-recipients', requireModule('SALES', 'ADMIN'), salesController.addReportRecipient);
+router.delete('/report-recipients/:id', requireModule('SALES', 'ADMIN'), salesController.removeReportRecipient);
 
 export default router;
