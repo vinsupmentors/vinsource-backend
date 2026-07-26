@@ -238,6 +238,17 @@ enum LeadStatus {
   LOST
 }
 
+/// Why a lead was marked LOST — NOT_INTERESTED is a genuine "no", the rest
+/// (INVALID_NUMBER/UNREACHABLE/DUPLICATE/OTHER) mean the lead itself was never
+/// workable. This split is what feeds the Digital Marketing "Lead Quality" report.
+enum LeadLostReason {
+  NOT_INTERESTED
+  INVALID_NUMBER
+  UNREACHABLE
+  DUPLICATE
+  OTHER
+}
+
 enum PaymentMode {
   CASH
   UPI
@@ -1246,6 +1257,7 @@ model Lead {
   source       String?
   courseInterest String?
   status       LeadStatus @default(NEW)
+  lostReason   LeadLostReason?
   assignedToId String?
   campaignId   String?
   notes        String?    @db.Text

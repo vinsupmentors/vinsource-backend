@@ -382,4 +382,113 @@ export const digitalMarketingController = {
       });
     } catch (err) { next(err); }
   },
+
+  /**
+   * Per-campaign lead quality: how many leads a campaign actually produced vs.
+   * how many of those turned out to be workable. "Received"/"Given to Sales" come
+   * from the marketing-entered CampaignDailyReport numbers; "Assigned"/"Not
+   * Interested"/"Doesn't Work"/"Enrolled" come from the CRM Lead records
+   * themselves (status + lostReason), which is where the sales team's actual
+   * outcome per lead lives.
+   */
+  async leadQuality(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { status } = req.query;
+      const campaignWhere: Record<string, unknown> = {};
+      if (status) campaignWhere.status = status;
+
+      const [campaigns, dailyTotals, statusCounts, reasonCounts, assignedCounts] = await Promise.all([
+        prisma.campaign.findMany({
+          where: campaignWhere,
+          select: { id: true, name: true, channel: true, status: true },
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.campaignDailyReport.groupBy({
+          by: ['campaignId'],
+          _sum: { leadsReceived: true, leadsGivenToSales: true },
+        }),
+        prisma.lead.groupBy({
+          by: ['campaignId', 'status'],
+          where: { campaignId: { not: null } },
+          _count: { _all: true },
+        }),
+        prisma.lead.groupBy({
+          by: ['campaignId', 'lostReason'],
+          where: { campaignId: { not: null }, status: 'LOST' },
+          _count: { _all: true },
+        }),
+        prisma.lead.groupBy({
+          by: ['campaignId'],
+          where: { campaignId: { not: null }, assignedToId: { not: null } },
+          _count: { _all: true },
+        }),
+      ]);
+
+      const dailyMap = new Map(dailyTotals.map((d) => [d.campaignId, d._sum]));
+      const assignedMap = new Map(assignedCounts.map((r) => [r.campaignId as string, r._count._all]));
+
+      const statusMap = new Map<string, Record<string, number>>();
+      for (const row of statusCounts) {
+        if (!row.campaignId) continue;
+        const m = statusMap.get(row.campaignId) || {};
+        m[row.status] = row._count._all;
+        statusMap.set(row.campaignId, m);
+      }
+
+      const reasonMap = new Map<string, Record<string, number>>();
+      for (const row of reasonCounts) {
+        if (!row.campaignId) continue;
+        const m = reasonMap.get(row.campaignId) || {};
+        const key = row.lostReason || 'UNSPECIFIED';
+        m[key] = row._count._all;
+        reasonMap.set(row.campaignId, m);
+      }
+
+      const rows = campaigns.map((c) => {
+        const statuses = statusMap.get(c.id) || {};
+        const reasons = reasonMap.get(c.id) || {};
+        const daily = dailyMap.get(c.id) || { leadsReceived: 0, leadsGivenToSales: 0 };
+        const totalLeads = Object.values(statuses).reduce((s, n) => s + n, 0);
+        const totalLost = statuses.LOST || 0;
+        const notInterested = reasons.NOT_INTERESTED || 0;
+        const doesntWork = totalLost - notInterested; // INVALID_NUMBER + UNREACHABLE + DUPLICATE + OTHER + UNSPECIFIED
+        const enrolled = statuses.ENROLLED || 0;
+        const leadsAssigned = assignedMap.get(c.id) || 0;
+        const qualityPct = leadsAssigned > 0 ? ((leadsAssigned - totalLost) / leadsAssigned) * 100 : null;
+
+        return {
+          campaignId: c.id,
+          campaignName: c.name,
+          channel: c.channel,
+          campaignStatus: c.status,
+          leadsReceived: daily.leadsReceived || 0,
+          leadsGivenToSales: daily.leadsGivenToSales || 0,
+          leadsAssigned,
+          totalLeads,
+          notInterested,
+          doesntWork,
+          totalLost,
+          enrolled,
+          qualityPct,
+        };
+      });
+
+      const overall = rows.reduce(
+        (acc, r) => ({
+          leadsReceived: acc.leadsReceived + r.leadsReceived,
+          leadsGivenToSales: acc.leadsGivenToSales + r.leadsGivenToSales,
+          leadsAssigned: acc.leadsAssigned + r.leadsAssigned,
+          totalLeads: acc.totalLeads + r.totalLeads,
+          notInterested: acc.notInterested + r.notInterested,
+          doesntWork: acc.doesntWork + r.doesntWork,
+          totalLost: acc.totalLost + r.totalLost,
+          enrolled: acc.enrolled + r.enrolled,
+        }),
+        { leadsReceived: 0, leadsGivenToSales: 0, leadsAssigned: 0, totalLeads: 0, notInterested: 0, doesntWork: 0, totalLost: 0, enrolled: 0 }
+      );
+      const overallQualityPct = overall.leadsAssigned > 0 ? ((overall.leadsAssigned - overall.totalLost) / overall.leadsAssigned) * 100 : null;
+
+      res.json({ success: true, data: { campaigns: rows, overall: { ...overall, qualityPct: overallQualityPct } } });
+    } catch (err) { next(err); }
+  },
 };

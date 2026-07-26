@@ -13,6 +13,7 @@ router.get('/stats', digitalMarketingController.stats);
 // Cross-campaign ledgers — power the sidebar's Recharges / Daily Reports tabs
 router.get('/recharges', digitalMarketingController.listAllRecharges);
 router.get('/daily-reports', digitalMarketingController.listAllDailyReports);
+router.get('/lead-quality', digitalMarketingController.leadQuality);
 
 router.get('/campaigns', digitalMarketingController.listCampaigns);
 router.get('/campaigns/:id', digitalMarketingController.getCampaign);

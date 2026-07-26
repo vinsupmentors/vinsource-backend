@@ -57,10 +57,18 @@ export const salesController = {
 
   async updateLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes } = req.body;
+      const { name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes, lostReason } = req.body;
+      if (status === 'LOST' && !lostReason) {
+        throw new AppError('A reason is required when marking a lead as Lost', 400);
+      }
       const lead = await prisma.lead.update({
         where: { id: req.params.id },
-        data: { name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes },
+        data: {
+          name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes,
+          // Only a LOST lead carries a reason — clear it the moment status moves elsewhere,
+          // so re-opened leads don't keep showing a stale "why it was lost" reason.
+          lostReason: status === 'LOST' ? lostReason : status !== undefined ? null : undefined,
+        },
         include: { assignedTo: { select: employeeSelect } },
       });
       res.json({ success: true, data: lead });
