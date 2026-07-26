@@ -525,6 +525,7 @@ model Employee {
   // CRM modules
   assignedLeads     Lead[]              @relation("LeadAssignee")
   demosConducted    Demo[]              @relation("DemoConductor")
+  leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
   feeCollections    FeeCollection[]     @relation("FeeCollector")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
@@ -1250,38 +1251,82 @@ model UserModuleAccess {
 // ─── SALES ────────────────────────────────────────────────────────────────────
 
 model Lead {
-  id           String     @id @default(uuid())
-  name         String
-  phone        String
-  email        String?
-  source       String?
+  id             String     @id @default(uuid())
+  name           String
+  phone          String
+  email          String?
+  source         String?
   courseInterest String?
-  status       LeadStatus @default(NEW)
-  lostReason   LeadLostReason?
-  assignedToId String?
-  campaignId   String?
-  notes        String?    @db.Text
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  status         LeadStatus @default(NEW)
+  lostReason     LeadLostReason?
+  assignedToId   String?
+  campaignId     String?
+  notes          String?    @db.Text
+  // Denormalized off LeadCallLog for fast list-view sorting/filtering — every
+  // call log entry refreshes lastContactAt, and carries the BDA's chosen
+  // next-follow-up date forward into nextFollowUpAt ("Reminder" column).
+  lastContactAt  DateTime?
+  nextFollowUpAt DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
   assignedTo  Employee?           @relation("LeadAssignee", fields: [assignedToId], references: [id])
   campaign    Campaign?           @relation(fields: [campaignId], references: [id])
   demos       Demo[]
+  callLogs    LeadCallLog[]
   collections FeeCollection[]
   students    Student[]
 }
 
+/// One row per call a BDA logs against a lead — this is the permanent history
+/// that survives reassignment: when a lead moves from one BDA to another, the
+/// new BDA reads this same log and sees every prior call/note/follow-up.
+model LeadCallLog {
+  id             String    @id @default(uuid())
+  leadId         String
+  calledById     String?
+  notes          String    @db.Text
+  nextFollowUpAt DateTime?
+  calledAt       DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+
+  lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  calledBy Employee? @relation("LeadCallLogBy", fields: [calledById], references: [id])
+}
+
+enum DemoMode {
+  ONLINE
+  OFFLINE
+}
+
+enum DemoStatus {
+  SCHEDULED
+  COMPLETED
+  RESCHEDULED
+  NO_SHOW
+  CANCELLED
+}
+
 model Demo {
-  id            String   @id @default(uuid())
+  id            String     @id @default(uuid())
   leadId        String
   scheduledAt   DateTime
+  mode          DemoMode   @default(ONLINE)
   conductedById String?
-  status        String   @default("SCHEDULED")
-  feedback      String?  @db.Text
-  createdAt     DateTime @default(now())
+  status        DemoStatus @default(SCHEDULED)
+  feedback      String?    @db.Text
+  // When a demo is rescheduled, the original row is frozen with
+  // status=RESCHEDULED and a new row is created pointing back here — so the
+  // "was today's demo conducted or rescheduled" report has a real trail
+  // instead of overwriting the original date.
+  rescheduledFromId String? @unique
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  lead        Lead      @relation(fields: [leadId], references: [id])
-  conductedBy Employee? @relation("DemoConductor", fields: [conductedById], references: [id])
+  lead            Lead      @relation(fields: [leadId], references: [id])
+  conductedBy     Employee? @relation("DemoConductor", fields: [conductedById], references: [id])
+  rescheduledFrom Demo?     @relation("DemoReschedule", fields: [rescheduledFromId], references: [id])
+  rescheduledTo   Demo?     @relation("DemoReschedule")
 }
 
 // ─── FINANCE (SALES) — student fee collections ───────────────────────────────
@@ -1809,6 +1854,7 @@ enum ReferralStatus {
 enum ReportRecipientType {
   DAILY_ATTENDANCE // gets yesterday's attendance summary every day
   ESCALATION       // gets the 3-consecutive-day-absence escalation email (in addition to management)
+  SALES_HOURLY     // gets the sales pulse email at 11,12,1,2,4,5,6 (last one marked EOD)
 }
 
 // Configurable recipient lists for automated report/escalation emails — kept

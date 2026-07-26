@@ -10,6 +10,7 @@ import { releaseReminderService } from './services/releaseReminder.service';
 import { attendanceCronService } from './services/attendanceCron.service';
 import { passwordReminderService } from './services/passwordReminder.service';
 import { checkoutReminderService } from './services/checkoutReminder.service';
+import { salesCronService } from './services/salesCron.service';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -125,6 +126,22 @@ const start = async () => {
         console.error('Student status sync cron job failed:', err);
       }
     });
+    // Sales pulse — runs at 11 AM, 12, 1, 2, 4, 5 and 6 PM India time, emailing
+    // the current "as of now" snapshot (calls made, demos booked/conducted/
+    // rescheduled, follow-ups due) to everyone configured as a SALES_HOURLY
+    // report recipient. The 6 PM run is the same numbers, sent as the day's
+    // End of Day report.
+    cron.schedule('0 11,12,13,14,16,17,18 * * *', async () => {
+      try {
+        const isEod = new Date().getHours() === 18;
+        const result = await salesCronService.sendPulseReport(isEod);
+        if (result.sent > 0) {
+          console.log(`📞 Sales ${isEod ? 'EOD' : 'pulse'} report sent to ${result.sent} recipient(s)`);
+        }
+      } catch (err) {
+        console.error('Sales pulse cron job failed:', err);
+      }
+    }, { timezone: 'Asia/Kolkata' });
   } catch (err) {
     console.error('Failed to start:', err);
     process.exit(1);

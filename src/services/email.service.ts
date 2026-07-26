@@ -545,6 +545,47 @@ export const emailService = {
         </div>
       </div>`,
 
+    salesPulseReport: (data: {
+      timeLabel: string;
+      isEod: boolean;
+      stats: {
+        callsMadeToday: number; leadsCreatedToday: number; demosBookedToday: number;
+        demosScheduledForToday: number; demosConductedToday: number; demosRescheduledToday: number;
+        demosNoShowToday: number; demosPendingToday: number; followUpsDueToday: number;
+        overdueFollowUps: number; enrolledToday: number; lostToday: number;
+      };
+    }) => {
+      const s = data.stats;
+      const row = (label: string, value: number, highlight?: string) => `<tr>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${label}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;font-weight:700;${highlight ? `color:${highlight};` : ''}">${value}</td>
+      </tr>`;
+      return `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:${data.isEod ? '#7c3aed' : '#2563eb'};padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">${data.isEod ? '🌙 Sales — End of Day Report' : '📞 Sales Pulse'}</h1>
+          <p style="color:#e0e7ff;margin:4px 0 0;">As of ${data.timeLabel}${data.isEod ? ' — today\'s final summary' : ''}</p>
+        </div>
+        <div style="padding:24px;">
+          <table style="width:100%;border-collapse:collapse;margin:0 0 16px;">
+            ${row('Calls made today', s.callsMadeToday)}
+            ${row('New leads today', s.leadsCreatedToday)}
+            ${row('Demos booked today', s.demosBookedToday)}
+            ${row('Demos scheduled for today', s.demosScheduledForToday)}
+            ${row('— Conducted', s.demosConductedToday, '#16a34a')}
+            ${row('— Rescheduled', s.demosRescheduledToday, '#d97706')}
+            ${row('— No-show', s.demosNoShowToday, '#dc2626')}
+            ${row('— Still pending', s.demosPendingToday, s.demosPendingToday > 0 ? '#dc2626' : undefined)}
+            ${row('Follow-ups due today', s.followUpsDueToday)}
+            ${row('Overdue follow-ups', s.overdueFollowUps, s.overdueFollowUps > 0 ? '#dc2626' : undefined)}
+            ${row('Enrolled today', s.enrolledToday, '#16a34a')}
+            ${row('Lost today', s.lostToday)}
+          </table>
+          <p style="color:#6b7280;font-size:12px;">Vin-Source Portal — Sales</p>
+        </div>
+      </div>`;
+    },
+
     appointmentLetterApproval: (data: { approverName: string; employeeName: string; letterId: string; portalUrl: string }) => `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#1e3a8a;padding:24px;">
