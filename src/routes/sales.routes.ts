@@ -24,6 +24,7 @@ router.put('/demos/:id', requireModule('SALES', 'EDIT'), salesController.updateD
 router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesController.rescheduleDemo);
 
 router.get('/pulse', salesController.pulse);
+router.get('/lead-quality', salesController.leadQuality);
 
 // Report recipients — who gets the Sales Pulse / EOD emails (11,12,1,2,4,5,6).
 router.get('/report-recipients', salesController.listReportRecipients);
