@@ -50,6 +50,85 @@ export const salesController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Bulk lead import from an uploaded spreadsheet (parsed client-side, rows
+   * posted as JSON here — same shape as Production's bulkUploadStudents).
+   * Employees/campaigns are pre-fetched once and matched by code/name per
+   * row rather than hitting the DB per lookup. Existing phone numbers are
+   * pre-loaded too so duplicate rows are reported instead of silently
+   * creating a second lead for the same person.
+   */
+  async bulkUploadLeads(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { leads } = req.body;
+      if (!Array.isArray(leads) || !leads.length) {
+        throw new AppError('leads array is required', 400);
+      }
+
+      const [allEmployees, allCampaigns, existingLeads] = await Promise.all([
+        prisma.employee.findMany({ select: { id: true, employeeCode: true } }),
+        prisma.campaign.findMany({ select: { id: true, name: true } }),
+        prisma.lead.findMany({ select: { phone: true } }),
+      ]);
+      const employeeByCode = new Map(allEmployees.map((e) => [e.employeeCode.trim().toLowerCase(), e.id]));
+      const campaignByName = new Map(allCampaigns.map((c) => [c.name.trim().toLowerCase(), c.id]));
+      const existingPhones = new Set(existingLeads.map((l) => l.phone.trim()));
+
+      const results: Array<{ row: number; status: 'created' | 'error'; message?: string; leadId?: string }> = [];
+
+      for (let i = 0; i < leads.length; i++) {
+        const row = leads[i] || {};
+        const rowNum = i + 1;
+        try {
+          const name = String(row.name || '').trim();
+          const phone = String(row.phone || '').trim();
+          if (!name || !phone) {
+            results.push({ row: rowNum, status: 'error', message: 'name and phone are required' });
+            continue;
+          }
+          if (existingPhones.has(phone)) {
+            results.push({ row: rowNum, status: 'error', message: `A lead with phone "${phone}" already exists` });
+            continue;
+          }
+
+          const assignedRaw = String(row.assignedToCode || row.assignedTo || '').trim();
+          const assignedToId = assignedRaw ? employeeByCode.get(assignedRaw.toLowerCase()) : undefined;
+          if (assignedRaw && !assignedToId) {
+            results.push({ row: rowNum, status: 'error', message: `Employee code "${assignedRaw}" not found` });
+            continue;
+          }
+
+          const campaignRaw = String(row.campaign || '').trim();
+          const campaignId = campaignRaw ? campaignByName.get(campaignRaw.toLowerCase()) : undefined;
+          if (campaignRaw && !campaignId) {
+            results.push({ row: rowNum, status: 'error', message: `Campaign "${campaignRaw}" not found` });
+            continue;
+          }
+
+          const lead = await prisma.lead.create({
+            data: {
+              name,
+              phone,
+              email: row.email ? String(row.email).trim() : undefined,
+              source: row.source ? String(row.source).trim() : undefined,
+              courseInterest: row.courseInterest ? String(row.courseInterest).trim() : undefined,
+              notes: row.notes ? String(row.notes).trim() : undefined,
+              assignedToId,
+              campaignId,
+            },
+          });
+          existingPhones.add(phone);
+          results.push({ row: rowNum, status: 'created', leadId: lead.id });
+        } catch (rowErr) {
+          results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : 'Unknown error' });
+        }
+      }
+
+      const created = results.filter((r) => r.status === 'created').length;
+      res.status(201).json({ success: true, data: { results, created, failed: results.length - created } });
+    } catch (err) { next(err); }
+  },
+
   async createLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { name, phone, email, source, courseInterest, assignedToId, campaignId, notes } = req.body;

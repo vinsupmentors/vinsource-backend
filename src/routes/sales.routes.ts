@@ -11,6 +11,7 @@ router.get('/stats', salesController.stats);
 
 router.get('/leads', salesController.listLeads);
 router.post('/leads', requireModule('SALES', 'EDIT'), salesController.createLead);
+router.post('/leads/bulk', requireModule('SALES', 'EDIT'), salesController.bulkUploadLeads);
 router.put('/leads/:id', requireModule('SALES', 'EDIT'), salesController.updateLead);
 router.delete('/leads/:id', requireModule('SALES', 'ADMIN'), salesController.deleteLead);
 
