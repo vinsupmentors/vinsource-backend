@@ -588,6 +588,42 @@ export const salesController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Sales team roster for the Assign / Conducted by / Co-conducted by
+   * dropdowns — every active employee whose *effective* SALES access
+   * (department default, overridden per-user via Master Control) is EDIT or
+   * ADMIN. Plain VIEW-only accounts (e.g. an auditor) don't show up here,
+   * since they're not people leads/demos should actually be assigned to.
+   */
+  async listTeam(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employees = await prisma.employee.findMany({
+        where: { status: 'ACTIVE', isSystemAccount: false },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          employeeCode: true,
+          department: { select: { moduleAccessDefaults: { where: { module: 'SALES' }, select: { accessLevel: true } } } },
+          user: { select: { role: true, moduleAccessGrants: { where: { module: 'SALES' }, select: { accessLevel: true } } } },
+        },
+        orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+      });
+
+      const LEVEL_RANK: Record<string, number> = { NONE: 0, VIEW: 1, EDIT: 2, ADMIN: 3 };
+      const team = employees
+        .filter((e) => {
+          if (e.user?.role === 'SUPER_ADMIN') return true;
+          const override = e.user?.moduleAccessGrants?.[0]?.accessLevel;
+          const level = override ?? e.department?.moduleAccessDefaults?.[0]?.accessLevel;
+          return !!level && LEVEL_RANK[level] >= LEVEL_RANK.EDIT;
+        })
+        .map((e) => ({ id: e.id, firstName: e.firstName, lastName: e.lastName, employeeCode: e.employeeCode }));
+
+      res.json({ success: true, data: team });
+    } catch (err) { next(err); }
+  },
+
   /** Live "as of right now" snapshot for the Sales Pulse panel — same numbers the hourly/EOD emails use. */
   async pulse(_req: AuthRequest, res: Response, next: NextFunction) {
     try {

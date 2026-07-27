@@ -9,6 +9,7 @@ router.use(authenticate);
 router.use(requireModule('SALES', 'VIEW'));
 
 router.get('/stats', salesController.stats);
+router.get('/team', salesController.listTeam);
 
 router.get('/leads', salesController.listLeads);
 router.post('/leads', requireModule('SALES', 'EDIT'), salesController.createLead);
