@@ -525,6 +525,7 @@ model Employee {
   // CRM modules
   assignedLeads     Lead[]              @relation("LeadAssignee")
   demosConducted    Demo[]              @relation("DemoConductor")
+  demosCoConducted  Demo[]              @relation("DemoCoConductor")
   leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
   feeCollections    FeeCollection[]     @relation("FeeCollector")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
@@ -1307,14 +1308,42 @@ enum DemoStatus {
   CANCELLED
 }
 
+/// Outcome the BDA records once a demo is actually conducted — separate from
+/// DemoStatus (which tracks the demo's own lifecycle, not how it went).
+enum DemoOutcome {
+  NOT_INTERESTED
+  INTERESTED
+  FIFTY_FIFTY
+  NEED_FOLLOWUP
+}
+
 model Demo {
   id            String     @id @default(uuid())
+  bookingNumber String     @unique
   leadId        String
   scheduledAt   DateTime
   mode          DemoMode   @default(ONLINE)
   conductedById String?
   status        DemoStatus @default(SCHEDULED)
   feedback      String?    @db.Text
+
+  // ── Captured at booking time — the student intake form ───────────────────
+  city                    String?
+  educationQualification  String?
+  collegeName             String?
+  passedOutYear           Int?
+  currentStatus           String?
+  courseEnquired          String?
+  bookingComments         String? @db.Text
+
+  // ── Captured when rescheduling ────────────────────────────────────────────
+  rescheduleReason String? @db.Text
+
+  // ── Captured when marking conducted ───────────────────────────────────────
+  proofUrl        String?      // screenshot/photo proof the demo happened
+  outcome         DemoOutcome?
+  coConductedById String?      // a second sales rep who joined the demo, if any
+
   // When a demo is rescheduled, the original row is frozen with
   // status=RESCHEDULED and a new row is created pointing back here — so the
   // "was today's demo conducted or rescheduled" report has a real trail
@@ -1325,6 +1354,7 @@ model Demo {
 
   lead            Lead      @relation(fields: [leadId], references: [id])
   conductedBy     Employee? @relation("DemoConductor", fields: [conductedById], references: [id])
+  coConductedBy   Employee? @relation("DemoCoConductor", fields: [coConductedById], references: [id])
   rescheduledFrom Demo?     @relation("DemoReschedule", fields: [rescheduledFromId], references: [id])
   rescheduledTo   Demo?     @relation("DemoReschedule")
 }

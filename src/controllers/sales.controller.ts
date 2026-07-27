@@ -3,7 +3,7 @@ import { LeadStatus, LeadLostReason, DemoStatus } from '@prisma/client';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { paginate, formatPagination } from '../utils/helpers';
+import { paginate, formatPagination, nextDemoBookingNumber } from '../utils/helpers';
 import { computeSalesPulse } from '../services/salesPulse.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 
@@ -419,6 +419,7 @@ export const salesController = {
         include: {
           lead: { select: { id: true, name: true, phone: true } },
           conductedBy: { select: employeeSelect },
+          coConductedBy: { select: employeeSelect },
         },
         orderBy: { scheduledAt: 'desc' },
       });
@@ -428,13 +429,28 @@ export const salesController = {
 
   async createDemo(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { leadId, scheduledAt, mode, conductedById, status, feedback } = req.body;
+      const {
+        leadId, scheduledAt, mode, conductedById, status, feedback,
+        city, educationQualification, collegeName, passedOutYear, currentStatus, courseEnquired, bookingComments,
+      } = req.body;
       if (!leadId || !scheduledAt) throw new AppError('leadId and scheduledAt are required', 400);
       await assertLeadAccess(req, leadId);
 
+      const bookingNumber = await nextDemoBookingNumber(prisma);
+
       const [demo] = await prisma.$transaction([
         prisma.demo.create({
-          data: { leadId, scheduledAt: new Date(scheduledAt), mode, conductedById, status, feedback },
+          data: {
+            leadId, scheduledAt: new Date(scheduledAt), mode, conductedById, status, feedback,
+            bookingNumber,
+            city: city || undefined,
+            educationQualification: educationQualification || undefined,
+            collegeName: collegeName || undefined,
+            passedOutYear: passedOutYear ? Number(passedOutYear) : undefined,
+            currentStatus: currentStatus || undefined,
+            courseEnquired: courseEnquired || undefined,
+            bookingComments: bookingComments || undefined,
+          },
           include: { lead: true, conductedBy: { select: employeeSelect } },
         }),
         prisma.lead.update({ where: { id: leadId }, data: { status: 'DEMO_SCHEDULED' } }),
@@ -443,20 +459,46 @@ export const salesController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Also doubles as the "Mark Conducted" action (status=COMPLETED): that path
+   * requires an outcome and a proof photo/screenshot (the file upload —
+   * req.file — comes from the uploadDemoProof middleware on this route).
+   */
   async updateDemo(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const existingDemo = await prisma.demo.findUnique({ where: { id: req.params.id }, select: { leadId: true } });
+      const existingDemo = await prisma.demo.findUnique({
+        where: { id: req.params.id },
+        select: { leadId: true, proofUrl: true },
+      });
       if (!existingDemo) throw new AppError('Demo not found', 404);
       await assertLeadAccess(req, existingDemo.leadId);
 
-      const { scheduledAt, mode, conductedById, status, feedback } = req.body;
+      const { scheduledAt, mode, conductedById, status, feedback, outcome, coConductedById } = req.body;
+      const proofFile = req.file as Express.Multer.File | undefined;
+
+      if (status === 'COMPLETED') {
+        if (!outcome) {
+          throw new AppError('Pick an outcome (Not Interested / Interested / 50-50 / Need Follow-up) when marking a demo Conducted', 400);
+        }
+        if (!proofFile && !existingDemo.proofUrl) {
+          throw new AppError('A photo/screenshot proof is required to mark a demo Conducted', 400);
+        }
+      }
+
       const demo = await prisma.demo.update({
         where: { id: req.params.id },
         data: {
           scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
           mode, conductedById, status, feedback,
+          outcome: outcome || undefined,
+          coConductedById: coConductedById || undefined,
+          proofUrl: proofFile ? `/uploads/demo-proofs/${proofFile.filename}` : undefined,
         },
-        include: { lead: true, conductedBy: { select: employeeSelect } },
+        include: {
+          lead: true,
+          conductedBy: { select: employeeSelect },
+          coConductedBy: { select: employeeSelect },
+        },
       });
 
       if (status === 'COMPLETED') {
@@ -469,21 +511,26 @@ export const salesController = {
 
   /**
    * Reschedules a demo without losing the trail: the original row is frozen
-   * as RESCHEDULED (so "was today's demo conducted or rescheduled" reporting
-   * has a real record of what was originally planned) and a fresh SCHEDULED
-   * row is created pointing back at it via rescheduledFromId.
+   * as RESCHEDULED (with the reason recorded) so "was today's demo conducted
+   * or rescheduled" reporting has a real record of what was originally
+   * planned, and a fresh SCHEDULED row is created pointing back at it via
+   * rescheduledFromId. The student intake details carry forward — no need to
+   * re-enter city/qualification/etc. just because the slot moved.
    */
   async rescheduleDemo(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { scheduledAt, mode } = req.body;
+      const { scheduledAt, mode, reason } = req.body;
       if (!scheduledAt) throw new AppError('New scheduledAt is required', 400);
+      if (!reason) throw new AppError('A reason for rescheduling is required', 400);
 
       const original = await prisma.demo.findUnique({ where: { id: req.params.id } });
       if (!original) throw new AppError('Demo not found', 404);
       await assertLeadAccess(req, original.leadId);
 
+      const bookingNumber = await nextDemoBookingNumber(prisma);
+
       const [, , newDemo] = await prisma.$transaction([
-        prisma.demo.update({ where: { id: original.id }, data: { status: 'RESCHEDULED' } }),
+        prisma.demo.update({ where: { id: original.id }, data: { status: 'RESCHEDULED', rescheduleReason: reason } }),
         prisma.lead.update({ where: { id: original.leadId }, data: { status: 'DEMO_SCHEDULED' } }),
         prisma.demo.create({
           data: {
@@ -492,6 +539,14 @@ export const salesController = {
             mode: mode || original.mode,
             status: 'SCHEDULED',
             rescheduledFromId: original.id,
+            bookingNumber,
+            city: original.city,
+            educationQualification: original.educationQualification,
+            collegeName: original.collegeName,
+            passedOutYear: original.passedOutYear,
+            currentStatus: original.currentStatus,
+            courseEnquired: original.courseEnquired,
+            bookingComments: original.bookingComments,
           },
           include: { lead: true, conductedBy: { select: employeeSelect } },
         }),

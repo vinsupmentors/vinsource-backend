@@ -39,6 +39,26 @@ export async function nextEmployeeCode(db: {
   return `V${max + 1}`;
 }
 
+/**
+ * Generates the next sequential demo booking number (DEMO-000001, DEMO-000002,
+ * …). Scans existing booking numbers and returns max + 1 — same
+ * deletion-safe/edit-safe approach as nextEmployeeCode. Legacy-imported demo
+ * rows carry a DEMO-LEGACY-xxxxxxxx placeholder (see the
+ * 20260726140000_demo_intake_fields migration) which the regex below simply
+ * doesn't match, so they're ignored rather than corrupting the sequence.
+ */
+export async function nextDemoBookingNumber(db: {
+  demo: { findMany: (args: any) => Promise<{ bookingNumber: string }[]> };
+}): Promise<string> {
+  const rows = await db.demo.findMany({ select: { bookingNumber: true } });
+  let max = 0;
+  for (const r of rows) {
+    const m = /^DEMO-(\d{6,})$/.exec((r.bookingNumber || '').trim());
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return `DEMO-${String(max + 1).padStart(6, '0')}`;
+}
+
 /** Converts '' / null to undefined — for optional FK/enum fields on create. */
 export const orUndef = <T>(v: T | '' | null | undefined): T | undefined =>
   v === '' || v === null || v === undefined ? undefined : v;

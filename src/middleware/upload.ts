@@ -250,3 +250,21 @@ export const uploadOfferLetter = multer({
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 }).single('offerLetter');
+
+// ── Sales: proof-of-demo photo/screenshot, attached when marking a demo Conducted ──
+const DEMO_PROOF_DIR = path.join(process.cwd(), 'uploads', 'demo-proofs');
+if (!fs.existsSync(DEMO_PROOF_DIR)) fs.mkdirSync(DEMO_PROOF_DIR, { recursive: true });
+
+const demoProofStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, DEMO_PROOF_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
+  },
+});
+
+export const uploadDemoProof = multer({
+  storage: demoProofStorage,
+  fileFilter: imageOnlyFilter,
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
+}).single('proof');

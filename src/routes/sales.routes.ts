@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { salesController } from '../controllers/sales.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
+import { uploadDemoProof } from '../middleware/upload';
 
 const router = Router();
 router.use(authenticate);
@@ -21,7 +22,11 @@ router.post('/leads/:id/calls', requireModule('SALES', 'EDIT'), salesController.
 
 router.get('/demos', salesController.listDemos);
 router.post('/demos', requireModule('SALES', 'EDIT'), salesController.createDemo);
-router.put('/demos/:id', requireModule('SALES', 'EDIT'), salesController.updateDemo);
+// uploadDemoProof parses multipart bodies (Mark Conducted attaches a proof
+// photo); No Show/Cancel/reschedule-adjacent edits go through the same route
+// as a multipart request too, just without a file — multer passes those
+// through untouched.
+router.put('/demos/:id', requireModule('SALES', 'EDIT'), uploadDemoProof, salesController.updateDemo);
 router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesController.rescheduleDemo);
 
 // Sales Pulse / Lead Quality are management-level views (aggregate numbers
