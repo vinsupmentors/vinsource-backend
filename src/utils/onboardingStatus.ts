@@ -12,6 +12,10 @@ export interface OnboardingItem {
   signatureUrl?: string | null;
   photoUrl?: string | null;
   location?: string | null;
+  // The stamped, self-contained "signed copy" PDF — preferred for admin
+  // review over the raw signature/photo images when present. Null for rows
+  // signed before this existed, or if stamping failed at sign time.
+  signedPdfUrl?: string | null;
   feeDeclaration?: {
     guardianName: string | null;
     courseName: string | null;
@@ -62,6 +66,7 @@ export async function getOnboardingStatus(studentId: string) {
         signatureUrl: sig?.signatureUrl ?? null,
         photoUrl: sig?.photoUrl ?? null,
         location: sig?.location ?? null,
+        signedPdfUrl: sig?.signedPdfUrl ?? null,
       };
     });
 
@@ -74,6 +79,7 @@ export async function getOnboardingStatus(studentId: string) {
     signatureUrl: d.signatureUrl,
     photoUrl: d.photoUrl,
     location: d.location,
+    signedPdfUrl: d.signedPdfUrl,
     feeDeclaration: {
       guardianName: d.guardianName,
       courseName: d.courseName,

@@ -1,10 +1,16 @@
 import { Response, NextFunction } from 'express';
+import path from 'path';
+import fs from 'fs';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { computeGamification } from '../services/gamification.service';
 import { resolveIpLocation } from '../utils/ipGeolocation';
 import { getOnboardingStatus } from '../utils/onboardingStatus';
+import { stampSignatureOntoPdf, generateFeeDeclarationPdf } from '../utils/pdfStamp';
+
+const SIGNED_PDF_DIR = path.join(process.cwd(), 'uploads', 'onboarding-signed');
+if (!fs.existsSync(SIGNED_PDF_DIR)) fs.mkdirSync(SIGNED_PDF_DIR, { recursive: true });
 
 /** Every handler needs a real studentId before touching Prisma — a User with no
  * linked Student record (orphaned account, stale token) must get a clean 403,
@@ -177,6 +183,31 @@ export const studentPortalController = {
       const ip = req.ip;
       const location = await resolveIpLocation(ip);
 
+      const signatureFilePath = path.join(process.cwd(), 'uploads', 'onboarding-signatures', signatureFile.filename);
+      const photoFilePath = path.join(process.cwd(), 'uploads', 'onboarding-signatures', photoFile.filename);
+      const studentName = `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim() || 'Student';
+
+      // Stamp the signature + selfie onto the bottom of the last page of the
+      // actual signed template, so admins reviewing onboarding see one PDF
+      // instead of separate floating images. Never let a stamping failure
+      // block the student's signature from being recorded — signedPdfUrl
+      // just stays null and the raw signature/photo are still on file.
+      let signedPdfUrl: string | null = null;
+      try {
+        const templateFilePath = path.join(process.cwd(), 'uploads', 'onboarding-templates', path.basename(template.fileKey));
+        const sourceBytes = fs.readFileSync(templateFilePath);
+        const stamped = await stampSignatureOntoPdf(sourceBytes, signatureFilePath, photoFilePath, {
+          signedByName: studentName,
+          signedAt: new Date(),
+          location,
+        });
+        const outName = `${studentId}_${templateId}_${Date.now()}.pdf`;
+        fs.writeFileSync(path.join(SIGNED_PDF_DIR, outName), stamped);
+        signedPdfUrl = `/uploads/onboarding-signed/${outName}`;
+      } catch {
+        signedPdfUrl = null;
+      }
+
       await prisma.studentDocumentSignature.create({
         data: {
           studentId,
@@ -185,6 +216,7 @@ export const studentPortalController = {
           photoUrl: `/uploads/onboarding-signatures/${photoFile.filename}`,
           ipAddress: ip,
           location,
+          signedPdfUrl,
         },
       });
 
@@ -223,8 +255,40 @@ export const studentPortalController = {
       if (!declaration || declaration.studentId !== studentId) throw new AppError('Document not found', 404);
       if (declaration.signedAt) throw new AppError('This document has already been signed', 409);
 
+      const student = await prisma.student.findUnique({ where: { id: studentId } });
       const ip = req.ip;
       const location = await resolveIpLocation(ip);
+
+      const signatureFilePath = path.join(process.cwd(), 'uploads', 'onboarding-signatures', signatureFile.filename);
+      const photoFilePath = path.join(process.cwd(), 'uploads', 'onboarding-signatures', photoFile.filename);
+      const studentName = `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim() || 'Student';
+
+      // There's no source file for a fee declaration (it's admin-entered
+      // data, not an uploaded template) — generate the whole PDF fresh, then
+      // stamp the signature/photo onto it the same way as a template.
+      let signedPdfUrl: string | null = null;
+      try {
+        const rows = (Array.isArray(declaration.rows) ? declaration.rows : []) as {
+          date?: string; totalFee?: string; feesPaid?: string; amountDue?: string;
+        }[];
+        const baseBytes = await generateFeeDeclarationPdf({
+          studentName,
+          guardianName: declaration.guardianName,
+          courseName: declaration.courseName,
+          dueDate: declaration.dueDate,
+          rows,
+        });
+        const stamped = await stampSignatureOntoPdf(baseBytes, signatureFilePath, photoFilePath, {
+          signedByName: studentName,
+          signedAt: new Date(),
+          location,
+        });
+        const outName = `${studentId}_feedeclaration_${id}_${Date.now()}.pdf`;
+        fs.writeFileSync(path.join(SIGNED_PDF_DIR, outName), stamped);
+        signedPdfUrl = `/uploads/onboarding-signed/${outName}`;
+      } catch {
+        signedPdfUrl = null;
+      }
 
       await prisma.studentFeeDeclaration.update({
         where: { id },
@@ -234,6 +298,7 @@ export const studentPortalController = {
           ipAddress: ip,
           location,
           signedAt: new Date(),
+          signedPdfUrl,
         },
       });
 

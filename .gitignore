@@ -20,3 +20,7 @@ uploads/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local smoke-test scratch files (never meant to be committed)
+smoke*.mjs
+*.smoke.mjs

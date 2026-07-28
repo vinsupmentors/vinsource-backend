@@ -1657,6 +1657,10 @@ model StudentFeeDeclaration {
   photoUrl     String?
   ipAddress    String?
   location     String?
+  // Freshly-generated PDF (there's no source template for this one) with the
+  // signature + selfie photo stamped onto the bottom — same idea as
+  // StudentDocumentSignature.signedPdfUrl.
+  signedPdfUrl String?
   signedAt     DateTime?
 
   createdById String?
@@ -1678,6 +1682,10 @@ model StudentDocumentSignature {
   photoUrl     String
   ipAddress    String?
   location     String?  // "City, Region, Country" resolved server-side from ipAddress
+  // The original template PDF with the signature + selfie photo stamped onto
+  // the bottom of its last page — a single self-contained "signed copy" for
+  // admin review, generated at signing time via pdf-lib.
+  signedPdfUrl String?
   signedAt     DateTime @default(now())
 
   student  Student                    @relation(fields: [studentId], references: [id], onDelete: Cascade)
