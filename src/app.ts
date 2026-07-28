@@ -66,9 +66,30 @@ app.use('/api/auth', rateLimit({
   skip: () => isDev, // completely skip in dev
 }));
 
+// Serve uploaded files — force inline display (preview in browser) instead of forced download.
+// helmet() sets Cross-Origin-Resource-Policy: same-origin by default, which blocks the
+// frontend (a different origin in dev, e.g. localhost:5173) from rendering these images even
+// though the request succeeds (200). Relax CORP to cross-origin for this route only.
+//
+// Registered BEFORE the general API rate limiter, deliberately: many students in the same
+// batch commonly sit behind one shared mobile-carrier NAT IP in India, and reloading/re-viewing
+// onboarding document PDFs (this route) can add up fast across a whole cohort. Rate-limiting
+// that the same way as authenticated API calls risks locking out an entire batch's IP for the
+// rest of the 15-minute window over harmless, repeated static-file reads — exactly the
+// "Could not load this document" symptom students hit even on retry. Static file serving has
+// negligible abuse surface compared to auth/mutating endpoints, so it's exempted here.
+app.use('/uploads', (_req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, '..', 'uploads'), {
+  setHeaders: (res) => {
+    res.setHeader('Content-Disposition', 'inline');
+  },
+}));
+
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isDev ? 5000 : 1000, // raised from 500 → 1000
+  max: isDev ? 5000 : 3000, // raised from 1000 → 3000: shared-NAT mobile cohorts (many students, one carrier IP) can legitimately burst well past 1000/15min
   skip: () => isDev,
 }));
 
@@ -115,19 +136,6 @@ app.use('/api/appointment-letters', appointmentLetterRoutes);
 app.use('/api/departments', buildDepartmentRouter());
 app.use('/api/designations', buildDesignationRouter());
 app.use('/api/branches', buildBranchRouter());
-
-// Serve uploaded files — force inline display (preview in browser) instead of forced download.
-// helmet() sets Cross-Origin-Resource-Policy: same-origin by default, which blocks the
-// frontend (a different origin in dev, e.g. localhost:5173) from rendering these images even
-// though the request succeeds (200). Relax CORP to cross-origin for this route only.
-app.use('/uploads', (_req, res, next) => {
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  next();
-}, express.static(path.join(__dirname, '..', 'uploads'), {
-  setHeaders: (res) => {
-    res.setHeader('Content-Disposition', 'inline');
-  },
-}));
 
 // Error handling
 app.use(notFound);
