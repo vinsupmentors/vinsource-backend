@@ -1263,6 +1263,15 @@ model Lead {
   assignedToId   String?
   campaignId     String?
   notes          String?    @db.Text
+  // Student intake details — captured by the BDA during the call itself
+  // (Log a Call), not at demo-booking time. Whatever's on file here is
+  // copied onto the Demo row automatically when a demo is later scheduled,
+  // so nobody re-types the same info twice.
+  city                   String?
+  educationQualification String?
+  collegeName            String?
+  passedOutYear          Int?
+  currentStatus          String?
   // Denormalized off LeadCallLog for fast list-view sorting/filtering — every
   // call log entry refreshes lastContactAt, and carries the BDA's chosen
   // next-follow-up date forward into nextFollowUpAt ("Reminder" column).

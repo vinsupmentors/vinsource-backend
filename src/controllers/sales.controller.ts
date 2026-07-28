@@ -370,7 +370,10 @@ export const salesController = {
   async addCallLog(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await assertLeadAccess(req, req.params.id);
-      const { notes, nextFollowUpAt, status, lostReason } = req.body;
+      const {
+        notes, nextFollowUpAt, status, lostReason,
+        city, educationQualification, collegeName, passedOutYear, currentStatus,
+      } = req.body;
       if (!notes) throw new AppError('Call notes are required', 400);
       if (status === 'LOST' && !lostReason) {
         throw new AppError('A reason is required when marking a lead as Lost', 400);
@@ -393,6 +396,14 @@ export const salesController = {
             nextFollowUpAt: followUpValue,
             status: status || undefined,
             lostReason: status === 'LOST' ? lostReason : status !== undefined ? null : undefined,
+            // Student intake — collected during the call itself; whatever's
+            // sent here overwrites what's on file (a BDA correcting/filling in
+            // a detail on a later call), left untouched if omitted.
+            city: city !== undefined ? (city || null) : undefined,
+            educationQualification: educationQualification !== undefined ? (educationQualification || null) : undefined,
+            collegeName: collegeName !== undefined ? (collegeName || null) : undefined,
+            passedOutYear: passedOutYear !== undefined ? (passedOutYear ? Number(passedOutYear) : null) : undefined,
+            currentStatus: currentStatus !== undefined ? (currentStatus || null) : undefined,
           },
         }),
       ]);
@@ -431,12 +442,20 @@ export const salesController = {
 
   async createDemo(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const {
-        leadId, scheduledAt, mode, conductedById, status, feedback,
-        city, educationQualification, collegeName, passedOutYear, currentStatus, courseEnquired, bookingComments,
-      } = req.body;
+      const { leadId, scheduledAt, mode, conductedById, status, feedback } = req.body;
       if (!leadId || !scheduledAt) throw new AppError('leadId and scheduledAt are required', 400);
       await assertLeadAccess(req, leadId);
+
+      // Student intake is captured during the call (Log a Call), not here —
+      // pull whatever's already on file for this lead so the demo record
+      // still carries a full snapshot without asking the BDA to retype it.
+      const lead = await prisma.lead.findUnique({
+        where: { id: leadId },
+        select: {
+          city: true, educationQualification: true, collegeName: true,
+          passedOutYear: true, currentStatus: true, courseInterest: true,
+        },
+      });
 
       const bookingNumber = await nextDemoBookingNumber(prisma);
 
@@ -445,13 +464,12 @@ export const salesController = {
           data: {
             leadId, scheduledAt: new Date(scheduledAt), mode, conductedById, status, feedback,
             bookingNumber,
-            city: city || undefined,
-            educationQualification: educationQualification || undefined,
-            collegeName: collegeName || undefined,
-            passedOutYear: passedOutYear ? Number(passedOutYear) : undefined,
-            currentStatus: currentStatus || undefined,
-            courseEnquired: courseEnquired || undefined,
-            bookingComments: bookingComments || undefined,
+            city: lead?.city ?? undefined,
+            educationQualification: lead?.educationQualification ?? undefined,
+            collegeName: lead?.collegeName ?? undefined,
+            passedOutYear: lead?.passedOutYear ?? undefined,
+            currentStatus: lead?.currentStatus ?? undefined,
+            courseEnquired: lead?.courseInterest ?? undefined,
           },
           include: { lead: true, conductedBy: { select: employeeSelect } },
         }),
