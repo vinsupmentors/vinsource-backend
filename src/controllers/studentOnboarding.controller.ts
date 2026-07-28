@@ -4,8 +4,24 @@ import fs from 'fs';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { getOnboardingStatus } from '../utils/onboardingStatus';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
+
+const VALID_TRACKS = ['JRP', 'IOP', 'PAP'];
+
+/** Accepts either an array (JSON body) or a comma-separated string (multipart
+ * form field) and normalises to a clean array of valid StudentTrack values.
+ * Empty/invalid input becomes `[]`, which means "applies to every track". */
+function parseTracks(input: unknown): string[] {
+  if (Array.isArray(input)) {
+    return input.map((t) => String(t).trim().toUpperCase()).filter((t) => VALID_TRACKS.includes(t));
+  }
+  if (typeof input === 'string' && input.trim()) {
+    return input.split(',').map((t) => t.trim().toUpperCase()).filter((t) => VALID_TRACKS.includes(t));
+  }
+  return [];
+}
 
 export const studentOnboardingController = {
   // ── Document templates (admin-managed, reusable across every student) ──────
@@ -26,7 +42,7 @@ export const studentOnboardingController = {
     try {
       const file = req.file;
       if (!file) throw new AppError('A PDF file is required', 400);
-      const { title, order } = req.body;
+      const { title, order, applicableTracks } = req.body;
       if (!title) throw new AppError('Title is required', 400);
 
       const fileKey = `/uploads/onboarding-templates/${file.filename}`;
@@ -36,6 +52,7 @@ export const studentOnboardingController = {
           fileKey,
           fileUrl: fileKey,
           order: order ? Number(order) : 0,
+          applicableTracks: parseTracks(applicableTracks),
           createdById: req.user?.employeeId,
         },
       });
@@ -45,13 +62,14 @@ export const studentOnboardingController = {
 
   async updateTemplate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { title, order, isActive } = req.body;
+      const { title, order, isActive, applicableTracks } = req.body;
       const template = await prisma.onboardingDocumentTemplate.update({
         where: { id: req.params.id },
         data: {
           title: title !== undefined ? title : undefined,
           order: order !== undefined ? Number(order) : undefined,
           isActive: isActive !== undefined ? Boolean(isActive) : undefined,
+          applicableTracks: applicableTracks !== undefined ? parseTracks(applicableTracks) : undefined,
         },
       });
       res.json({ success: true, data: template });
@@ -204,6 +222,137 @@ export const studentOnboardingController = {
       });
 
       res.json({ success: true, data: { batch: { id: batch.id, code: batch.code, status: batch.status }, students } });
+    } catch (err) { next(err); }
+  },
+
+  // ── Approvals: the final gate before a student's dashboard unlocks ─────────
+  /** Students whose profile is complete and every currently-required
+   * document is signed, but who haven't yet been given final admin sign-off. */
+  async listApprovals(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const search = String(req.query.search || '').trim();
+      const candidates = await prisma.student.findMany({
+        where: {
+          profileCompletedAt: { not: null },
+          onboardingApprovedAt: null,
+          ...(search
+            ? {
+                OR: [
+                  { firstName: { contains: search } },
+                  { lastName: { contains: search } },
+                  { phone: { contains: search } },
+                  { studentCode: { contains: search } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: { profileCompletedAt: 'asc' },
+      });
+
+      const results = [];
+      for (const student of candidates) {
+        const status = await getOnboardingStatus(student.id);
+        if (status.allSigned) {
+          results.push({
+            id: student.id,
+            studentCode: student.studentCode,
+            firstName: student.firstName,
+            lastName: student.lastName,
+            phone: student.phone,
+            email: student.email,
+            photo: student.photo,
+            track: student.track,
+            profileCompletedAt: student.profileCompletedAt,
+            documentsCompletedAt: student.documentsCompletedAt,
+            requiredCount: status.requiredCount,
+          });
+        }
+      }
+      res.json({ success: true, data: results });
+    } catch (err) { next(err); }
+  },
+
+  /** Full profile + every required document's signed/pending status, for the review screen. */
+  async approvalDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const student = await prisma.student.findUnique({ where: { id: req.params.studentId } });
+      if (!student) throw new AppError('Student not found', 404);
+      const status = await getOnboardingStatus(student.id);
+      res.json({ success: true, data: { student, items: status.items, allSigned: status.allSigned } });
+    } catch (err) { next(err); }
+  },
+
+  /** Final sign-off — re-validated server-side so a stale frontend can never
+   * approve a student who still has an unsigned document. */
+  async approveStudent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = req.params.studentId;
+      const student = await prisma.student.findUnique({ where: { id: studentId } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (!student.profileCompletedAt) throw new AppError('This student has not completed their profile yet', 400);
+
+      const status = await getOnboardingStatus(studentId);
+      if (!status.allSigned) throw new AppError('This student still has unsigned documents', 400);
+
+      const updated = await prisma.student.update({
+        where: { id: studentId },
+        data: { onboardingApprovedAt: new Date(), onboardingApprovedById: req.user?.employeeId },
+      });
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  // ── Fee declarations: admin fills in per-student, student reads + signs ────
+  async listFeeDeclarations(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const declarations = await prisma.studentFeeDeclaration.findMany({
+        where: { studentId: req.params.studentId },
+        include: { createdBy: { select: employeeSelect } },
+        orderBy: { createdAt: 'desc' },
+      });
+      res.json({ success: true, data: declarations });
+    } catch (err) { next(err); }
+  },
+
+  /** Creating one re-locks the student's onboarding: a new required document
+   * just appeared, so they must sign it (and, if already approved, wait on a
+   * fresh admin approval) before their dashboard opens again. */
+  async createFeeDeclaration(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = req.params.studentId;
+      const { guardianName, courseName, dueDate, rows } = req.body;
+      const student = await prisma.student.findUnique({ where: { id: studentId } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (!Array.isArray(rows) || rows.length === 0) throw new AppError('At least one fee row is required', 400);
+
+      const declaration = await prisma.studentFeeDeclaration.create({
+        data: {
+          studentId,
+          guardianName: guardianName || undefined,
+          courseName: courseName || undefined,
+          dueDate: dueDate ? new Date(dueDate) : undefined,
+          rows,
+          createdById: req.user?.employeeId,
+        },
+      });
+
+      await prisma.student.update({
+        where: { id: studentId },
+        data: { documentsCompletedAt: null, onboardingApprovedAt: null, onboardingApprovedById: null },
+      });
+
+      res.status(201).json({ success: true, data: declaration });
+    } catch (err) { next(err); }
+  },
+
+  /** Only removable before the student has signed it — once signed it's part of the audit trail. */
+  async deleteFeeDeclaration(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const declaration = await prisma.studentFeeDeclaration.findUnique({ where: { id: req.params.id } });
+      if (!declaration) throw new AppError('Fee declaration not found', 404);
+      if (declaration.signedAt) throw new AppError('This has already been signed by the student and cannot be deleted', 400);
+      await prisma.studentFeeDeclaration.delete({ where: { id: req.params.id } });
+      res.json({ success: true });
     } catch (err) { next(err); }
   },
 };

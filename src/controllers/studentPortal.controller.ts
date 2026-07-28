@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { computeGamification } from '../services/gamification.service';
 import { resolveIpLocation } from '../utils/ipGeolocation';
+import { getOnboardingStatus } from '../utils/onboardingStatus';
 
 /** Every handler needs a real studentId before touching Prisma — a User with no
  * linked Student record (orphaned account, stale token) must get a clean 403,
@@ -35,6 +36,7 @@ export const studentPortalController = {
           aadharNumber: true, aadharPhoto: true, fatherName: true, fatherPhone: true, motherName: true, motherPhone: true,
           profileCompletedAt: true,
           documentsCompletedAt: true,
+          onboardingApprovedAt: true,
           user: { select: { email: true, mustChangePassword: true } },
         },
       });
@@ -62,10 +64,21 @@ export const studentPortalController = {
 
       // Mark the MIS complete the first time the student saves their profile.
       const completingNow = !existing.profileCompletedAt;
-      // If no document templates are configured yet, there's nothing to sign —
-      // don't block this student on a step that has no content. Once at least
-      // one template exists, new students must actually sign it.
-      const activeTemplateCount = completingNow ? await prisma.onboardingDocumentTemplate.count({ where: { isActive: true } }) : 0;
+      // If nothing is required for this student's track yet (no matching
+      // active templates, no fee declaration on file), there's nothing to
+      // sign — don't block them on a step that has no content.
+      let requiredCount = 0;
+      if (completingNow) {
+        const [templates, declarationCount] = await Promise.all([
+          prisma.onboardingDocumentTemplate.findMany({ where: { isActive: true } }),
+          prisma.studentFeeDeclaration.count({ where: { studentId: getStudentId(req) } }),
+        ]);
+        const requiredTemplateCount = templates.filter((t) => {
+          const tracks = Array.isArray(t.applicableTracks) ? (t.applicableTracks as unknown as string[]) : [];
+          return tracks.length === 0 || tracks.includes(existing.track);
+        }).length;
+        requiredCount = requiredTemplateCount + declarationCount;
+      }
 
       const student = await prisma.student.update({
         where: { id: getStudentId(req) },
@@ -78,7 +91,7 @@ export const studentPortalController = {
           aadharNumber: aadharNumber ? String(aadharNumber).replace(/\s/g, '') : undefined,
           fatherName, fatherPhone, motherName, motherPhone,
           profileCompletedAt: completingNow ? new Date() : undefined,
-          documentsCompletedAt: completingNow && activeTemplateCount === 0 ? new Date() : undefined,
+          documentsCompletedAt: completingNow && requiredCount === 0 ? new Date() : undefined,
         },
       });
       res.json({ success: true, data: student });
@@ -120,26 +133,8 @@ export const studentPortalController = {
    */
   async myOnboardingDocuments(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const studentId = getStudentId(req);
-      const [templates, signatures] = await Promise.all([
-        prisma.onboardingDocumentTemplate.findMany({
-          where: { isActive: true },
-          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
-        }),
-        prisma.studentDocumentSignature.findMany({ where: { studentId } }),
-      ]);
-      const signedByTemplate = new Map(signatures.map((s) => [s.templateId, s]));
-      const data = templates.map((t) => {
-        const sig = signedByTemplate.get(t.id);
-        return {
-          templateId: t.id,
-          title: t.title,
-          fileUrl: t.fileUrl,
-          signed: !!sig,
-          signedAt: sig?.signedAt ?? null,
-        };
-      });
-      res.json({ success: true, data });
+      const status = await getOnboardingStatus(getStudentId(req));
+      res.json({ success: true, data: status.items });
     } catch (err) { next(err); }
   },
 
@@ -160,8 +155,15 @@ export const studentPortalController = {
       if (!signatureFile) throw new AppError('A signature is required', 400);
       if (!photoFile) throw new AppError('A photo is required', 400);
 
-      const template = await prisma.onboardingDocumentTemplate.findUnique({ where: { id: templateId } });
+      const [template, student] = await Promise.all([
+        prisma.onboardingDocumentTemplate.findUnique({ where: { id: templateId } }),
+        prisma.student.findUnique({ where: { id: studentId } }),
+      ]);
       if (!template || !template.isActive) throw new AppError('This document is not available to sign', 404);
+      const tracks = Array.isArray(template.applicableTracks) ? (template.applicableTracks as unknown as string[]) : [];
+      if (tracks.length > 0 && student && !tracks.includes(student.track)) {
+        throw new AppError('This document does not apply to your program', 404);
+      }
 
       const existing = await prisma.studentDocumentSignature.findUnique({
         where: { studentId_templateId: { studentId, templateId } },
@@ -182,14 +184,58 @@ export const studentPortalController = {
         },
       });
 
-      // Once every currently-active template has a signature on file, mark
-      // this student's document step complete.
-      const [activeCount, signedCount] = await Promise.all([
-        prisma.onboardingDocumentTemplate.count({ where: { isActive: true } }),
-        prisma.studentDocumentSignature.count({ where: { studentId } }),
-      ]);
+      // Once every currently-required item (track-scoped templates + any fee
+      // declarations) has a signature on file, mark the document step complete.
+      const status = await getOnboardingStatus(studentId);
       let documentsCompletedAt: Date | null = null;
-      if (activeCount > 0 && signedCount >= activeCount) {
+      if (status.allSigned && status.requiredCount > 0) {
+        const updated = await prisma.student.update({
+          where: { id: studentId },
+          data: { documentsCompletedAt: new Date() },
+        });
+        documentsCompletedAt = updated.documentsCompletedAt;
+      }
+
+      res.status(201).json({ success: true, data: { location, documentsCompletedAt } });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Sign a per-student fee declaration (admin-filled, dynamic content) — same
+   * read-to-end + signature + selfie + IP flow as a template, just against a
+   * StudentFeeDeclaration row instead of a shared OnboardingDocumentTemplate.
+   */
+  async signFeeDeclaration(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { id } = req.params;
+      const files = req.files as { signature?: Express.Multer.File[]; photo?: Express.Multer.File[] } | undefined;
+      const signatureFile = files?.signature?.[0];
+      const photoFile = files?.photo?.[0];
+      if (!signatureFile) throw new AppError('A signature is required', 400);
+      if (!photoFile) throw new AppError('A photo is required', 400);
+
+      const declaration = await prisma.studentFeeDeclaration.findUnique({ where: { id } });
+      if (!declaration || declaration.studentId !== studentId) throw new AppError('Document not found', 404);
+      if (declaration.signedAt) throw new AppError('This document has already been signed', 409);
+
+      const ip = req.ip;
+      const location = await resolveIpLocation(ip);
+
+      await prisma.studentFeeDeclaration.update({
+        where: { id },
+        data: {
+          signatureUrl: `/uploads/onboarding-signatures/${signatureFile.filename}`,
+          photoUrl: `/uploads/onboarding-signatures/${photoFile.filename}`,
+          ipAddress: ip,
+          location,
+          signedAt: new Date(),
+        },
+      });
+
+      const status = await getOnboardingStatus(studentId);
+      let documentsCompletedAt: Date | null = null;
+      if (status.allSigned && status.requiredCount > 0) {
         const updated = await prisma.student.update({
           where: { id: studentId },
           data: { documentsCompletedAt: new Date() },

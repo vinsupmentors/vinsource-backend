@@ -548,6 +548,8 @@ model Employee {
   studentsCreated      Student[]            @relation("StudentCreator")
   batchesCreated       Batch[]              @relation("BatchCreator")
   onboardingDocsCreated OnboardingDocumentTemplate[] @relation("OnboardingDocCreator")
+  feeDeclarationsCreated StudentFeeDeclaration[]     @relation("FeeDeclarationCreator")
+  onboardingApprovals    Student[]                   @relation("OnboardingApprover")
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
   attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
@@ -1564,18 +1566,27 @@ model Student {
   motherName            String?
   motherPhone           String?
   profileCompletedAt    DateTime?
-  // Onboarding document signing — set once every active
-  // OnboardingDocumentTemplate has a matching StudentDocumentSignature row.
+  // Onboarding document signing — set once every currently-required item
+  // (track-scoped OnboardingDocumentTemplates + any StudentFeeDeclaration)
+  // has a matching signature.
   documentsCompletedAt  DateTime?
+  // Final admin sign-off in Student Onboarding → Approval — set only after
+  // a staff member reviews the completed profile + signed documents. The
+  // student's dashboard stays locked until this is set, even once every
+  // document is signed.
+  onboardingApprovedAt   DateTime?
+  onboardingApprovedById String?
 
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
-  user      User?     @relation(fields: [userId], references: [id])
-  lead      Lead?     @relation(fields: [leadId], references: [id])
-  createdBy Employee? @relation("StudentCreator", fields: [createdById], references: [id])
+  user             User?     @relation(fields: [userId], references: [id])
+  lead              Lead?     @relation(fields: [leadId], references: [id])
+  createdBy         Employee? @relation("StudentCreator", fields: [createdById], references: [id])
+  onboardingApprovedBy Employee? @relation("OnboardingApprover", fields: [onboardingApprovedById], references: [id])
 
   documentSignatures StudentDocumentSignature[]
+  feeDeclarations    StudentFeeDeclaration[]
   enrollments      StudentBatchEnrollment[]
   attendances      StudentAttendance[]
   moduleMarks      ModuleMark[]
@@ -1608,12 +1619,43 @@ model OnboardingDocumentTemplate {
   fileUrl     String
   isActive    Boolean  @default(true)
   order       Int      @default(0)
+  // Which StudentTrack(s) this document applies to, e.g. ["JRP"] or
+  // ["IOP", "PAP"] — null/empty means it applies to every track.
+  applicableTracks Json?
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   createdBy  Employee?                   @relation("OnboardingDocCreator", fields: [createdById], references: [id])
   signatures StudentDocumentSignature[]
+}
+
+/// A per-student fee-declaration document: an admin fills in the guardian
+/// name, course, due date, and a fee-schedule table for one specific student
+/// (unlike OnboardingDocumentTemplate, which is a shared PDF), then the
+/// student reads and signs it the same way as any other onboarding document.
+/// Only created when a student actually has pending dues — if none exists
+/// for a student, it's simply not part of their required-document list.
+model StudentFeeDeclaration {
+  id           String    @id @default(uuid())
+  studentId    String
+  guardianName String?
+  courseName   String?
+  dueDate      DateTime?
+  rows         Json // [{ date, totalFee, feesPaid, amountDue }, ...]
+
+  signatureUrl String?
+  photoUrl     String?
+  ipAddress    String?
+  location     String?
+  signedAt     DateTime?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdBy Employee? @relation("FeeDeclarationCreator", fields: [createdById], references: [id])
 }
 
 /// One row per student per document they've signed. Created only once the

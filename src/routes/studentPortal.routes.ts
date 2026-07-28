@@ -14,6 +14,7 @@ router.post('/photo', uploadStudentPhoto, studentPortalController.uploadPhoto);
 router.post('/aadhar-photo', uploadAadharPhoto, studentPortalController.uploadAadharPhoto);
 router.get('/onboarding-documents', studentPortalController.myOnboardingDocuments);
 router.post('/onboarding-documents/:templateId/sign', uploadOnboardingSignature, studentPortalController.signOnboardingDocument);
+router.post('/fee-declarations/:id/sign', uploadOnboardingSignature, studentPortalController.signFeeDeclaration);
 router.get('/enrollments', studentPortalController.myEnrollments);
 router.get('/attendance', studentPortalController.myAttendance);
 router.get('/marks', studentPortalController.myMarks);
