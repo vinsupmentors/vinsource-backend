@@ -598,7 +598,13 @@ export const salesController = {
   async listTeam(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employees = await prisma.employee.findMany({
-        where: { status: 'ACTIVE', isSystemAccount: false },
+        where: {
+          status: 'ACTIVE',
+          // Super Admin's own employee record is flagged isSystemAccount so it
+          // stays out of ordinary employee lists/counts — but it still needs to
+          // survive here so the SUPER_ADMIN bypass below can see it.
+          OR: [{ isSystemAccount: false }, { user: { role: 'SUPER_ADMIN' } }],
+        },
         select: {
           id: true,
           firstName: true,
