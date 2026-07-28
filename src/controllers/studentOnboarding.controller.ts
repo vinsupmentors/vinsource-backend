@@ -302,9 +302,14 @@ export const studentOnboardingController = {
     } catch (err) { next(err); }
   },
 
-  /** Sends the student back to fix their profile — reopens Step 2 without
-   * touching any document already signed. Clears itself the next time the
-   * student resubmits their profile (see studentPortal.controller.updateMe). */
+  /** Sends the student back to fix their profile — reopens Step 2 *and*
+   * Step 3 (documents). Signed-off documents are deleted rather than just
+   * unmarked: since the correction may change the very identity/info they
+   * were signed against (name, Aadhar, photo...), a stale signature can't be
+   * trusted as-is, so the student re-signs everything fresh once they
+   * resubmit. Fee declaration entries an admin already filled in are kept
+   * (guardianName/courseName/rows), just marked unsigned again. Clears
+   * itself the next time the student resubmits their profile. */
   async rejectStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const studentId = req.params.studentId;
@@ -313,15 +318,42 @@ export const studentOnboardingController = {
       if (!student) throw new AppError('Student not found', 404);
       if (!student.profileCompletedAt) throw new AppError('This student has not submitted a profile yet', 400);
 
-      const updated = await prisma.student.update({
-        where: { id: studentId },
-        data: {
-          profileCompletedAt: null,
-          rejectionReason: (reason && String(reason).trim()) || 'Please review and resubmit your details.',
-          onboardingRejectedAt: new Date(),
-          onboardingRejectedById: req.user?.employeeId,
-        },
-      });
+      const [oldSignatures, oldDeclarations] = await Promise.all([
+        prisma.studentDocumentSignature.findMany({ where: { studentId } }),
+        prisma.studentFeeDeclaration.findMany({ where: { studentId, signedAt: { not: null } } }),
+      ]);
+
+      // Best-effort cleanup of the now-invalid signed files — never let a
+      // filesystem hiccup block the actual reset below.
+      try {
+        for (const row of [...oldSignatures, ...oldDeclarations]) {
+          for (const url of [row.signatureUrl, row.photoUrl, row.signedPdfUrl]) {
+            if (!url) continue;
+            const filePath = path.join(process.cwd(), url.replace(/^\//, ''));
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          }
+        }
+      } catch { /* non-fatal — DB reset below is what actually matters */ }
+
+      await prisma.$transaction([
+        prisma.studentDocumentSignature.deleteMany({ where: { studentId } }),
+        prisma.studentFeeDeclaration.updateMany({
+          where: { studentId },
+          data: { signatureUrl: null, photoUrl: null, ipAddress: null, location: null, signedAt: null, signedPdfUrl: null },
+        }),
+        prisma.student.update({
+          where: { id: studentId },
+          data: {
+            profileCompletedAt: null,
+            documentsCompletedAt: null,
+            rejectionReason: (reason && String(reason).trim()) || 'Please review and resubmit your details.',
+            onboardingRejectedAt: new Date(),
+            onboardingRejectedById: req.user?.employeeId,
+          },
+        }),
+      ]);
+
+      const updated = await prisma.student.findUnique({ where: { id: studentId } });
       res.json({ success: true, data: updated });
     } catch (err) { next(err); }
   },
