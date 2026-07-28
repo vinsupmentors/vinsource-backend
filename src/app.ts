@@ -35,11 +35,19 @@ import productionRoutes from './routes/production.routes';
 import placementsRoutes from './routes/placements.routes';
 import digitalMarketingRoutes from './routes/digitalMarketing.routes';
 import studentPortalRoutes from './routes/studentPortal.routes';
+import studentOnboardingRoutes from './routes/studentOnboarding.routes';
 import trainerPortalRoutes from './routes/trainerPortal.routes';
 import publicRoutes from './routes/public.routes';
 import appointmentLetterRoutes from './routes/appointmentLetter.routes';
 
 const app = express();
+
+// Trust the nginx reverse proxy's X-Forwarded-For header so req.ip reflects
+// the real visitor IP (needed for rate-limit keying and, more importantly,
+// for resolving a student's location by IP during onboarding document
+// signing) instead of nginx's own loopback address. `1` = trust exactly one
+// hop, matching this app's single-nginx-in-front deployment.
+app.set('trust proxy', 1);
 
 // Security
 app.use(helmet());
@@ -99,6 +107,7 @@ app.use('/api/certificates', certificateRoutes);
 app.use('/api/production', productionRoutes);
 app.use('/api/placements', placementsRoutes);
 app.use('/api/digital-marketing', digitalMarketingRoutes);
+app.use('/api/student-onboarding', studentOnboardingRoutes);
 app.use('/api/student-portal', studentPortalRoutes);
 app.use('/api/trainer-portal', trainerPortalRoutes);
 app.use('/api/public', publicRoutes);

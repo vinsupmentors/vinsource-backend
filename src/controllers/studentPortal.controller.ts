@@ -3,6 +3,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { computeGamification } from '../services/gamification.service';
+import { resolveIpLocation } from '../utils/ipGeolocation';
 
 /** Every handler needs a real studentId before touching Prisma — a User with no
  * linked Student record (orphaned account, stale token) must get a clean 403,
@@ -33,6 +34,7 @@ export const studentPortalController = {
           emergencyContactName: true, emergencyContactPhone: true, education: true,
           aadharNumber: true, aadharPhoto: true, fatherName: true, fatherPhone: true, motherName: true, motherPhone: true,
           profileCompletedAt: true,
+          documentsCompletedAt: true,
           user: { select: { email: true, mustChangePassword: true } },
         },
       });
@@ -60,6 +62,10 @@ export const studentPortalController = {
 
       // Mark the MIS complete the first time the student saves their profile.
       const completingNow = !existing.profileCompletedAt;
+      // If no document templates are configured yet, there's nothing to sign —
+      // don't block this student on a step that has no content. Once at least
+      // one template exists, new students must actually sign it.
+      const activeTemplateCount = completingNow ? await prisma.onboardingDocumentTemplate.count({ where: { isActive: true } }) : 0;
 
       const student = await prisma.student.update({
         where: { id: getStudentId(req) },
@@ -72,6 +78,7 @@ export const studentPortalController = {
           aadharNumber: aadharNumber ? String(aadharNumber).replace(/\s/g, '') : undefined,
           fatherName, fatherPhone, motherName, motherPhone,
           profileCompletedAt: completingNow ? new Date() : undefined,
+          documentsCompletedAt: completingNow && activeTemplateCount === 0 ? new Date() : undefined,
         },
       });
       res.json({ success: true, data: student });
@@ -103,6 +110,94 @@ export const studentPortalController = {
         data: { aadharPhoto: aadharPhotoUrl },
       });
       res.json({ success: true, data: { aadharPhoto: student.aadharPhoto } });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Onboarding documents step (comes after profile completion, before the
+   * student is considered fully onboarded): every active document template,
+   * with this student's own signature status against each one.
+   */
+  async myOnboardingDocuments(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const [templates, signatures] = await Promise.all([
+        prisma.onboardingDocumentTemplate.findMany({
+          where: { isActive: true },
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
+        }),
+        prisma.studentDocumentSignature.findMany({ where: { studentId } }),
+      ]);
+      const signedByTemplate = new Map(signatures.map((s) => [s.templateId, s]));
+      const data = templates.map((t) => {
+        const sig = signedByTemplate.get(t.id);
+        return {
+          templateId: t.id,
+          title: t.title,
+          fileUrl: t.fileUrl,
+          signed: !!sig,
+          signedAt: sig?.signedAt ?? null,
+        };
+      });
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Record a signature for one document: the student must have already
+   * scrolled through the full PDF client-side (enforced in the UI, not
+   * re-verified here), drawn a signature, and had a selfie captured. IP and
+   * its resolved location are captured server-side from the request itself —
+   * never trusted from the client — so they can't be spoofed.
+   */
+  async signOnboardingDocument(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { templateId } = req.params;
+      const files = req.files as { signature?: Express.Multer.File[]; photo?: Express.Multer.File[] } | undefined;
+      const signatureFile = files?.signature?.[0];
+      const photoFile = files?.photo?.[0];
+      if (!signatureFile) throw new AppError('A signature is required', 400);
+      if (!photoFile) throw new AppError('A photo is required', 400);
+
+      const template = await prisma.onboardingDocumentTemplate.findUnique({ where: { id: templateId } });
+      if (!template || !template.isActive) throw new AppError('This document is not available to sign', 404);
+
+      const existing = await prisma.studentDocumentSignature.findUnique({
+        where: { studentId_templateId: { studentId, templateId } },
+      });
+      if (existing) throw new AppError('This document has already been signed', 409);
+
+      const ip = req.ip;
+      const location = await resolveIpLocation(ip);
+
+      await prisma.studentDocumentSignature.create({
+        data: {
+          studentId,
+          templateId,
+          signatureUrl: `/uploads/onboarding-signatures/${signatureFile.filename}`,
+          photoUrl: `/uploads/onboarding-signatures/${photoFile.filename}`,
+          ipAddress: ip,
+          location,
+        },
+      });
+
+      // Once every currently-active template has a signature on file, mark
+      // this student's document step complete.
+      const [activeCount, signedCount] = await Promise.all([
+        prisma.onboardingDocumentTemplate.count({ where: { isActive: true } }),
+        prisma.studentDocumentSignature.count({ where: { studentId } }),
+      ]);
+      let documentsCompletedAt: Date | null = null;
+      if (activeCount > 0 && signedCount >= activeCount) {
+        const updated = await prisma.student.update({
+          where: { id: studentId },
+          data: { documentsCompletedAt: new Date() },
+        });
+        documentsCompletedAt = updated.documentsCompletedAt;
+      }
+
+      res.status(201).json({ success: true, data: { location, documentsCompletedAt } });
     } catch (err) { next(err); }
   },
 

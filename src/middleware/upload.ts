@@ -268,3 +268,44 @@ export const uploadDemoProof = multer({
   fileFilter: imageOnlyFilter,
   limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
 }).single('proof');
+
+// ── Student Onboarding: reusable signed-document PDF templates (admin) ──────
+const ONBOARDING_TEMPLATE_DIR = path.join(process.cwd(), 'uploads', 'onboarding-templates');
+if (!fs.existsSync(ONBOARDING_TEMPLATE_DIR)) fs.mkdirSync(ONBOARDING_TEMPLATE_DIR, { recursive: true });
+
+const onboardingTemplateStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, ONBOARDING_TEMPLATE_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    cb(null, `${Date.now()}_${base}${ext}`);
+  },
+});
+
+export const uploadOnboardingTemplate = multer({
+  storage: onboardingTemplateStorage,
+  fileFilter: pdfOnlyFilter,
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+}).single('file');
+
+// ── Student Onboarding: signature drawing + selfie photo captured at signing time ──
+const ONBOARDING_SIGNATURE_DIR = path.join(process.cwd(), 'uploads', 'onboarding-signatures');
+if (!fs.existsSync(ONBOARDING_SIGNATURE_DIR)) fs.mkdirSync(ONBOARDING_SIGNATURE_DIR, { recursive: true });
+
+const onboardingSignatureStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, ONBOARDING_SIGNATURE_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.png';
+    const studentId = (req as Request & { user?: { studentId?: string } }).user?.studentId || 'unknown';
+    cb(null, `${studentId}_${Date.now()}_${file.fieldname}${ext}`);
+  },
+});
+
+export const uploadOnboardingSignature = multer({
+  storage: onboardingSignatureStorage,
+  fileFilter: imageOnlyFilter,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+}).fields([
+  { name: 'signature', maxCount: 1 },
+  { name: 'photo', maxCount: 1 },
+]);

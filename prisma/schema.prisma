@@ -219,6 +219,7 @@ enum ModuleName {
   PLACEMENTS
   DIGITAL_MARKETING
   CERTIFICATES
+  STUDENT_ONBOARDING
 }
 
 enum AccessLevel {
@@ -546,6 +547,7 @@ model Employee {
   // Student Academy
   studentsCreated      Student[]            @relation("StudentCreator")
   batchesCreated       Batch[]              @relation("BatchCreator")
+  onboardingDocsCreated OnboardingDocumentTemplate[] @relation("OnboardingDocCreator")
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
   attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
@@ -1562,6 +1564,9 @@ model Student {
   motherName            String?
   motherPhone           String?
   profileCompletedAt    DateTime?
+  // Onboarding document signing — set once every active
+  // OnboardingDocumentTemplate has a matching StudentDocumentSignature row.
+  documentsCompletedAt  DateTime?
 
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
@@ -1570,6 +1575,7 @@ model Student {
   lead      Lead?     @relation(fields: [leadId], references: [id])
   createdBy Employee? @relation("StudentCreator", fields: [createdById], references: [id])
 
+  documentSignatures StudentDocumentSignature[]
   enrollments      StudentBatchEnrollment[]
   attendances      StudentAttendance[]
   moduleMarks      ModuleMark[]
@@ -1588,6 +1594,45 @@ model Student {
 
   softskillAttendances SoftskillAttendance[]
   driveCandidacies     PlacementDriveCandidate[]
+}
+
+/// A reusable PDF (Enrollment Agreement, Code of Conduct, etc.) every student
+/// must read and sign during onboarding. Uploaded once by an admin; every
+/// active row here applies to every student. Deactivating one (rather than
+/// deleting it) keeps historical signatures intact for students who already
+/// signed the old version.
+model OnboardingDocumentTemplate {
+  id          String   @id @default(uuid())
+  title       String
+  fileKey     String
+  fileUrl     String
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy  Employee?                   @relation("OnboardingDocCreator", fields: [createdById], references: [id])
+  signatures StudentDocumentSignature[]
+}
+
+/// One row per student per document they've signed. Created only once the
+/// student has scrolled through the full PDF, drawn a signature, and had a
+/// selfie photo captured — the presence of this row *is* "signed".
+model StudentDocumentSignature {
+  id           String   @id @default(uuid())
+  studentId    String
+  templateId   String
+  signatureUrl String
+  photoUrl     String
+  ipAddress    String?
+  location     String?  // "City, Region, Country" resolved server-side from ipAddress
+  signedAt     DateTime @default(now())
+
+  student  Student                    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  template OnboardingDocumentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, templateId])
 }
 
 // One of the 6 standard courses (Data Analytics, MERN Stack, Digital

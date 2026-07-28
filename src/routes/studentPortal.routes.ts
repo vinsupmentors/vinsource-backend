@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { studentPortalController } from '../controllers/studentPortal.controller';
 import { authenticate } from '../middleware/auth';
 import { requireStudent } from '../middleware/rbac';
-import { uploadStudentPhoto, uploadAadharPhoto, uploadProjectSubmission } from '../middleware/upload';
+import { uploadStudentPhoto, uploadAadharPhoto, uploadProjectSubmission, uploadOnboardingSignature } from '../middleware/upload';
 
 const router = Router();
 router.use(authenticate);
@@ -12,6 +12,8 @@ router.get('/me', studentPortalController.me);
 router.put('/me', studentPortalController.updateMe);
 router.post('/photo', uploadStudentPhoto, studentPortalController.uploadPhoto);
 router.post('/aadhar-photo', uploadAadharPhoto, studentPortalController.uploadAadharPhoto);
+router.get('/onboarding-documents', studentPortalController.myOnboardingDocuments);
+router.post('/onboarding-documents/:templateId/sign', uploadOnboardingSignature, studentPortalController.signOnboardingDocument);
 router.get('/enrollments', studentPortalController.myEnrollments);
 router.get('/attendance', studentPortalController.myAttendance);
 router.get('/marks', studentPortalController.myMarks);
