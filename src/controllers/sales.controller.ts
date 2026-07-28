@@ -257,8 +257,10 @@ export const salesController = {
             else if (legacyStatusKey.startsWith('demo conducted') || legacyStatusKey.includes('appointment over')) demoStatus = DemoStatus.COMPLETED;
             else if (demoDate.getTime() < Date.now()) demoStatus = DemoStatus.COMPLETED;
 
+            const bookingNumber = await nextDemoBookingNumber(prisma);
             await prisma.demo.create({
               data: {
+                bookingNumber,
                 leadId: lead.id,
                 scheduledAt: demoDate,
                 mode: demoModeRaw === 'online' ? 'ONLINE' : 'OFFLINE',
