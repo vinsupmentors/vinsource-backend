@@ -7,6 +7,11 @@ export interface OnboardingItem {
   signed: boolean;
   signedAt: Date | null;
   fileUrl?: string;
+  // Present only once signed — the actual proof captured at signing time,
+  // surfaced for admin review in the Approval screen.
+  signatureUrl?: string | null;
+  photoUrl?: string | null;
+  location?: string | null;
   feeDeclaration?: {
     guardianName: string | null;
     courseName: string | null;
@@ -54,6 +59,9 @@ export async function getOnboardingStatus(studentId: string) {
         fileUrl: t.fileUrl,
         signed: !!sig,
         signedAt: sig?.signedAt ?? null,
+        signatureUrl: sig?.signatureUrl ?? null,
+        photoUrl: sig?.photoUrl ?? null,
+        location: sig?.location ?? null,
       };
     });
 
@@ -63,6 +71,9 @@ export async function getOnboardingStatus(studentId: string) {
     title: 'Student Declaration Form for Pending Fee Payment',
     signed: !!d.signedAt,
     signedAt: d.signedAt,
+    signatureUrl: d.signatureUrl,
+    photoUrl: d.photoUrl,
+    location: d.location,
     feeDeclaration: {
       guardianName: d.guardianName,
       courseName: d.courseName,
