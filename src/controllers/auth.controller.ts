@@ -17,7 +17,7 @@ export const authController = {
         where: { email: email.toLowerCase() },
         include: {
           employee: { select: { id: true, companyId: true, firstName: true, lastName: true, profilePhoto: true } },
-          student: { select: { id: true, studentCode: true, firstName: true, lastName: true, status: true, track: true, profileCompletedAt: true, documentsCompletedAt: true, onboardingApprovedAt: true } },
+          student: { select: { id: true, studentCode: true, firstName: true, lastName: true, status: true, track: true, profileCompletedAt: true, documentsCompletedAt: true, onboardingApprovedAt: true, rejectionReason: true } },
         },
       });
 

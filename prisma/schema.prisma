@@ -550,6 +550,7 @@ model Employee {
   onboardingDocsCreated OnboardingDocumentTemplate[] @relation("OnboardingDocCreator")
   feeDeclarationsCreated StudentFeeDeclaration[]     @relation("FeeDeclarationCreator")
   onboardingApprovals    Student[]                   @relation("OnboardingApprover")
+  onboardingRejections   Student[]                   @relation("OnboardingRejector")
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
   attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
@@ -1576,6 +1577,13 @@ model Student {
   // document is signed.
   onboardingApprovedAt   DateTime?
   onboardingApprovedById String?
+  // Admin sent the profile back for correction — clears profileCompletedAt so
+  // the student re-enters Step 2 (edit details) on next login. Cleared again
+  // once they resubmit. Already-signed documents are left alone; only the
+  // profile step is reopened.
+  rejectionReason        String?   @db.Text
+  onboardingRejectedAt   DateTime?
+  onboardingRejectedById String?
 
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
@@ -1584,6 +1592,7 @@ model Student {
   lead              Lead?     @relation(fields: [leadId], references: [id])
   createdBy         Employee? @relation("StudentCreator", fields: [createdById], references: [id])
   onboardingApprovedBy Employee? @relation("OnboardingApprover", fields: [onboardingApprovedById], references: [id])
+  onboardingRejectedBy Employee? @relation("OnboardingRejector", fields: [onboardingRejectedById], references: [id])
 
   documentSignatures StudentDocumentSignature[]
   feeDeclarations    StudentFeeDeclaration[]

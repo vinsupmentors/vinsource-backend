@@ -302,6 +302,30 @@ export const studentOnboardingController = {
     } catch (err) { next(err); }
   },
 
+  /** Sends the student back to fix their profile — reopens Step 2 without
+   * touching any document already signed. Clears itself the next time the
+   * student resubmits their profile (see studentPortal.controller.updateMe). */
+  async rejectStudent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = req.params.studentId;
+      const { reason } = req.body;
+      const student = await prisma.student.findUnique({ where: { id: studentId } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (!student.profileCompletedAt) throw new AppError('This student has not submitted a profile yet', 400);
+
+      const updated = await prisma.student.update({
+        where: { id: studentId },
+        data: {
+          profileCompletedAt: null,
+          rejectionReason: (reason && String(reason).trim()) || 'Please review and resubmit your details.',
+          onboardingRejectedAt: new Date(),
+          onboardingRejectedById: req.user?.employeeId,
+        },
+      });
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
   // ── Fee declarations: admin fills in per-student, student reads + signs ────
   async listFeeDeclarations(req: AuthRequest, res: Response, next: NextFunction) {
     try {

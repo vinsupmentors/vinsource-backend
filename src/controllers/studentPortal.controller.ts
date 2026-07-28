@@ -37,6 +37,7 @@ export const studentPortalController = {
           profileCompletedAt: true,
           documentsCompletedAt: true,
           onboardingApprovedAt: true,
+          rejectionReason: true,
           user: { select: { email: true, mustChangePassword: true } },
         },
       });
@@ -92,6 +93,9 @@ export const studentPortalController = {
           fatherName, fatherPhone, motherName, motherPhone,
           profileCompletedAt: completingNow ? new Date() : undefined,
           documentsCompletedAt: completingNow && requiredCount === 0 ? new Date() : undefined,
+          // Resubmitting clears any earlier rejection — it's been addressed.
+          rejectionReason: completingNow ? null : undefined,
+          onboardingRejectedAt: completingNow ? null : undefined,
         },
       });
       res.json({ success: true, data: student });

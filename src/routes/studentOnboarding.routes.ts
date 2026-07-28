@@ -19,6 +19,7 @@ router.get('/batches/:id/students', studentOnboardingController.batchStudents);
 router.get('/approvals', studentOnboardingController.listApprovals);
 router.get('/approvals/:studentId', studentOnboardingController.approvalDetail);
 router.post('/approvals/:studentId/approve', requireModule('STUDENT_ONBOARDING', 'EDIT'), studentOnboardingController.approveStudent);
+router.post('/approvals/:studentId/reject', requireModule('STUDENT_ONBOARDING', 'EDIT'), studentOnboardingController.rejectStudent);
 
 router.get('/students/:studentId/fee-declarations', studentOnboardingController.listFeeDeclarations);
 router.post('/students/:studentId/fee-declarations', requireModule('STUDENT_ONBOARDING', 'EDIT'), studentOnboardingController.createFeeDeclaration);
