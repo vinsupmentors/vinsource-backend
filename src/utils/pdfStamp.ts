@@ -21,6 +21,8 @@ export interface HeaderField {
 }
 
 interface FieldPosition {
+  /** 0-indexed page, matching pdf-lib's pdfDoc.getPages() array. */
+  page: number;
   x: number;
   y: number;
 }
@@ -28,46 +30,67 @@ interface FieldPosition {
 type TextItem = { str: string; width?: number; transform: number[] };
 
 /**
- * Locate the blank line following a given label on a template's first page,
- * e.g. finds where "____________" sits right after "Student Name:" so we can
- * draw the actual value on top of it. Works for any template that follows
- * the "Label: ____" convention used by the onboarding agreement PDFs —
- * template-agnostic, so a newly uploaded template with the same convention
- * is filled in automatically without any code change.
+ * Locate the blank line following a given label anywhere in a template
+ * (e.g. finds where "____________" sits right after "Student Name:" on page
+ * 1, but also "Name of Student:" in a Declaration section on the last page)
+ * so we can draw the actual value on top of it. Works for any template that
+ * follows the "Label: ____" convention used by the onboarding agreement
+ * PDFs — template-agnostic, so a newly uploaded template with the same
+ * convention is filled in automatically without any code change.
  *
  * Falls back to "right after the last item on the same line" when a label
  * has no underscore blank at all (e.g. this template's "Total Program Fee:"
  * line ends at "₹" with no visible rule) — the value still lands in a
  * sensible spot instead of being silently dropped.
+ *
+ * Scans every page rather than just the first — declaration sections near
+ * the signature often repeat "Name of Student:"-style fields on the last
+ * page of a multi-page agreement.
  */
 async function locateFieldPositions(pdfBytes: Buffer, labels: string[]): Promise<Map<string, FieldPosition>> {
   const result = new Map<string, FieldPosition>();
   try {
     const doc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise;
-    const page = await doc.getPage(1);
-    const content = await page.getTextContent();
-    const items = content.items as TextItem[];
+    const remaining = new Set(labels);
 
-    for (const label of labels) {
-      const idx = items.findIndex((it) => it.str.trim() === label);
-      if (idx === -1) continue;
-      const labelY = items[idx].transform[5];
+    for (let pageNum = 1; pageNum <= doc.numPages && remaining.size > 0; pageNum++) {
+      const page = await doc.getPage(pageNum);
+      const content = await page.getTextContent();
+      const items = content.items as TextItem[];
 
-      let blank: TextItem | undefined;
-      let lastOnLine: TextItem = items[idx];
-      for (let j = idx + 1; j < items.length; j++) {
-        const item = items[j];
-        if (Math.abs(item.transform[5] - labelY) > 1) break; // moved to a new line
-        lastOnLine = item;
-        if (item.str && /_{3,}/.test(item.str)) { blank = item; break; }
-      }
+      for (const label of Array.from(remaining)) {
+        const idx = items.findIndex((it) => it.str.trim() === label);
+        if (idx === -1) continue;
+        const labelY = items[idx].transform[5];
 
-      if (blank) {
-        result.set(label, { x: blank.transform[4], y: labelY });
-      } else if (lastOnLine !== items[idx]) {
-        // No blank line found, but something (e.g. "₹") follows the label —
-        // place the value right after it instead of dropping it.
-        result.set(label, { x: lastOnLine.transform[4] + (lastOnLine.width || 8), y: labelY });
+        let blank: TextItem | undefined;
+        let lastOnLine: TextItem = items[idx];
+        for (let j = idx + 1; j < items.length; j++) {
+          const item = items[j];
+          if (Math.abs(item.transform[5] - labelY) > 1) break; // moved to a new line
+          lastOnLine = item;
+          if (item.str && /_{3,}/.test(item.str)) { blank = item; break; }
+        }
+
+        if (blank) {
+          result.set(label, { page: pageNum - 1, x: blank.transform[4], y: labelY });
+          remaining.delete(label);
+        } else if (lastOnLine !== items[idx]) {
+          // No blank line found, but something (e.g. "₹") follows the label —
+          // place the value right after it instead of dropping it.
+          result.set(label, { page: pageNum - 1, x: lastOnLine.transform[4] + (lastOnLine.width || 8), y: labelY });
+          remaining.delete(label);
+        } else {
+          // Label is completely alone on its line — no underscore run, no
+          // trailing text at all. Some templates draw the blank as a plain
+          // vector line/rectangle rather than underscore characters (invisible
+          // to text extraction), so there's nothing to anchor to. Fall back to
+          // placing the value right after the label's own rendered width.
+          const labelItem = items[idx];
+          const estimatedWidth = labelItem.width ?? label.length * 5.5;
+          result.set(label, { page: pageNum - 1, x: labelItem.transform[4] + estimatedWidth + 6, y: labelY });
+          remaining.delete(label);
+        }
       }
     }
   } catch {
@@ -79,25 +102,28 @@ async function locateFieldPositions(pdfBytes: Buffer, labels: string[]): Promise
 
 /**
  * Locate a "☐"/"□" checkbox glyph immediately preceding a given choice label
- * on the first page, e.g. the box right before the word "Offline" in
+ * anywhere in the document, e.g. the box right before the word "Offline" in
  * "Training Mode: ☐ Offline ☐ Online" — so a selected choice can be marked
  * with an "X" over it.
  */
 async function locateCheckboxPosition(pdfBytes: Buffer, choiceLabel: string): Promise<FieldPosition | undefined> {
   try {
     const doc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise;
-    const page = await doc.getPage(1);
-    const content = await page.getTextContent();
-    const items = content.items as TextItem[];
 
-    const idx = items.findIndex((it) => it.str.trim() === choiceLabel);
-    if (idx === -1) return undefined;
-    const labelY = items[idx].transform[5];
-    for (let j = idx - 1; j >= 0; j--) {
-      const item = items[j];
-      if (Math.abs(item.transform[5] - labelY) > 1) break; // moved to a previous line
-      if (item.str && /[☐□]/.test(item.str)) {
-        return { x: item.transform[4], y: item.transform[5] };
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+      const page = await doc.getPage(pageNum);
+      const content = await page.getTextContent();
+      const items = content.items as TextItem[];
+
+      const idx = items.findIndex((it) => it.str.trim() === choiceLabel);
+      if (idx === -1) continue;
+      const labelY = items[idx].transform[5];
+      for (let j = idx - 1; j >= 0; j--) {
+        const item = items[j];
+        if (Math.abs(item.transform[5] - labelY) > 1) break; // moved to a previous line
+        if (item.str && /[☐□]/.test(item.str)) {
+          return { page: pageNum - 1, x: item.transform[4], y: item.transform[5] };
+        }
       }
     }
   } catch {
@@ -133,7 +159,7 @@ export async function stampSignatureOntoPdf(
   photoPath: string,
   meta: StampMeta,
   headerFields?: HeaderField[],
-  /** e.g. "Offline" or "Online" — marks the matching "☐ Offline ☐ Online"-style checkbox on page 1. */
+  /** e.g. "Offline" or "Online" — marks the matching "☐ Offline ☐ Online"-style checkbox, wherever it appears. */
   checkboxChoice?: string
 ): Promise<Buffer> {
   const pdfDoc = await PDFDocument.load(new Uint8Array(sourcePdfBytes));
@@ -143,15 +169,16 @@ export async function stampSignatureOntoPdf(
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-  // Fill in Student Name / ID / Mobile / Email etc. on the first page, on
-  // top of their blank lines, before adding the signature block below.
+  // Fill in Student Name / ID / Mobile / Email / Course / Fee etc. wherever
+  // their blank line appears — page 1 enrollment section, or a repeated
+  // "Name of Student:" style field in a Declaration section further on —
+  // before adding the signature block below.
   if (headerFields && headerFields.length > 0) {
     const positions = await locateFieldPositions(sourcePdfBytes, headerFields.map((f) => f.label));
-    const firstPage = pages[0];
     for (const field of headerFields) {
       const pos = positions.get(field.label);
       if (!pos || !field.value) continue;
-      firstPage.drawText(field.value, { x: pos.x + 2, y: pos.y + 2, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+      pages[pos.page]?.drawText(field.value, { x: pos.x + 2, y: pos.y + 2, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
     }
   }
 
@@ -159,8 +186,7 @@ export async function stampSignatureOntoPdf(
   if (checkboxChoice) {
     const checkboxPos = await locateCheckboxPosition(sourcePdfBytes, checkboxChoice);
     if (checkboxPos) {
-      const firstPage = pages[0];
-      firstPage.drawText('X', { x: checkboxPos.x + 1, y: checkboxPos.y + 0.5, size: 8, font: boldFont, color: rgb(0, 0, 0) });
+      pages[checkboxPos.page]?.drawText('X', { x: checkboxPos.x + 1, y: checkboxPos.y + 0.5, size: 8, font: boldFont, color: rgb(0, 0, 0) });
     }
   }
 

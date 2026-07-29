@@ -220,6 +220,11 @@ export const studentPortalController = {
             { label: 'Amount Paid:', value: money(student?.amountPaid) },
             { label: 'Balance Amount:', value: money(student?.balanceAmount) },
             { label: 'Payment Mode:', value: student?.paymentMode ?? '' },
+            // Declaration section near the signature repeats some of the
+            // same details under different label text — same values, found
+            // wherever they appear since locateFieldPositions scans every page.
+            { label: 'Name of Student:', value: studentName },
+            { label: 'Course Enrolled:', value: enrollment?.schedule.course.name ?? '' },
           ],
           student?.trainingMode ?? undefined
         );
