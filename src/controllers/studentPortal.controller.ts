@@ -8,9 +8,46 @@ import { computeGamification } from '../services/gamification.service';
 import { resolveIpLocation } from '../utils/ipGeolocation';
 import { getOnboardingStatus } from '../utils/onboardingStatus';
 import { stampSignatureOntoPdf, generateFeeDeclarationPdf } from '../utils/pdfStamp';
+import { emailService } from '../services/email.service';
 
 const SIGNED_PDF_DIR = path.join(process.cwd(), 'uploads', 'onboarding-signed');
 if (!fs.existsSync(SIGNED_PDF_DIR)) fs.mkdirSync(SIGNED_PDF_DIR, { recursive: true });
+
+// Ops mailbox that gets a copy of every signed onboarding document, in
+// addition to the student's own copy — per-student email is skipped if
+// there's no real inbox to send to (e.g. a placeholder ".local" address),
+// but the ops copy always goes out regardless.
+const ONBOARDING_OPS_EMAIL = 'opsvinsup@gmail.com';
+
+/**
+ * Emails the freshly-stamped signed PDF to the student (their own copy) and
+ * to the ops mailbox, once signing succeeds. Fire-and-forget — never blocks
+ * or fails the signing request itself; a failed email is just logged.
+ */
+function sendSignedDocumentEmail(opts: { studentName: string; studentEmail?: string | null; documentTitle: string; signedPdfAbsolutePath: string }) {
+  try {
+    const pdfBytes = fs.readFileSync(opts.signedPdfAbsolutePath);
+    const studentEmail = (opts.studentEmail || '').trim();
+    const hasRealStudentInbox = !!studentEmail && !studentEmail.endsWith('.local');
+    const html = `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;">
+        <h2 style="color:#1e40af;">Document Signed</h2>
+        <p><strong>${opts.studentName}</strong> has signed <strong>${opts.documentTitle}</strong>.</p>
+        <p>A copy of the signed document is attached.</p>
+      </div>
+    `;
+    emailService.send({
+      to: hasRealStudentInbox ? studentEmail : ONBOARDING_OPS_EMAIL,
+      cc: hasRealStudentInbox ? ONBOARDING_OPS_EMAIL : undefined,
+      subject: `Signed: ${opts.documentTitle} — ${opts.studentName}`,
+      html,
+      template: 'signed_onboarding_document',
+      attachments: [{ filename: `${opts.documentTitle.replace(/[^a-z0-9]+/gi, '_')}.pdf`, content: pdfBytes, contentType: 'application/pdf' }],
+    }).catch((err) => console.error('Signed document email failed:', err));
+  } catch (err) {
+    console.error('Signed document email: failed to read PDF file:', err);
+  }
+}
 
 /** Every handler needs a real studentId before touching Prisma — a User with no
  * linked Student record (orphaned account, stale token) must get a clean 403,
@@ -229,8 +266,10 @@ export const studentPortalController = {
           student?.trainingMode ?? undefined
         );
         const outName = `${studentId}_${templateId}_${Date.now()}.pdf`;
-        fs.writeFileSync(path.join(SIGNED_PDF_DIR, outName), stamped);
+        const outPath = path.join(SIGNED_PDF_DIR, outName);
+        fs.writeFileSync(outPath, stamped);
         signedPdfUrl = `/uploads/onboarding-signed/${outName}`;
+        sendSignedDocumentEmail({ studentName, studentEmail: student?.email, documentTitle: template.title, signedPdfAbsolutePath: outPath });
       } catch {
         signedPdfUrl = null;
       }
@@ -311,8 +350,10 @@ export const studentPortalController = {
           location,
         });
         const outName = `${studentId}_feedeclaration_${id}_${Date.now()}.pdf`;
-        fs.writeFileSync(path.join(SIGNED_PDF_DIR, outName), stamped);
+        const outPath = path.join(SIGNED_PDF_DIR, outName);
+        fs.writeFileSync(outPath, stamped);
         signedPdfUrl = `/uploads/onboarding-signed/${outName}`;
+        sendSignedDocumentEmail({ studentName, studentEmail: student?.email, documentTitle: 'Student Declaration Form for Pending Fee Payment', signedPdfAbsolutePath: outPath });
       } catch {
         signedPdfUrl = null;
       }

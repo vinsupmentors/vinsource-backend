@@ -191,6 +191,7 @@ export const studentOnboardingController = {
             signed: !!sig,
             signedAt: sig?.signedAt ?? null,
             location: sig?.location ?? null,
+            signedPdfUrl: sig?.signedPdfUrl ?? null,
           };
         });
         return {
