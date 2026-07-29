@@ -56,6 +56,7 @@ router.put('/students/bulk-status', requireModule('PRODUCTION_TRAINING', 'EDIT')
 // actual delete happens via approve-delete, gated to Admin/Super Admin/Manager.
 // Registered before '/students/:id' for the same reason as bulk-status above.
 router.get('/students/deletion-requests', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.listDeletionRequests);
+router.get('/students/deletion-log', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.listDeletionLog);
 router.post('/students/:id/approve-delete', requireRole('ADMIN', 'SUPER_ADMIN', 'MANAGER'), productionController.approveDeleteStudent);
 router.post('/students/:id/cancel-delete-request', requireRole('ADMIN', 'SUPER_ADMIN', 'MANAGER'), productionController.cancelDeleteRequest);
 

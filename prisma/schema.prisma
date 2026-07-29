@@ -552,6 +552,8 @@ model Employee {
   onboardingApprovals    Student[]                   @relation("OnboardingApprover")
   onboardingRejections   Student[]                   @relation("OnboardingRejector")
   studentDeletionRequests Student[]                  @relation("StudentDeletionRequester")
+  studentDeletionLogsRequested StudentDeletionLog[]   @relation("StudentDeletionLogRequester")
+  studentDeletionLogsApproved  StudentDeletionLog[]   @relation("StudentDeletionLogApprover")
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
   attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
@@ -1633,6 +1635,43 @@ model Student {
 
   softskillAttendances SoftskillAttendance[]
   driveCandidacies     PlacementDriveCandidate[]
+}
+
+// Permanent audit trail for student deletions. The Student row (and every
+// dependent record) is hard-deleted on approval, which would otherwise wipe
+// out the deletion request's own metadata (who asked, why, who approved)
+// along with it — this table is written just before that delete happens so
+// there's always a record of who was deleted, by whom, and why. Deliberately
+// NOT a foreign key to Student (that row won't exist afterward); requester/
+// approver links use onDelete: SetNull so the log entry survives even if
+// that Employee account is later removed.
+model StudentDeletionLog {
+  id          String   @id @default(uuid())
+  studentId   String // original Student.id, kept for reference only (row no longer exists)
+  studentCode String
+  firstName   String
+  lastName    String
+  email       String?
+  phone       String
+  track       String
+  status      String
+  courseName  String? // most recent enrollment's course, snapshotted for readability
+  batchCode   String? // most recent enrollment's batch, snapshotted for readability
+
+  deletionReason  String?  @db.Text
+  requestedAt     DateTime
+  requestedById   String?
+  approvedAt      DateTime @default(now())
+  approvedById    String?
+  forced          Boolean  @default(false) // true if the safety check (attendance/test/placement records) was bypassed
+  attendanceCount Int      @default(0)
+  testAttemptCount Int     @default(0)
+  placementResultCount Int @default(0)
+
+  requestedBy Employee? @relation("StudentDeletionLogRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedBy  Employee? @relation("StudentDeletionLogApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([studentCode])
 }
 
 /// A reusable PDF (Enrollment Agreement, Code of Conduct, etc.) every student

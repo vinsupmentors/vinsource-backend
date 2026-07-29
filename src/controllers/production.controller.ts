@@ -36,10 +36,15 @@ const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode
  * Still enforces the attendance/test/placement safety check at delete time
  * (not just at request time), since records may have been added between
  * when the deletion was requested and when an admin approved it — unless
- * `force` is set, in which case an Admin/Super Admin has explicitly chosen
- * to permanently erase the student along with all of that history too.
+ * `force` is set, in which case an Admin/Super Admin/Manager has explicitly
+ * chosen to permanently erase the student along with all of that history
+ * too. Before the row is actually removed, a snapshot of the student plus
+ * the full request/approval trail is written to StudentDeletionLog — the
+ * Student row (and the deletionRequestedAt/By/Reason fields living on it)
+ * disappears the moment this transaction commits, so this is the only place
+ * that history survives.
  */
-async function performStudentDelete(id: string, force = false) {
+async function performStudentDelete(id: string, force = false, approvedById?: string | null) {
   const student = await prisma.student.findUnique({
     where: { id },
     include: {
@@ -49,6 +54,11 @@ async function performStudentDelete(id: string, force = false) {
           onlineTestAttempts: true,
           placementResults: true,
         },
+      },
+      enrollments: {
+        include: { schedule: { include: { course: true, batch: true } } },
+        orderBy: { enrolledAt: 'desc' },
+        take: 1,
       },
     },
   });
@@ -60,11 +70,34 @@ async function performStudentDelete(id: string, force = false) {
       409,
     );
   }
+  const latestEnrollment = student.enrollments[0];
   // Cascade-delete FK-dependent records first, then delete the student (all
   // inside one transaction). The attendance/test/placement tables are only
   // touched here when force=true — normally the safety check above already
   // guarantees they're empty by this point.
   await prisma.$transaction(async (tx) => {
+    await tx.studentDeletionLog.create({
+      data: {
+        studentId: student.id,
+        studentCode: student.studentCode,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        email: student.email,
+        phone: student.phone,
+        track: student.track,
+        status: student.status,
+        courseName: latestEnrollment?.schedule?.course?.name ?? null,
+        batchCode: latestEnrollment?.schedule?.batch?.code ?? null,
+        deletionReason: student.deletionReason,
+        requestedAt: student.deletionRequestedAt ?? new Date(),
+        requestedById: student.deletionRequestedById,
+        approvedById: approvedById ?? null,
+        forced: force,
+        attendanceCount: attendances,
+        testAttemptCount: onlineTestAttempts,
+        placementResultCount: placementResults,
+      },
+    });
     if (force) {
       await tx.studentAttendance.deleteMany({ where: { studentId: id } });
       await tx.onlineTestAttempt.deleteMany({ where: { studentId: id } }); // OnlineTestAnswer rows cascade via DB FK
@@ -674,8 +707,27 @@ export const productionController = {
       if (!student.deletionRequestedAt) {
         throw new AppError('This student has no pending deletion request.', 409);
       }
-      await performStudentDelete(id, force);
+      await performStudentDelete(id, force, req.user?.employeeId);
       res.json({ success: true, message: 'Student deleted.' });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Audit trail of past student deletions — the actual Student rows are
+   * long gone, this reads from the permanent StudentDeletionLog snapshot
+   * instead. Same access level as the pending-requests list.
+   */
+  async listDeletionLog(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const logs = await prisma.studentDeletionLog.findMany({
+        include: {
+          requestedBy: { select: employeeSelect },
+          approvedBy: { select: employeeSelect },
+        },
+        orderBy: { approvedAt: 'desc' },
+        take: 200,
+      });
+      res.json({ success: true, data: logs });
     } catch (err) { next(err); }
   },
 
