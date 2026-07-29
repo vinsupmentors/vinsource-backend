@@ -194,8 +194,13 @@ export async function stampSignatureOntoPdf(
 
   // Signed-on / location caption to the right of the photo.
   const captionX = photoX + photoW + 20;
+  // `en-IN` only controls date FORMATTING style (comma placement, month
+  // names) — it does NOT convert the timezone. Without an explicit
+  // `timeZone`, this renders in the server's own OS clock (UTC on the VPS),
+  // not India time, silently showing a time ~5.5 hours behind the real one.
   const dateStr = meta.signedAt.toLocaleString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
   });
   lastPage.drawText(`Digitally signed by ${meta.signedByName}`, { x: captionX, y: bottomY + 40, size: 8, font, color: rgb(0.2, 0.2, 0.2) });
   lastPage.drawText(`on ${dateStr}`, { x: captionX, y: bottomY + 28, size: 8, font, color: rgb(0.2, 0.2, 0.2) });

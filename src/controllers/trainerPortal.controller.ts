@@ -23,8 +23,12 @@ async function assertOwnsSchedule(employeeId: string | undefined, scheduleId: st
 
 function formatDeadline(deadline: Date | string | null | undefined): string | null {
   if (!deadline) return null;
+  // `en-IN` alone only sets formatting style, not the actual timezone — the
+  // server runs in UTC, so without `timeZone: 'Asia/Kolkata'` this shows a
+  // clock time ~5.5 hours behind the real India time.
   return new Date(deadline).toLocaleString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
   });
 }
 
