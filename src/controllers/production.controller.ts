@@ -35,9 +35,11 @@ const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode
  * Runs the actual cascade-delete once a student deletion has been approved.
  * Still enforces the attendance/test/placement safety check at delete time
  * (not just at request time), since records may have been added between
- * when the deletion was requested and when an admin approved it.
+ * when the deletion was requested and when an admin approved it — unless
+ * `force` is set, in which case an Admin/Super Admin has explicitly chosen
+ * to permanently erase the student along with all of that history too.
  */
-async function performStudentDelete(id: string) {
+async function performStudentDelete(id: string, force = false) {
   const student = await prisma.student.findUnique({
     where: { id },
     include: {
@@ -52,15 +54,22 @@ async function performStudentDelete(id: string) {
   });
   if (!student) throw new AppError('Student not found', 404);
   const { attendances, onlineTestAttempts, placementResults } = student._count;
-  if (attendances + onlineTestAttempts + placementResults > 0) {
+  if (!force && attendances + onlineTestAttempts + placementResults > 0) {
     throw new AppError(
-      'Cannot delete a student who has attendance, test, or placement records. Set their status to DROPPED instead.',
+      'Cannot delete a student who has attendance, test, or placement records. Set their status to DROPPED instead, or use Force Delete to permanently erase everything.',
       409,
     );
   }
-  // Student passed safety check — cascade-delete FK-dependent records first,
-  // then delete the student (all inside one transaction).
+  // Cascade-delete FK-dependent records first, then delete the student (all
+  // inside one transaction). The attendance/test/placement tables are only
+  // touched here when force=true — normally the safety check above already
+  // guarantees they're empty by this point.
   await prisma.$transaction(async (tx) => {
+    if (force) {
+      await tx.studentAttendance.deleteMany({ where: { studentId: id } });
+      await tx.onlineTestAttempt.deleteMany({ where: { studentId: id } }); // OnlineTestAnswer rows cascade via DB FK
+      await tx.placementResult.deleteMany({ where: { studentId: id } });
+    }
     await tx.feedbackFormResponse.deleteMany({ where: { studentId: id } });
     await tx.projectSubmission.deleteMany({ where: { studentId: id } });
     await tx.courseFeedback.deleteMany({ where: { studentId: id } });
@@ -654,12 +663,18 @@ export const productionController = {
   async approveDeleteStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { id } = req.params;
+      // force=true is an explicit Admin/Super Admin override (this route is
+      // already requireRole('ADMIN','SUPER_ADMIN')-gated) — it bypasses the
+      // attendance/test/placement safety check and permanently erases that
+      // history along with the student. Only sent after a second, explicit
+      // confirmation on the frontend.
+      const force = req.body?.force === true;
       const student = await prisma.student.findUnique({ where: { id } });
       if (!student) throw new AppError('Student not found', 404);
       if (!student.deletionRequestedAt) {
         throw new AppError('This student has no pending deletion request.', 409);
       }
-      await performStudentDelete(id);
+      await performStudentDelete(id, force);
       res.json({ success: true, message: 'Student deleted.' });
     } catch (err) { next(err); }
   },
