@@ -53,11 +53,11 @@ router.post('/students/push-to-placements', requireModule('PRODUCTION_TRAINING',
 router.put('/students/bulk-status', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.bulkUpdateStudentStatus);
 
 // Deletion approval workflow: DELETE only files a pending request; the
-// actual delete happens via approve-delete, gated to Admin/Super Admin.
+// actual delete happens via approve-delete, gated to Admin/Super Admin/Manager.
 // Registered before '/students/:id' for the same reason as bulk-status above.
 router.get('/students/deletion-requests', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.listDeletionRequests);
-router.post('/students/:id/approve-delete', requireRole('ADMIN', 'SUPER_ADMIN'), productionController.approveDeleteStudent);
-router.post('/students/:id/cancel-delete-request', requireRole('ADMIN', 'SUPER_ADMIN'), productionController.cancelDeleteRequest);
+router.post('/students/:id/approve-delete', requireRole('ADMIN', 'SUPER_ADMIN', 'MANAGER'), productionController.approveDeleteStudent);
+router.post('/students/:id/cancel-delete-request', requireRole('ADMIN', 'SUPER_ADMIN', 'MANAGER'), productionController.cancelDeleteRequest);
 
 router.put('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateStudent);
 router.delete('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.deleteStudent);
