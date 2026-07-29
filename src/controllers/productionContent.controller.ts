@@ -30,13 +30,13 @@ export const productionContentController = {
     } catch (err) { next(err); }
   },
 
-  /** Create a Project for a module. Multipart: resource (PDF) + body { moduleId, title, description } */
+  /** Create a Project for a module. Multipart: resource (PDF or ZIP) + body { moduleId, title, description } */
   async createProject(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { moduleId, title, description } = req.body;
       const file = req.file as Express.Multer.File | undefined;
       if (!moduleId || !title) throw new AppError('moduleId and title are required', 400);
-      if (!file) throw new AppError('A PDF project brief is required', 400);
+      if (!file) throw new AppError('A PDF or ZIP project brief is required', 400);
 
       const project = await prisma.project.create({
         data: {

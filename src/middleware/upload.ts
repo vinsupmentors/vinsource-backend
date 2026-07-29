@@ -206,10 +206,18 @@ const pdfOnlyFilter = (_req: Request, file: Express.Multer.File, cb: multer.File
   else cb(new AppError('Only PDF files are allowed for the project brief', 400));
 };
 
+// Project briefs can be a PDF (e.g. instructions doc) or a ZIP (e.g. a bundle
+// of starter files/assets for a coding project) — anything else is rejected.
+const pdfOrZipFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (ext === '.pdf' || ext === '.zip') cb(null, true);
+  else cb(new AppError('Only PDF or ZIP files are allowed for the project brief', 400));
+};
+
 export const uploadProjectResource = multer({
   storage: projectResourceStorage,
-  fileFilter: pdfOnlyFilter,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+  fileFilter: pdfOrZipFilter,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB — raised from 20 MB to fit zipped project bundles
 }).single('resource');
 
 // ── Student portal: Project submission (work uploaded by a student) ─────────
