@@ -167,7 +167,10 @@ export const studentPortalController = {
 
       const [template, student] = await Promise.all([
         prisma.onboardingDocumentTemplate.findUnique({ where: { id: templateId } }),
-        prisma.student.findUnique({ where: { id: studentId } }),
+        prisma.student.findUnique({
+          where: { id: studentId },
+          include: { enrollments: { include: { schedule: { include: { course: true, batch: true } } }, orderBy: { enrolledAt: 'desc' }, take: 1 } },
+        }),
       ]);
       if (!template || !template.isActive) throw new AppError('This document is not available to sign', 404);
       const tracks = Array.isArray(template.applicableTracks) ? (template.applicableTracks as unknown as string[]) : [];
@@ -196,11 +199,30 @@ export const studentPortalController = {
       try {
         const templateFilePath = path.join(process.cwd(), 'uploads', 'onboarding-templates', path.basename(template.fileKey));
         const sourceBytes = fs.readFileSync(templateFilePath);
-        const stamped = await stampSignatureOntoPdf(sourceBytes, signatureFilePath, photoFilePath, {
-          signedByName: studentName,
-          signedAt: new Date(),
-          location,
-        });
+        // Course name / batch number come from the student's most recent
+        // batch enrollment — not stored directly on Student, since they're
+        // already captured there when the student was added.
+        const enrollment = student?.enrollments?.[0];
+        const money = (n: number | null | undefined) => (n === null || n === undefined ? '' : `${n.toLocaleString('en-IN')}`);
+        const stamped = await stampSignatureOntoPdf(
+          sourceBytes,
+          signatureFilePath,
+          photoFilePath,
+          { signedByName: studentName, signedAt: new Date(), location },
+          [
+            { label: 'Student Name:', value: studentName },
+            { label: 'Student ID:', value: student?.studentCode ?? '' },
+            { label: 'Mobile Number:', value: student?.phone ?? '' },
+            { label: 'Email ID:', value: student?.email ?? '' },
+            { label: 'Course Name:', value: enrollment?.schedule.course.name ?? '' },
+            { label: 'Batch No:', value: enrollment?.schedule.batch.code ?? '' },
+            { label: 'Total Program Fee:', value: money(student?.totalProgramFee) },
+            { label: 'Amount Paid:', value: money(student?.amountPaid) },
+            { label: 'Balance Amount:', value: money(student?.balanceAmount) },
+            { label: 'Payment Mode:', value: student?.paymentMode ?? '' },
+          ],
+          student?.trainingMode ?? undefined
+        );
         const outName = `${studentId}_${templateId}_${Date.now()}.pdf`;
         fs.writeFileSync(path.join(SIGNED_PDF_DIR, outName), stamped);
         signedPdfUrl = `/uploads/onboarding-signed/${outName}`;

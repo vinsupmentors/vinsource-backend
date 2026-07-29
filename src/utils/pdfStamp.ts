@@ -1,10 +1,109 @@
 import fs from 'fs';
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from 'pdf-lib';
+// pdfjs-dist is used read-only, purely to find *where* a label like
+// "Student Name:" sits on the page (pdf-lib has no text-search/positioning
+// API of its own). Loaded via require() rather than `import` so this never
+// needs @types/pdfjs-dist and never fails a type-check even if the package
+// were ever missing — the actual value is only ever touched at runtime.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 
 interface StampMeta {
   signedByName: string;
   signedAt: Date;
   location?: string | null;
+}
+
+export interface HeaderField {
+  /** Exact label text to find on the page, e.g. "Student Name:" */
+  label: string;
+  value: string;
+}
+
+interface FieldPosition {
+  x: number;
+  y: number;
+}
+
+type TextItem = { str: string; width?: number; transform: number[] };
+
+/**
+ * Locate the blank line following a given label on a template's first page,
+ * e.g. finds where "____________" sits right after "Student Name:" so we can
+ * draw the actual value on top of it. Works for any template that follows
+ * the "Label: ____" convention used by the onboarding agreement PDFs —
+ * template-agnostic, so a newly uploaded template with the same convention
+ * is filled in automatically without any code change.
+ *
+ * Falls back to "right after the last item on the same line" when a label
+ * has no underscore blank at all (e.g. this template's "Total Program Fee:"
+ * line ends at "₹" with no visible rule) — the value still lands in a
+ * sensible spot instead of being silently dropped.
+ */
+async function locateFieldPositions(pdfBytes: Buffer, labels: string[]): Promise<Map<string, FieldPosition>> {
+  const result = new Map<string, FieldPosition>();
+  try {
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise;
+    const page = await doc.getPage(1);
+    const content = await page.getTextContent();
+    const items = content.items as TextItem[];
+
+    for (const label of labels) {
+      const idx = items.findIndex((it) => it.str.trim() === label);
+      if (idx === -1) continue;
+      const labelY = items[idx].transform[5];
+
+      let blank: TextItem | undefined;
+      let lastOnLine: TextItem = items[idx];
+      for (let j = idx + 1; j < items.length; j++) {
+        const item = items[j];
+        if (Math.abs(item.transform[5] - labelY) > 1) break; // moved to a new line
+        lastOnLine = item;
+        if (item.str && /_{3,}/.test(item.str)) { blank = item; break; }
+      }
+
+      if (blank) {
+        result.set(label, { x: blank.transform[4], y: labelY });
+      } else if (lastOnLine !== items[idx]) {
+        // No blank line found, but something (e.g. "₹") follows the label —
+        // place the value right after it instead of dropping it.
+        result.set(label, { x: lastOnLine.transform[4] + (lastOnLine.width || 8), y: labelY });
+      }
+    }
+  } catch {
+    // If anything about locating fields fails, just skip filling them in —
+    // the signature stamping below still proceeds normally.
+  }
+  return result;
+}
+
+/**
+ * Locate a "☐"/"□" checkbox glyph immediately preceding a given choice label
+ * on the first page, e.g. the box right before the word "Offline" in
+ * "Training Mode: ☐ Offline ☐ Online" — so a selected choice can be marked
+ * with an "X" over it.
+ */
+async function locateCheckboxPosition(pdfBytes: Buffer, choiceLabel: string): Promise<FieldPosition | undefined> {
+  try {
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise;
+    const page = await doc.getPage(1);
+    const content = await page.getTextContent();
+    const items = content.items as TextItem[];
+
+    const idx = items.findIndex((it) => it.str.trim() === choiceLabel);
+    if (idx === -1) return undefined;
+    const labelY = items[idx].transform[5];
+    for (let j = idx - 1; j >= 0; j--) {
+      const item = items[j];
+      if (Math.abs(item.transform[5] - labelY) > 1) break; // moved to a previous line
+      if (item.str && /[☐□]/.test(item.str)) {
+        return { x: item.transform[4], y: item.transform[5] };
+      }
+    }
+  } catch {
+    // Skip marking the checkbox if anything goes wrong locating it.
+  }
+  return undefined;
 }
 
 function detectMime(filePath: string): 'png' | 'jpg' {
@@ -32,13 +131,38 @@ export async function stampSignatureOntoPdf(
   sourcePdfBytes: Buffer,
   signaturePath: string,
   photoPath: string,
-  meta: StampMeta
+  meta: StampMeta,
+  headerFields?: HeaderField[],
+  /** e.g. "Offline" or "Online" — marks the matching "☐ Offline ☐ Online"-style checkbox on page 1. */
+  checkboxChoice?: string
 ): Promise<Buffer> {
   const pdfDoc = await PDFDocument.load(new Uint8Array(sourcePdfBytes));
   const pages = pdfDoc.getPages();
   const lastPage = pages[pages.length - 1];
 
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  // Fill in Student Name / ID / Mobile / Email etc. on the first page, on
+  // top of their blank lines, before adding the signature block below.
+  if (headerFields && headerFields.length > 0) {
+    const positions = await locateFieldPositions(sourcePdfBytes, headerFields.map((f) => f.label));
+    const firstPage = pages[0];
+    for (const field of headerFields) {
+      const pos = positions.get(field.label);
+      if (!pos || !field.value) continue;
+      firstPage.drawText(field.value, { x: pos.x + 2, y: pos.y + 2, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+    }
+  }
+
+  // Mark the selected Training Mode checkbox with an "X" over its "☐" glyph.
+  if (checkboxChoice) {
+    const checkboxPos = await locateCheckboxPosition(sourcePdfBytes, checkboxChoice);
+    if (checkboxPos) {
+      const firstPage = pages[0];
+      firstPage.drawText('X', { x: checkboxPos.x + 1, y: checkboxPos.y + 0.5, size: 8, font: boldFont, color: rgb(0, 0, 0) });
+    }
+  }
 
   const signatureBytes = fs.readFileSync(signaturePath);
   const photoBytes = fs.readFileSync(photoPath);

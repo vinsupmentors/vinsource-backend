@@ -463,7 +463,10 @@ export const productionController = {
    */
   async createStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { studentCode, firstName, lastName, email, phone, track, leadId, subBatchCode } = req.body;
+      const {
+        studentCode, firstName, lastName, email, phone, track, leadId, subBatchCode,
+        trainingMode, totalProgramFee, amountPaid, paymentMode,
+      } = req.body;
       let { scheduleId } = req.body;
       if (!studentCode || !email) {
         throw new AppError('studentCode and email are required', 400);
@@ -471,6 +474,13 @@ export const productionController = {
       // Sub-batch code is the friendly way to map the student to a schedule
       if (!scheduleId && subBatchCode) scheduleId = await resolveScheduleByCode(subBatchCode);
       const createdById = req.user?.employeeId;
+
+      // Balance is derived from total/paid when both are given, rather than
+      // trusted verbatim from the client — keeps the three numbers internally
+      // consistent even if the admin only fills in two of them.
+      const total = totalProgramFee !== undefined && totalProgramFee !== '' ? Number(totalProgramFee) : undefined;
+      const paid = amountPaid !== undefined && amountPaid !== '' ? Number(amountPaid) : undefined;
+      const balance = total !== undefined && paid !== undefined ? total - paid : undefined;
 
       const student = await prisma.student.create({
         data: {
@@ -481,6 +491,11 @@ export const productionController = {
           phone: phone || 'PENDING',
           track,
           leadId: leadId || undefined,
+          trainingMode: trainingMode || undefined,
+          totalProgramFee: total,
+          amountPaid: paid,
+          balanceAmount: balance,
+          paymentMode: paymentMode || undefined,
           ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
           user: await buildStudentUserCreate(studentCode, email),
           ...(scheduleId ? { enrollments: { create: { scheduleId } } } : {}),
@@ -506,17 +521,32 @@ export const productionController = {
 
   async updateStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { firstName, lastName, email, phone, track, status } = req.body;
+      const {
+        firstName, lastName, email, phone, track, status,
+        trainingMode, totalProgramFee, amountPaid, paymentMode,
+      } = req.body;
       const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
       // Starts the 90-day / 3-interview placement SLA clock the first time a
       // PAP/IOP student's status flips to COMPLETED (handed off to placement team).
       const startsPlacementClock = status === 'COMPLETED' && existing?.status !== 'COMPLETED' && !existing?.movedToPlacementAt;
+
+      // Same derive-balance-from-total/paid rule as createStudent — only
+      // recomputed when at least one of the two is actually being changed,
+      // otherwise fall back to whatever's already on file.
+      const total = totalProgramFee !== undefined && totalProgramFee !== '' ? Number(totalProgramFee) : existing?.totalProgramFee ?? undefined;
+      const paid = amountPaid !== undefined && amountPaid !== '' ? Number(amountPaid) : existing?.amountPaid ?? undefined;
+      const balance = total !== undefined && paid !== undefined ? total - paid : undefined;
 
       const student = await prisma.student.update({
         where: { id: req.params.id },
         data: {
           firstName, lastName, email, phone, track, status,
           movedToPlacementAt: startsPlacementClock ? new Date() : undefined,
+          trainingMode: trainingMode !== undefined ? (trainingMode || null) : undefined,
+          totalProgramFee: totalProgramFee !== undefined ? total : undefined,
+          amountPaid: amountPaid !== undefined ? paid : undefined,
+          balanceAmount: (totalProgramFee !== undefined || amountPaid !== undefined) ? balance : undefined,
+          paymentMode: paymentMode !== undefined ? (paymentMode || null) : undefined,
         },
       });
       res.json({ success: true, data: student });

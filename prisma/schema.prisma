@@ -1585,6 +1585,16 @@ model Student {
   onboardingRejectedAt   DateTime?
   onboardingRejectedById String?
 
+  // Fee/enrollment details captured by admin at intake time (Add Student) —
+  // course name and batch number are NOT stored here since they're already
+  // derivable from the student's StudentBatchEnrollment → schedule → course/
+  // batch relation; these are the fields with no equivalent elsewhere.
+  trainingMode    String? // 'Offline' | 'Online'
+  totalProgramFee Float?
+  amountPaid      Float?
+  balanceAmount   Float?
+  paymentMode     String? // e.g. 'Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'
+
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 

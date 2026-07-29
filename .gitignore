@@ -24,3 +24,6 @@ Thumbs.db
 # Local smoke-test scratch files (never meant to be committed)
 smoke*.mjs
 *.smoke.mjs
+*.smoke.mjs.js
+testfill*.js
+pdfStamp.bundle.test.js
