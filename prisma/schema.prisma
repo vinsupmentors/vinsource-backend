@@ -551,6 +551,7 @@ model Employee {
   feeDeclarationsCreated StudentFeeDeclaration[]     @relation("FeeDeclarationCreator")
   onboardingApprovals    Student[]                   @relation("OnboardingApprover")
   onboardingRejections   Student[]                   @relation("OnboardingRejector")
+  studentDeletionRequests Student[]                  @relation("StudentDeletionRequester")
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
   attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
@@ -1595,6 +1596,13 @@ model Student {
   balanceAmount   Float?
   paymentMode     String? // e.g. 'Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'
 
+  // Deletion approval workflow — deleting a student requires Admin sign-off.
+  // A "delete" click only sets these fields (a pending request); the actual
+  // row + cascade delete only happens when an Admin approves it.
+  deletionRequestedAt   DateTime?
+  deletionRequestedById String?
+  deletionReason        String?   @db.Text
+
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
@@ -1603,6 +1611,7 @@ model Student {
   createdBy         Employee? @relation("StudentCreator", fields: [createdById], references: [id])
   onboardingApprovedBy Employee? @relation("OnboardingApprover", fields: [onboardingApprovedById], references: [id])
   onboardingRejectedBy Employee? @relation("OnboardingRejector", fields: [onboardingRejectedById], references: [id])
+  deletionRequestedBy  Employee? @relation("StudentDeletionRequester", fields: [deletionRequestedById], references: [id])
 
   documentSignatures StudentDocumentSignature[]
   feeDeclarations    StudentFeeDeclaration[]

@@ -32,6 +32,53 @@ function sendStudentWelcomeEmail(opts: { name?: string | null; studentCode: stri
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
 /**
+ * Runs the actual cascade-delete once a student deletion has been approved.
+ * Still enforces the attendance/test/placement safety check at delete time
+ * (not just at request time), since records may have been added between
+ * when the deletion was requested and when an admin approved it.
+ */
+async function performStudentDelete(id: string) {
+  const student = await prisma.student.findUnique({
+    where: { id },
+    include: {
+      _count: {
+        select: {
+          attendances: true,
+          onlineTestAttempts: true,
+          placementResults: true,
+        },
+      },
+    },
+  });
+  if (!student) throw new AppError('Student not found', 404);
+  const { attendances, onlineTestAttempts, placementResults } = student._count;
+  if (attendances + onlineTestAttempts + placementResults > 0) {
+    throw new AppError(
+      'Cannot delete a student who has attendance, test, or placement records. Set their status to DROPPED instead.',
+      409,
+    );
+  }
+  // Student passed safety check — cascade-delete FK-dependent records first,
+  // then delete the student (all inside one transaction).
+  await prisma.$transaction(async (tx) => {
+    await tx.feedbackFormResponse.deleteMany({ where: { studentId: id } });
+    await tx.projectSubmission.deleteMany({ where: { studentId: id } });
+    await tx.courseFeedback.deleteMany({ where: { studentId: id } });
+    await tx.trainerFeedback.deleteMany({ where: { studentId: id } });
+    await tx.moduleFeedback.deleteMany({ where: { studentId: id } });
+    await tx.moduleMark.deleteMany({ where: { studentId: id } });
+    await tx.certificate.deleteMany({ where: { studentId: id } });
+    await tx.referral.deleteMany({ where: { studentId: id } });
+    await tx.softskillAttendance.deleteMany({ where: { studentId: id } });
+    await tx.placementDriveCandidate.deleteMany({ where: { studentId: id } });
+    await tx.placementInterview.deleteMany({ where: { studentId: id } });
+    await tx.studentPortfolio.deleteMany({ where: { studentId: id } });
+    await tx.studentBatchEnrollment.deleteMany({ where: { studentId: id } });
+    await tx.student.delete({ where: { id } });
+  });
+}
+
+/**
  * Builds the nested `user.create` payload for a newly-created Student so a
  * STUDENT-role login is provisioned automatically. Initial password is the
  * student's own studentCode (per product decision); student must change it
@@ -554,52 +601,86 @@ export const productionController = {
   },
 
   /**
-   * Delete a student. Blocked if the student has any attendance, test attempts,
-   * KRA entries, or placement results — those must be removed first or the PM
-   * should use status="DROPPED" instead of deleting.
+   * "Delete a student" no longer deletes anything directly — it raises a
+   * pending deletion request that shows up in the Production > Deletion
+   * Requests tab, which only an Admin/Super Admin can approve. This is the
+   * secondary-check the PM asked for: any user can flag a student for
+   * deletion, but only an admin's approval actually removes the record.
    */
   async deleteStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { id } = req.params;
-      const student = await prisma.student.findUnique({
+      const { reason } = req.body;
+      const student = await prisma.student.findUnique({ where: { id } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (student.deletionRequestedAt) {
+        throw new AppError('A deletion request for this student is already pending admin approval.', 409);
+      }
+      await prisma.student.update({
         where: { id },
-        include: {
-          _count: {
-            select: {
-              attendances: true,
-              onlineTestAttempts: true,
-              placementResults: true,
-            },
-          },
+        data: {
+          deletionRequestedAt: new Date(),
+          deletionRequestedById: req.user?.employeeId || null,
+          deletionReason: (reason && String(reason).trim()) || null,
         },
       });
-      if (!student) throw new AppError('Student not found', 404);
-      const { attendances, onlineTestAttempts, placementResults } = student._count;
-      if (attendances + onlineTestAttempts + placementResults > 0) {
-        throw new AppError(
-          'Cannot delete a student who has attendance, test, or placement records. Set their status to DROPPED instead.',
-          409,
-        );
-      }
-      // Student passed safety check — cascade-delete FK-dependent records first,
-      // then delete the student (all inside one transaction).
-      await prisma.$transaction(async (tx) => {
-        await tx.feedbackFormResponse.deleteMany({ where: { studentId: id } });
-        await tx.projectSubmission.deleteMany({ where: { studentId: id } });
-        await tx.courseFeedback.deleteMany({ where: { studentId: id } });
-        await tx.trainerFeedback.deleteMany({ where: { studentId: id } });
-        await tx.moduleFeedback.deleteMany({ where: { studentId: id } });
-        await tx.moduleMark.deleteMany({ where: { studentId: id } });
-        await tx.certificate.deleteMany({ where: { studentId: id } });
-        await tx.referral.deleteMany({ where: { studentId: id } });
-        await tx.softskillAttendance.deleteMany({ where: { studentId: id } });
-        await tx.placementDriveCandidate.deleteMany({ where: { studentId: id } });
-        await tx.placementInterview.deleteMany({ where: { studentId: id } });
-        await tx.studentPortfolio.deleteMany({ where: { studentId: id } });
-        await tx.studentBatchEnrollment.deleteMany({ where: { studentId: id } });
-        await tx.student.delete({ where: { id } });
+      res.json({ success: true, message: 'Deletion request submitted for admin approval.' });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Lists students with a pending deletion request, for the Production
+   * "Deletion Requests" tab (Admin/Super Admin approve or reject from here).
+   */
+  async listDeletionRequests(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const students = await prisma.student.findMany({
+        where: { deletionRequestedAt: { not: null } },
+        include: {
+          enrollments: { include: { schedule: { include: { course: true, batch: true } } } },
+          deletionRequestedBy: { select: employeeSelect },
+        },
+        orderBy: { deletionRequestedAt: 'desc' },
       });
-      res.json({ success: true });
+      res.json({ success: true, data: students });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Admin/Super Admin approves a pending deletion request — runs the real
+   * cascade-delete (with the safety check re-verified at this point, since
+   * time may have passed since the request was made).
+   */
+  async approveDeleteStudent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const student = await prisma.student.findUnique({ where: { id } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (!student.deletionRequestedAt) {
+        throw new AppError('This student has no pending deletion request.', 409);
+      }
+      await performStudentDelete(id);
+      res.json({ success: true, message: 'Student deleted.' });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Admin/Super Admin rejects a pending deletion request — just clears the
+   * request fields, student is untouched.
+   */
+  async cancelDeleteRequest(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const student = await prisma.student.findUnique({ where: { id } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (!student.deletionRequestedAt) {
+        throw new AppError('This student has no pending deletion request.', 409);
+      }
+      await prisma.student.update({
+        where: { id },
+        data: { deletionRequestedAt: null, deletionRequestedById: null, deletionReason: null },
+      });
+      res.json({ success: true, message: 'Deletion request rejected.' });
     } catch (err) { next(err); }
   },
 

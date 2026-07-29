@@ -4,7 +4,7 @@ import { productionContentController } from '../controllers/productionContent.co
 import { productionReportsController } from '../controllers/productionReports.controller';
 import { portfolioController } from '../controllers/portfolio.controller';
 import { authenticate } from '../middleware/auth';
-import { requireModule } from '../middleware/rbac';
+import { requireModule, requireRole } from '../middleware/rbac';
 import { uploadProjectResource, uploadCourseMaterial } from '../middleware/upload';
 
 const router = Router();
@@ -51,6 +51,13 @@ router.post('/students/push-to-placements', requireModule('PRODUCTION_TRAINING',
 // Express matches ':id' first and treats the literal "bulk-status" as a
 // student id (caused a 500 — PrismaClientValidationError on updateStudent).
 router.put('/students/bulk-status', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.bulkUpdateStudentStatus);
+
+// Deletion approval workflow: DELETE only files a pending request; the
+// actual delete happens via approve-delete, gated to Admin/Super Admin.
+// Registered before '/students/:id' for the same reason as bulk-status above.
+router.get('/students/deletion-requests', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.listDeletionRequests);
+router.post('/students/:id/approve-delete', requireRole('ADMIN', 'SUPER_ADMIN'), productionController.approveDeleteStudent);
+router.post('/students/:id/cancel-delete-request', requireRole('ADMIN', 'SUPER_ADMIN'), productionController.cancelDeleteRequest);
 
 router.put('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateStudent);
 router.delete('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.deleteStudent);
