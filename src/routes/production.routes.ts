@@ -74,6 +74,7 @@ router.put('/projects/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), upload
 // Feedback forms (PM builds a full custom template per module)
 router.get('/feedback-forms', productionContentController.listFeedbackForms);
 router.post('/feedback-forms', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.saveFeedbackForm);
+router.delete('/feedback-forms/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.deleteFeedbackForm);
 
 // Feedback responses — PM-only read surface. Trainers cannot see these (see trainerPortal.routes.ts).
 router.get('/feedback-releases', productionContentController.listFeedbackReleases);

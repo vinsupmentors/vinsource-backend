@@ -140,6 +140,48 @@ export const productionContentController = {
   },
 
   /**
+   * Delete a feedback form template. FeedbackFormQuestion cascades
+   * automatically (ON DELETE CASCADE), but FeedbackFormRelease and
+   * FeedbackFormResponse are both ON DELETE RESTRICT, so a form that's
+   * already been released to students can't be removed without explicitly
+   * opting in via ?force=true — that also deletes every release and every
+   * response/answer students submitted against it.
+   */
+  async deleteFeedbackForm(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const force = req.query.force === 'true' || req.body?.force === true;
+
+      const form = await prisma.feedbackForm.findUnique({
+        where: { id },
+        include: { _count: { select: { releases: true } } },
+      });
+      if (!form) throw new AppError('Feedback form not found', 404);
+
+      if (form._count.releases > 0 && !force) {
+        throw new AppError(
+          `This form has been released ${form._count.releases} time(s) and may have student responses. Force delete to permanently remove it along with every release and response.`,
+          409,
+        );
+      }
+
+      await prisma.$transaction(async (tx) => {
+        if (force) {
+          const releases = await tx.feedbackFormRelease.findMany({ where: { formId: id }, select: { id: true } });
+          const releaseIds = releases.map((r) => r.id);
+          if (releaseIds.length) {
+            await tx.feedbackFormResponse.deleteMany({ where: { releaseId: { in: releaseIds } } }); // answers cascade
+            await tx.feedbackFormRelease.deleteMany({ where: { formId: id } });
+          }
+        }
+        await tx.feedbackForm.delete({ where: { id } }); // questions cascade
+      });
+
+      res.json({ success: true, message: 'Feedback form deleted' });
+    } catch (err) { next(err); }
+  },
+
+  /**
    * All feedback form releases across sub-batches, with response counts —
    * the Production Manager's filterable index into feedback collection.
    * Once a Trainer releases a feedback form and students respond, ONLY the
