@@ -117,6 +117,20 @@ async function performStudentDelete(id: string, force = false, approvedById?: st
     await tx.studentPortfolio.deleteMany({ where: { studentId: id } });
     await tx.studentBatchEnrollment.deleteMany({ where: { studentId: id } });
     await tx.student.delete({ where: { id } });
+
+    // The Student row is gone, but its linked login account (User) isn't —
+    // Student_userId_fkey is ON DELETE SET NULL, so deleting Student alone
+    // leaves an orphaned User whose unique `email` blocks re-adding the same
+    // student later. Clean up the User + its RESTRICT-FK dependents too.
+    if (student.userId) {
+      await tx.userSession.deleteMany({ where: { userId: student.userId } });
+      await tx.notification.deleteMany({ where: { userId: student.userId } });
+      await tx.notificationLog.deleteMany({ where: { userId: student.userId } });
+      await tx.auditLog.deleteMany({ where: { userId: student.userId } });
+      await tx.passwordLog.deleteMany({ where: { userId: student.userId } });
+      await tx.userModuleAccess.deleteMany({ where: { userId: student.userId } });
+      await tx.user.delete({ where: { id: student.userId } });
+    }
   });
 }
 
