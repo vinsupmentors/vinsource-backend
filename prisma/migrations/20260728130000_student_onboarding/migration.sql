@@ -34,8 +34,6 @@ CREATE TABLE `StudentDocumentSignature` (
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-CREATE UNIQUE INDEX `StudentDocumentSignature_studentId_templateId_key` ON `StudentDocumentSignature`(`studentId`, `templateId`);
-
 ALTER TABLE `OnboardingDocumentTemplate` ADD CONSTRAINT `OnboardingDocumentTemplate_createdById_fkey` FOREIGN KEY (`createdById`) REFERENCES `Employee`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE `StudentDocumentSignature` ADD CONSTRAINT `StudentDocumentSignature_studentId_fkey` FOREIGN KEY (`studentId`) REFERENCES `Student`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE `StudentDocumentSignature` ADD CONSTRAINT `StudentDocumentSignature_templateId_fkey` FOREIGN KEY (`templateId`) REFERENCES `OnboardingDocumentTemplate`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
