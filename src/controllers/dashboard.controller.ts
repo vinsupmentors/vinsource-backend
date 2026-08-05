@@ -38,8 +38,8 @@ export const dashboardController = {
         ? { id: { in: teamEmpIds }, isSystemAccount: false }
         : { companyId, isSystemAccount: false };
       const activeEmpWhere = isManagerRole && teamEmpIds !== null
-        ? { id: { in: teamEmpIds }, status: 'ACTIVE' as const, isSystemAccount: false }
-        : { companyId, status: 'ACTIVE' as const, isSystemAccount: false };
+        ? { id: { in: teamEmpIds }, status: 'ACTIVE' as const, exitDate: null, isSystemAccount: false }
+        : { companyId, status: 'ACTIVE' as const, exitDate: null, isSystemAccount: false };
 
       const [
         totalEmployees,

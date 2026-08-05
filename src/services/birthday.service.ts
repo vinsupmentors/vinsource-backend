@@ -15,8 +15,11 @@ export const birthdayService = {
     const todayMonth = today.getMonth();
     const todayDate = today.getDate();
 
+    // exitDate is the authoritative "this person has left" signal — belt and
+    // braces alongside status, since status can lag behind reality if HR
+    // hasn't gotten around to flipping it to TERMINATED/RESIGNED yet.
     const allActive = await prisma.employee.findMany({
-      where: { status: { in: ['ACTIVE', 'ON_PROBATION'] }, dateOfBirth: { not: null }, isSystemAccount: false },
+      where: { status: { in: ['ACTIVE', 'ON_PROBATION'] }, exitDate: null, dateOfBirth: { not: null }, isSystemAccount: false },
       select: { id: true, userId: true, firstName: true, lastName: true, email: true, dateOfBirth: true, profilePhoto: true },
     });
 
@@ -32,7 +35,7 @@ export const birthdayService = {
 
     // Recipients: every active employee (including celebrants themselves can receive a copy too)
     const allEmployees = await prisma.employee.findMany({
-      where: { status: { in: ['ACTIVE', 'ON_PROBATION'] }, isSystemAccount: false },
+      where: { status: { in: ['ACTIVE', 'ON_PROBATION'] }, exitDate: null, isSystemAccount: false },
       select: { id: true, userId: true, firstName: true, lastName: true, email: true },
     });
 
