@@ -904,7 +904,10 @@ export const trainerPortalController = {
 
       const attempt = await prisma.onlineTestAttempt.findUnique({
         where: { releaseId_studentId: { releaseId, studentId } },
-        include: { answers: true },
+        include: {
+          answers: true,
+          violationSnapshots: { orderBy: { createdAt: 'asc' } },
+        },
       });
       if (!attempt) throw new AppError('This student has not attempted this test yet', 404);
       if (attempt.status === 'IN_PROGRESS') throw new AppError('This attempt is still in progress', 400);
@@ -935,9 +938,16 @@ export const trainerPortalController = {
             totalMarks: attempt.totalMarks,
             startedAt: attempt.startedAt,
             submittedAt: attempt.submittedAt,
+            violationCount: attempt.violationCount,
           },
           testTitle: release.test.title,
           questions,
+          violations: attempt.violationSnapshots.map((v) => ({
+            id: v.id,
+            type: v.type,
+            snapshotUrl: v.snapshotUrl,
+            createdAt: v.createdAt,
+          })),
         },
       });
     } catch (err) { next(err); }

@@ -987,18 +987,25 @@ export const studentPortalController = {
   },
 
   /**
-   * Record a tab-switch/blur violation during an in-progress attempt.
-   * Server-counted (not client-trusted): the first two violations are just
-   * warnings and the attempt keeps going; the third ends it, marking the
-   * attempt AUTO_SUBMITTED_VIOLATION via the same gradeAndCloseAttempt path
+   * Record a violation during an in-progress attempt — either the original
+   * tab-switch/blur check, or a camera-proctoring signal (no face / multiple
+   * faces / looking away), each optionally carrying a snapshot image
+   * captured at the moment of the violation. Server-counted (not
+   * client-trusted): the first two violations of ANY type are warnings and
+   * the attempt keeps going; the third ends it, marking the attempt
+   * AUTO_SUBMITTED_VIOLATION via the same gradeAndCloseAttempt path
    * submit/expire use. Returns the running count and what happened so the
    * frontend can show "warning 1/2", "warning 2/2 — next one ends the test",
-   * or "test ended" accordingly.
+   * or "test ended" accordingly. Every violation event (warning or not) gets
+   * its own OnlineTestViolationSnapshot row so Trainers/PM can review what
+   * actually triggered each warning after the fact.
    */
   async recordTestViolation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const studentId = getStudentId(req);
       const { attemptId } = req.params;
+      const type = (req.body?.type as string) || 'TAB_SWITCH';
+      const file = req.file as Express.Multer.File | undefined;
       const MAX_WARNINGS = 2; // 1st + 2nd violation = warning, 3rd ends the test
 
       const attempt = await prisma.onlineTestAttempt.findUnique({ where: { id: attemptId } });
@@ -1014,6 +1021,14 @@ export const studentPortalController = {
         res.json({ success: true, data: { attempt: graded, action: 'ended', violationCount: attempt.violationCount } });
         return;
       }
+
+      await prisma.onlineTestViolationSnapshot.create({
+        data: {
+          attemptId,
+          type: type as never,
+          snapshotUrl: file ? `/uploads/test-violations/${file.filename}` : undefined,
+        },
+      });
 
       const violationCount = attempt.violationCount + 1;
 

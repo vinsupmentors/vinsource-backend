@@ -317,3 +317,25 @@ export const uploadOnboardingSignature = multer({
   { name: 'signature', maxCount: 1 },
   { name: 'photo', maxCount: 1 },
 ]);
+
+// ── Online Test proctoring: camera snapshot captured at the moment of a
+// violation (no face / multiple faces / looking away). Optional — TAB_SWITCH
+// violations don't send one. Small images (a single video frame), so a low
+// size cap is plenty.
+const TEST_VIOLATION_DIR = path.join(process.cwd(), 'uploads', 'test-violations');
+if (!fs.existsSync(TEST_VIOLATION_DIR)) fs.mkdirSync(TEST_VIOLATION_DIR, { recursive: true });
+
+const testViolationStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, TEST_VIOLATION_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    const attemptId = req.params.attemptId || 'unknown';
+    cb(null, `${attemptId}_${Date.now()}${ext}`);
+  },
+});
+
+export const uploadViolationSnapshot = multer({
+  storage: testViolationStorage,
+  fileFilter: imageOnlyFilter,
+  limits: { fileSize: 3 * 1024 * 1024 }, // 3 MB — a single compressed video frame
+}).single('snapshot');

@@ -298,7 +298,10 @@ export const productionReportsController = {
 
         const testAttempts = await prisma.onlineTestAttempt.findMany({
           where: { studentId, release: { scheduleId } },
-          include: { release: { include: { test: { select: { title: true, module: { select: { title: true } } } } } } },
+          include: {
+            release: { include: { test: { select: { title: true, module: { select: { title: true } } } } } },
+            violationSnapshots: { orderBy: { createdAt: 'asc' } },
+          },
           orderBy: { submittedAt: 'desc' },
         });
 
@@ -325,6 +328,13 @@ export const productionReportsController = {
             score: t.score,
             totalMarks: t.totalMarks,
             submittedAt: t.submittedAt,
+            violationCount: t.violationCount,
+            violations: t.violationSnapshots.map((v) => ({
+              id: v.id,
+              type: v.type,
+              snapshotUrl: v.snapshotUrl,
+              createdAt: v.createdAt,
+            })),
           })),
           projects: projectSubmissions.map((s) => ({
             id: s.id,

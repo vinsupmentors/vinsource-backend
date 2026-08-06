@@ -2719,8 +2719,34 @@ model OnlineTestAttempt {
   release OnlineTestRelease  @relation(fields: [releaseId], references: [id])
   student Student            @relation(fields: [studentId], references: [id])
   answers OnlineTestAnswer[]
+  violationSnapshots OnlineTestViolationSnapshot[]
 
   @@unique([releaseId, studentId])
+}
+
+enum ViolationType {
+  TAB_SWITCH       // window blur / tab change — the original, camera-independent check
+  NO_FACE          // camera proctoring: no face detected in frame for a sustained period
+  MULTIPLE_FACES   // camera proctoring: more than one face detected
+  LOOKING_AWAY     // camera proctoring: face detected but not oriented toward the screen
+}
+
+// Evidence trail for proctoring violations — one row per violation event
+// (not per warning tier), so a PM or Trainer can review exactly what
+// triggered each warning. snapshotUrl is null for TAB_SWITCH (no camera
+// frame to capture); the camera-based types always carry one. Cascades with
+// the attempt, same as answers — a reassigned test wipes prior evidence
+// along with the rest of that attempt's history.
+model OnlineTestViolationSnapshot {
+  id          String        @id @default(uuid())
+  attemptId   String
+  type        ViolationType
+  snapshotUrl String?
+  createdAt   DateTime      @default(now())
+
+  attempt OnlineTestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
 }
 
 model OnlineTestAnswer {

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { studentPortalController } from '../controllers/studentPortal.controller';
 import { authenticate } from '../middleware/auth';
 import { requireStudent } from '../middleware/rbac';
-import { uploadStudentPhoto, uploadAadharPhoto, uploadProjectSubmission, uploadOnboardingSignature } from '../middleware/upload';
+import { uploadStudentPhoto, uploadAadharPhoto, uploadProjectSubmission, uploadOnboardingSignature, uploadViolationSnapshot } from '../middleware/upload';
 
 const router = Router();
 router.use(authenticate);
@@ -38,7 +38,7 @@ router.post('/online-tests/:releaseId/start', studentPortalController.startOnlin
 router.get('/online-tests/attempts/:attemptId', studentPortalController.getOnlineTestAttempt);
 router.get('/online-tests/attempts/:attemptId/review', studentPortalController.getOnlineTestAttemptReview);
 router.post('/online-tests/attempts/:attemptId/answer', studentPortalController.saveOnlineTestAnswer);
-router.post('/online-tests/attempts/:attemptId/violation', studentPortalController.recordTestViolation);
+router.post('/online-tests/attempts/:attemptId/violation', uploadViolationSnapshot, studentPortalController.recordTestViolation);
 router.post('/online-tests/attempts/:attemptId/submit', studentPortalController.submitOnlineTestAttempt);
 
 // Portfolio
