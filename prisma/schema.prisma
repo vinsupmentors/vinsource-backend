@@ -981,7 +981,10 @@ model EmailLog {
   subject    String
   template   String?
   status     String   @default("SENT")
-  errorMsg   String?
+  // Real SMTP/nodemailer failure messages (auth errors, quota responses, etc.)
+  // routinely exceed the old VARCHAR(191) cap, which made the FAILED-row
+  // insert itself crash and swallow the real error. TEXT removes that trap.
+  errorMsg   String?  @db.Text
   sentAt     DateTime @default(now())
 }
 

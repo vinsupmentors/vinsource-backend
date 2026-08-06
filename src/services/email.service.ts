@@ -53,16 +53,26 @@ export const emailService = {
         },
       });
     } catch (error: unknown) {
-      await prisma.emailLog.create({
-        data: {
-          to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
-          from: config.EMAIL_FROM,
-          subject: opts.subject,
-          template: opts.template,
-          status: 'FAILED',
-          errorMsg: error instanceof Error ? error.message : String(error),
-        },
-      });
+      // Always surface the real failure to the server logs first — the
+      // EmailLog write below can itself fail (e.g. a DB hiccup), and if it
+      // does we don't want that secondary error to be the only thing
+      // anyone ever sees, masking what actually went wrong with the send.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Email send failed (to: ${Array.isArray(opts.to) ? opts.to.join(', ') : opts.to}, template: ${opts.template || 'n/a'}):`, message);
+      try {
+        await prisma.emailLog.create({
+          data: {
+            to: Array.isArray(opts.to) ? opts.to.join(', ') : opts.to,
+            from: config.EMAIL_FROM,
+            subject: opts.subject,
+            template: opts.template,
+            status: 'FAILED',
+            errorMsg: message,
+          },
+        });
+      } catch (logErr) {
+        console.error('Additionally failed to write the FAILED EmailLog row:', logErr);
+      }
       throw error;
     }
   },
