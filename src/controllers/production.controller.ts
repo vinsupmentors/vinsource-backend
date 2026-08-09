@@ -890,14 +890,29 @@ export const productionController = {
 
   async enrollStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { studentId, subBatchCode } = req.body;
+      const { studentId, subBatchCode, previousEnrollmentId } = req.body;
       let { scheduleId } = req.body;
       if (!scheduleId && subBatchCode) scheduleId = await resolveScheduleByCode(subBatchCode);
       if (!studentId || !scheduleId) throw new AppError('studentId and scheduleId (or subBatchCode) are required', 400);
 
-      const enrollment = await prisma.studentBatchEnrollment.create({
-        data: { studentId, scheduleId },
-        include: { student: true, schedule: { include: { course: true, batch: true } } },
+      // previousEnrollmentId marks this as a *move* (Edit Student's "move to a
+      // different batch/schedule") rather than an additional concurrent
+      // enrollment (the separate "Enroll Student" flow, where a student can
+      // legitimately be active in more than one course at once). When
+      // present, retire the old enrollment in the same transaction so the
+      // student portal only ever reflects the current batch/trainer — not
+      // both — without touching any other, unrelated enrollments.
+      const enrollment = await prisma.$transaction(async (tx) => {
+        if (previousEnrollmentId) {
+          const prev = await tx.studentBatchEnrollment.findUnique({ where: { id: previousEnrollmentId } });
+          if (prev && prev.studentId === studentId && prev.status === 'ACTIVE') {
+            await tx.studentBatchEnrollment.update({ where: { id: previousEnrollmentId }, data: { status: 'DROPPED' } });
+          }
+        }
+        return tx.studentBatchEnrollment.create({
+          data: { studentId, scheduleId },
+          include: { student: true, schedule: { include: { course: true, batch: true } } },
+        });
       });
       res.status(201).json({ success: true, data: enrollment });
     } catch (err) { next(err); }
