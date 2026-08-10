@@ -13,7 +13,8 @@
     "db:seed:real": "ts-node src/utils/seedRealOrg.ts",
     "notify:photos": "ts-node src/utils/sendPhotoRequest.ts",
     "test:birthday": "ts-node src/utils/testBirthdayEmail.ts",
-    "db:studio": "npx prisma studio"
+    "db:studio": "npx prisma studio",
+    "batch:transfer": "ts-node src/utils/transferBatch.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1077.0",
