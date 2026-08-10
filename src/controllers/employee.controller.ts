@@ -257,6 +257,23 @@ export const employeeController = {
     } catch (err) { next(err); }
   },
 
+  /** HR/Admin uploading a photo on behalf of another employee (e.g. one who
+   * hasn't uploaded their own yet) — same storage/validation as the
+   * self-service /me/photo, just addressed by employee id instead of the
+   * logged-in user. */
+  async uploadEmployeePhoto(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      if (!req.file) throw new AppError('No image uploaded — use form field "photo"', 400);
+      const employee = await prisma.employee.findUnique({ where: { id: req.params.id } });
+      if (!employee) throw new AppError('Employee not found', 404);
+
+      const photoUrl = `/uploads/photos/${req.file.filename}`;
+      await prisma.employee.update({ where: { id: employee.id }, data: { profilePhoto: photoUrl } });
+
+      res.json({ success: true, data: { profilePhoto: photoUrl }, message: 'Profile photo updated' });
+    } catch (err) { next(err); }
+  },
+
   async getMyProfile(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employee = await prisma.employee.findUnique({

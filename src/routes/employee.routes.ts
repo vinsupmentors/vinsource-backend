@@ -21,6 +21,7 @@ router.post('/bulk', requireMinRole('HR'), employeeController.bulkCreate);
 router.post('/calc-salary', requireMinRole('HR'), employeeController.calcSalary);
 router.put('/mapping', requireRole('SUPER_ADMIN'), employeeController.bulkUpdateMapping);
 router.put('/:id', requireMinRole('HR'), employeeController.update);
+router.post('/:id/photo', requireMinRole('HR'), uploadProfilePhoto, employeeController.uploadEmployeePhoto);
 router.put('/:id/salary', requireMinRole('HR'), employeeController.updateSalary);
 router.put('/:id/confirm', requireMinRole('HR'), employeeController.confirm);
 router.patch('/:id/empcode', requireRole('SUPER_ADMIN'), employeeController.updateEmpCode);
