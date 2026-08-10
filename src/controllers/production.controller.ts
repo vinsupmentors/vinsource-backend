@@ -10,10 +10,14 @@ import { config } from '../config/env';
  * Sends the student welcome email (credentials + first-login steps).
  * Skips synthetic placeholder addresses. Never blocks the request.
  */
-function sendStudentWelcomeEmail(opts: { name?: string | null; studentCode: string; email?: string | null; batchLine?: string }) {
+export function sendStudentWelcomeEmail(opts: { name?: string | null; studentCode: string; email?: string | null; batchLine?: string }) {
   const email = (opts.email || '').trim();
-  if (!email || email.endsWith('.local')) return; // no real inbox to send to
-  emailService.send({
+  if (!email || email.endsWith('.local')) return Promise.resolve(); // no real inbox to send to
+  // Returns the send promise (existing fire-and-forget call sites just don't
+  // await it) so one-off scripts like resendWelcomeEmail.ts CAN await it
+  // before the process exits — otherwise node would exit before the SMTP
+  // send actually completes.
+  return emailService.send({
     to: email,
     cc: 'v7032vinsup@gmail.com', // production team copy (Gaurav)
     subject: '🎓 Welcome to Vinsup Skill Academy — Your Student Portal Login',

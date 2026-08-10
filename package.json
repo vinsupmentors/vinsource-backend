@@ -14,7 +14,8 @@
     "notify:photos": "ts-node src/utils/sendPhotoRequest.ts",
     "test:birthday": "ts-node src/utils/testBirthdayEmail.ts",
     "db:studio": "npx prisma studio",
-    "batch:transfer": "ts-node src/utils/transferBatch.ts"
+    "batch:transfer": "ts-node src/utils/transferBatch.ts",
+    "notify:students": "ts-node src/utils/resendStudentWelcome.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1077.0",

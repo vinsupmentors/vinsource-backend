@@ -61,7 +61,17 @@ app.use(cors({
 const isDev = config.NODE_ENV !== 'production';
 app.use('/api/auth', rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isDev ? 500 : 200, // raised from 30 → 200: handles ~100 concurrent users behind shared NAT
+  // Raised again: 200/15min was still tripping on mobile-carrier CGNAT and
+  // public wifi, where dozens of unrelated real users (not just our own
+  // students) can share one public IP — every one of THEIR successful
+  // logins was eating into the same shared budget as ours, so a portal user
+  // could get "Too many requests" without ever having made many attempts
+  // themselves. skipSuccessfulRequests fixes the actual problem: only
+  // FAILED attempts (the thing this limiter exists to slow down) count
+  // against the budget, so any number of legitimate successful logins from
+  // a shared IP no longer erodes headroom for everyone else on it.
+  max: isDev ? 500 : 300,
+  skipSuccessfulRequests: true,
   message: { success: false, message: 'Too many requests, please try again later' },
   skip: () => isDev, // completely skip in dev
 }));
