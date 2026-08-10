@@ -266,12 +266,19 @@ export const authController = {
 
       const resetUrl = `${config.FRONTEND_URL}/reset-password?token=${token}`;
 
-      await emailService.send({
+      // Fire-and-forget, like every other transactional email in this app —
+      // previously this was awaited with no .catch(), so a transient SMTP
+      // hiccup (e.g. an expired Gmail app password) would throw all the way
+      // out to the error handler and return a raw 500 "Internal server
+      // error" instead of the graceful "check your email" screen. Worse, it
+      // also broke the "don't reveal whether the account exists" intent of
+      // this endpoint, since a failure only ever happens for real accounts.
+      emailService.send({
         to: user.email,
         subject: 'Reset Your Vin-Source Portal Password',
         html: emailService.templates.passwordResetEmail({ firstName, resetUrl }),
         template: 'password_reset',
-      });
+      }).catch((err) => console.error('Password reset email failed:', err));
 
       res.json({ success: true, message: 'If that email is registered, you will receive a reset link.' });
     } catch (err) { next(err); }

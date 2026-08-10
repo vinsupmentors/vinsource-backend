@@ -188,12 +188,20 @@ export const attendanceCronService = {
         lastAbsentDate: formatDateLabel(asOfDate),
       });
 
-      await emailService.send({
-        to: toList,
-        subject: `🚨 ${streak}-Day Absence Escalation — ${enr.student.firstName} ${enr.student.lastName}`,
-        html,
-        template: 'attendanceEscalation',
-      });
+      // One student's email failing (transient SMTP hiccup) shouldn't abort
+      // the whole cron run and skip escalation for every student after them
+      // in the loop — log and move on, same as everywhere else in the app.
+      try {
+        await emailService.send({
+          to: toList,
+          subject: `🚨 ${streak}-Day Absence Escalation — ${enr.student.firstName} ${enr.student.lastName}`,
+          html,
+          template: 'attendanceEscalation',
+        });
+      } catch (err) {
+        console.error(`Attendance escalation email failed for ${enr.student.firstName} ${enr.student.lastName}:`, err);
+        continue;
+      }
 
       await prisma.attendanceEscalationLog.create({
         data: { studentId: enr.studentId, scheduleId: enr.scheduleId, consecutiveDays: streak, asOfDate },
