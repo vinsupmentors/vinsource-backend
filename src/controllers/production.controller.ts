@@ -326,7 +326,10 @@ export const productionController = {
             include: {
               course: { select: { id: true, name: true } },
               trainers: { include: { trainer: { select: employeeSelect } } },
-              _count: { select: { enrollments: true } },
+              // Filtered to ACTIVE — an unfiltered count would keep counting
+              // DROPPED rows (e.g. from a batch move) forever, making the
+              // "N students" badge never shrink even after a transfer.
+              _count: { select: { enrollments: { where: { status: 'ACTIVE' } } } },
             },
           },
         },
