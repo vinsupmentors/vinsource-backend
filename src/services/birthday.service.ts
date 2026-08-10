@@ -30,7 +30,7 @@ export const birthdayService = {
     });
 
     if (celebrants.length === 0) {
-      return { celebrants: [], notified: 0 };
+      return { celebrants: [], notified: 0, skippedEmailNoPhoto: [] };
     }
 
     // Recipients: every active employee (including celebrants themselves can receive a copy too)
@@ -47,7 +47,12 @@ export const birthdayService = {
         .filter((e) => e.email && e.email !== celebrant.email)
         .map((e) => e.email);
 
-      if (celebrant.email) {
+      // Only send the email if a profile photo is on file — a birthday
+      // wish without a photo looks unfinished, and it's cheap for HR to
+      // just ask the employee to upload one before their next birthday.
+      // The in-app notification still goes out either way (no photo
+      // involved there), so the celebration isn't missed entirely.
+      if (celebrant.email && celebrant.profilePhoto) {
         await emailService
           .send({
             to: celebrant.email,
@@ -57,14 +62,14 @@ export const birthdayService = {
               celebrantName,
               celebrantFirstName: celebrant.firstName,
               // Absolute URL so the photo renders inside email clients
-              photoUrl: celebrant.profilePhoto
-                ? `${config.FRONTEND_URL}${celebrant.profilePhoto.startsWith('/') ? '' : '/'}${celebrant.profilePhoto}`
-                : null,
+              photoUrl: `${config.FRONTEND_URL}${celebrant.profilePhoto.startsWith('/') ? '' : '/'}${celebrant.profilePhoto}`,
               logoUrl: `${config.FRONTEND_URL}/vinsup-logo.png`,
             }),
             template: 'birthday_wish',
           })
           .catch((err) => console.error('Birthday email failed:', err));
+      } else if (celebrant.email) {
+        console.warn(`Birthday email skipped for ${celebrantName} — no profile photo on file.`);
       }
 
       // In-app notification for everyone
@@ -80,6 +85,10 @@ export const birthdayService = {
       });
     }
 
-    return { celebrants: celebrants.map((c) => `${c.firstName} ${c.lastName}`), notified: celebrants.length };
+    return {
+      celebrants: celebrants.map((c) => `${c.firstName} ${c.lastName}`),
+      notified: celebrants.length,
+      skippedEmailNoPhoto: celebrants.filter((c) => !c.profilePhoto).map((c) => `${c.firstName} ${c.lastName}`),
+    };
   },
 };
