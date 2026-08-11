@@ -250,6 +250,17 @@ enum LeadLostReason {
   OTHER
 }
 
+enum CallLogSource {
+  MANUAL // BDA typed this in themselves via "Log a Call"
+  AUTO   // reported automatically by a SalesDevice (Android call-tracking app)
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+  MISSED
+}
+
 enum PaymentMode {
   CASH
   UPI
@@ -528,6 +539,7 @@ model Employee {
   demosConducted    Demo[]              @relation("DemoConductor")
   demosCoConducted  Demo[]              @relation("DemoCoConductor")
   leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
+  salesDevices      SalesDevice[]       @relation("SalesDeviceOwner")
   feeCollections    FeeCollection[]     @relation("FeeCollector")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
@@ -1302,17 +1314,55 @@ model Lead {
 /// One row per call a BDA logs against a lead — this is the permanent history
 /// that survives reassignment: when a lead moves from one BDA to another, the
 /// new BDA reads this same log and sees every prior call/note/follow-up.
+///
+/// Also doubles as the auto-logged call history from the SIM call-tracking
+/// app (source = AUTO): those rows land here the same way a manual "Log a
+/// Call" does, just without notes yet (a BDA can add notes afterward the same
+/// way they always could). leadId is nullable specifically for AUTO rows
+/// whose phone number didn't match any existing Lead — those sit in the
+/// "Unmatched Calls" review queue (rawPhoneNumber holds the number) until a
+/// BDA links them to a lead or creates a new one from it.
 model LeadCallLog {
-  id             String    @id @default(uuid())
-  leadId         String
+  id             String        @id @default(uuid())
+  leadId         String?
   calledById     String?
-  notes          String    @db.Text
+  notes          String?       @db.Text
   nextFollowUpAt DateTime?
-  calledAt       DateTime  @default(now())
-  createdAt      DateTime  @default(now())
+  calledAt       DateTime      @default(now())
+  createdAt      DateTime      @default(now())
 
-  lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  calledBy Employee? @relation("LeadCallLogBy", fields: [calledById], references: [id])
+  // Auto-logging fields (all null for ordinary MANUAL rows)
+  source          CallLogSource @default(MANUAL)
+  direction       CallDirection?
+  durationSeconds Int?
+  recordingUrl    String?
+  rawPhoneNumber  String?       // number exactly as the phone reported it, kept even once matched
+  deviceId        String?
+
+  lead     Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  calledBy Employee?    @relation("LeadCallLogBy", fields: [calledById], references: [id])
+  device   SalesDevice? @relation(fields: [deviceId], references: [id])
+
+  @@index([leadId])
+  @@index([deviceId])
+}
+
+/// One row per company/business-SIM phone enrolled in the SIM call-tracking
+/// app. deviceToken authenticates that phone's POSTs to /api/sales/call-events
+/// — this is a machine credential, not a logged-in employee session, since the
+/// Android app runs unattended in the background with nobody logged into the
+/// portal on that device.
+model SalesDevice {
+  id          String    @id @default(uuid())
+  employeeId  String
+  label       String?   // e.g. "Priya's phone"
+  deviceToken String    @unique
+  isActive    Boolean   @default(true)
+  lastSeenAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  employee Employee      @relation("SalesDeviceOwner", fields: [employeeId], references: [id])
+  callLogs LeadCallLog[]
 }
 
 enum DemoMode {

@@ -39,6 +39,7 @@ import studentOnboardingRoutes from './routes/studentOnboarding.routes';
 import trainerPortalRoutes from './routes/trainerPortal.routes';
 import publicRoutes from './routes/public.routes';
 import appointmentLetterRoutes from './routes/appointmentLetter.routes';
+import callTrackingRoutes from './routes/callTracking.routes';
 
 const app = express();
 
@@ -143,6 +144,10 @@ app.use('/api/student-portal', studentPortalRoutes);
 app.use('/api/trainer-portal', trainerPortalRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/appointment-letters', appointmentLetterRoutes);
+// Hit by the SIM call-tracking Android app via its own device token, not an
+// employee login — see callTracking.routes.ts / deviceAuth.ts for why this
+// isn't nested under /api/sales like the rest of the CRM endpoints.
+app.use('/api/call-tracking', callTrackingRoutes);
 app.use('/api/departments', buildDepartmentRouter());
 app.use('/api/designations', buildDesignationRouter());
 app.use('/api/branches', buildBranchRouter());

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { salesController } from '../controllers/sales.controller';
+import { callTrackingController } from '../controllers/callTracking.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
 import { uploadDemoProof } from '../middleware/upload';
@@ -41,5 +42,18 @@ router.get('/lead-quality', requireModule('SALES', 'ADMIN'), salesController.lea
 router.get('/report-recipients', requireModule('SALES', 'ADMIN'), salesController.listReportRecipients);
 router.post('/report-recipients', requireModule('SALES', 'ADMIN'), salesController.addReportRecipient);
 router.delete('/report-recipients/:id', requireModule('SALES', 'ADMIN'), salesController.removeReportRecipient);
+
+// SIM call-tracking — device enrollment is ADMIN-only (issues a secret
+// token); the unmatched-call review queue is regular EDIT access, same level
+// as logging a call manually. The actual call-event ingestion from the phone
+// itself lives in callTracking.routes.ts under /api/call-tracking, since it
+// authenticates via device token instead of an employee login.
+router.get('/devices', requireModule('SALES', 'ADMIN'), callTrackingController.listDevices);
+router.post('/devices', requireModule('SALES', 'ADMIN'), callTrackingController.registerDevice);
+router.put('/devices/:id/deactivate', requireModule('SALES', 'ADMIN'), callTrackingController.deactivateDevice);
+
+router.get('/unmatched-calls', requireModule('SALES', 'EDIT'), callTrackingController.listUnmatchedCalls);
+router.post('/unmatched-calls/:id/link', requireModule('SALES', 'EDIT'), callTrackingController.linkUnmatchedCall);
+router.post('/unmatched-calls/:id/create-lead', requireModule('SALES', 'EDIT'), callTrackingController.createLeadFromUnmatchedCall);
 
 export default router;
