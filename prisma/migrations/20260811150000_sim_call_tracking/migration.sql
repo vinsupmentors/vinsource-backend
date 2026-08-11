@@ -12,7 +12,7 @@ CREATE TABLE `SalesDevice` (
     UNIQUE INDEX `SalesDevice_deviceToken_key`(`deviceToken`),
     INDEX `SalesDevice_employeeId_idx`(`employeeId`),
     PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 ALTER TABLE `SalesDevice` ADD CONSTRAINT `SalesDevice_employeeId_fkey` FOREIGN KEY (`employeeId`) REFERENCES `Employee`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
