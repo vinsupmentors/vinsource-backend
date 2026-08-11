@@ -22,6 +22,12 @@ router.delete('/leads/:id', requireModule('SALES', 'ADMIN'), salesController.del
 router.get('/leads/:id/calls', salesController.listCallLogs);
 router.post('/leads/:id/calls', requireModule('SALES', 'EDIT'), salesController.addCallLog);
 
+// Global call log — every call across all leads for a day (or full history
+// for a searched number), like a phone's own call log. VIEW-level like the
+// rest of this router; self-scoped to the caller's own calls inside the
+// controller for anyone below SALES=ADMIN.
+router.get('/call-log', salesController.listCallLog);
+
 router.get('/demos', salesController.listDemos);
 router.post('/demos', requireModule('SALES', 'EDIT'), salesController.createDemo);
 // uploadDemoProof parses multipart bodies (Mark Conducted attaches a proof

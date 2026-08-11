@@ -6,6 +6,7 @@ import { AuthRequest } from '../types';
 import { paginate, formatPagination, nextDemoBookingNumber } from '../utils/helpers';
 import { computeSalesPulse } from '../services/salesPulse.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
+import { normalizePhone } from '../utils/phone';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -364,6 +365,64 @@ export const salesController = {
         orderBy: { calledAt: 'desc' },
       });
       res.json({ success: true, data: logs });
+    } catch (err) { next(err); }
+  },
+
+  // Global call log — every call (manual or auto-tracked) across all leads,
+  // like a phone's own call log rather than one lead's history. Two modes:
+  // browse a single day (default today), or search a phone number to pull
+  // its full history regardless of date. Non-admins only ever see calls they
+  // personally made/received (calledById === themselves) — same self-scoping
+  // as listLeads, just keyed off the call instead of the lead assignment.
+  async listCallLog(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { date, phone, employeeId, page = 1, limit = 50 } = req.query;
+      const p = Number(page), l = Math.min(Number(limit) || 50, 200);
+
+      const where: Record<string, unknown> = {};
+      const admin = await isSalesAdmin(req);
+      if (!admin) {
+        where.calledById = req.user?.employeeId || '__none__';
+      } else if (employeeId) {
+        where.calledById = employeeId;
+      }
+
+      if (!phone) {
+        const day = date ? new Date(String(date)) : new Date();
+        if (isNaN(day.getTime())) throw new AppError('Invalid date', 400);
+        const start = new Date(day); start.setHours(0, 0, 0, 0);
+        const end = new Date(start); end.setDate(end.getDate() + 1);
+        where.calledAt = { gte: start, lt: end };
+      }
+
+      const include = {
+        calledBy: { select: employeeSelect },
+        lead: { select: { id: true, name: true, phone: true } },
+      };
+
+      if (phone) {
+        // Stored numbers aren't consistently formatted (+91, leading 0,
+        // spaces/dashes), so normalize both sides in app code instead of a
+        // fragile SQL LIKE — same approach as the auto-ingestion matcher.
+        // Fine at this table's scale (a sales team's calls, not millions of
+        // rows), and this only runs on an explicit search, not a hot path.
+        const normalized = normalizePhone(String(phone));
+        const all = await prisma.leadCallLog.findMany({ where, include, orderBy: { calledAt: 'desc' } });
+        const filtered = all.filter((c) => {
+          const num = c.rawPhoneNumber || c.lead?.phone;
+          return num && normalizePhone(num) === normalized;
+        });
+        const total = filtered.length;
+        const paged = filtered.slice((p - 1) * l, p * l);
+        res.json({ success: true, data: paged, meta: formatPagination(total, p, l) });
+        return;
+      }
+
+      const [logs, total] = await Promise.all([
+        prisma.leadCallLog.findMany({ where, include, orderBy: { calledAt: 'desc' }, ...paginate(p, l) }),
+        prisma.leadCallLog.count({ where }),
+      ]);
+      res.json({ success: true, data: logs, meta: formatPagination(total, p, l) });
     } catch (err) { next(err); }
   },
 
