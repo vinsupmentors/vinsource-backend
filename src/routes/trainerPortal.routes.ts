@@ -17,6 +17,7 @@ router.get('/tests/:testId/marks', trainerPortalController.testMarks);
 router.post('/tests/:testId/marks', trainerPortalController.upsertMarks);
 router.get('/feedback', trainerPortalController.listFeedback);
 router.post('/feedback', trainerPortalController.upsertFeedback);
+router.post('/students/:studentId/push-to-placement', trainerPortalController.pushToPlacement);
 router.get('/schedules/:scheduleId/module-feedback', trainerPortalController.listModuleFeedback);
 router.post('/schedules/:scheduleId/module-feedback', trainerPortalController.upsertModuleFeedback);
 

@@ -306,6 +306,64 @@ export const trainerPortalController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Trainer-initiated shortcut for the same status flip a PM/Admin can
+   * already do manually in Production -> Students ("In Placement Pool") or
+   * via the "Push Sub-batch to Placements" bulk action — lets the trainer who
+   * just finished their final internal review send the student straight to
+   * the Placement Pool without waiting on a separate PM step. Both paths
+   * write the same Student.status/movedToPlacementAt fields, so the PM's
+   * manual control keeps working exactly as before and the Placement Pool
+   * (which just filters status === IN_PLACEMENT) picks this up immediately —
+   * no separate sync needed.
+   *
+   * Gated on the trainer having already saved certificateEligible: true for
+   * this student+course (the "final review" itself); a student can be
+   * enrolled in more than one course at once (see enrollStudent), and by
+   * design any one of their trainers marking them ready is enough to move
+   * them into the pool — it does not require every concurrent course to sign off.
+   */
+  async pushToPlacement(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      if (!employeeId) throw new AppError('No trainer profile is linked to this account', 403);
+      const { studentId } = req.params;
+      const { courseId } = req.body;
+      if (!courseId) throw new AppError('courseId is required', 400);
+
+      // Ownership check — same as upsertFeedback: must be the assigned
+      // trainer for this student in this course.
+      const enrollment = await prisma.studentBatchEnrollment.findFirst({
+        where: { studentId, schedule: { courseId, trainers: { some: { trainerId: employeeId } } } },
+      });
+      if (!enrollment) throw new AppError('You are not the assigned trainer for this student in this course', 403);
+
+      const feedback = await prisma.trainerFeedback.findUnique({ where: { studentId_courseId: { studentId, courseId } } });
+      if (!feedback?.certificateEligible) {
+        throw new AppError('Mark this student certificate eligible before transferring them to the Placement Pool', 400);
+      }
+
+      const student = await prisma.student.findUnique({ where: { id: studentId }, select: { status: true, movedToPlacementAt: true } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (student.status === 'PLACED' || student.status === 'BATCH_TRANSFER') {
+        throw new AppError(`Cannot move a student with status ${student.status} to the Placement Pool`, 400);
+      }
+
+      const updated = await prisma.student.update({
+        where: { id: studentId },
+        data: {
+          status: 'IN_PLACEMENT',
+          // Write-once, same as production.controller.ts's pushToPlacements —
+          // preserves the original SLA clock start date if already set.
+          movedToPlacementAt: student.movedToPlacementAt ?? new Date(),
+        },
+        select: { id: true, status: true, movedToPlacementAt: true },
+      });
+
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
   /** My module-wise feedback entries for one schedule (defaults to all my schedules if scheduleId omitted via query). */
   async listModuleFeedback(req: AuthRequest, res: Response, next: NextFunction) {
     try {
