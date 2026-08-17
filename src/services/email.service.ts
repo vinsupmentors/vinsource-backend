@@ -637,6 +637,58 @@ export const emailService = {
         </div>
       </div>`,
 
+    placementShortlisted: (data: { studentName: string; companyName: string; role: string; driveDate: string }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e40af;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">🎯 You've Been Shortlisted!</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.studentName},</p>
+          <p>Great news — you've been shortlisted for a placement drive:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Company</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.companyName}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Role</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.role}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Drive Date</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.driveDate}</td></tr>
+          </table>
+          <p>The placement team will be in touch with further details. All the best!</p>
+        </div>
+      </div>`,
+
+    placementInterviewScheduled: (data: { studentName: string; companyName: string; round: number; scheduledAt: string; interviewerName?: string | null }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#7c3aed;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">📅 Interview Scheduled</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.studentName},</p>
+          <p>Your interview has been scheduled:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Company</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.companyName || '—'}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Round</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.round}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Date &amp; Time</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.scheduledAt}</strong></td></tr>
+            ${data.interviewerName ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Interviewer</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.interviewerName}</td></tr>` : ''}
+          </table>
+          <p>Prepare well and reach out to the placement team if you have any questions. Good luck!</p>
+        </div>
+      </div>`,
+
+    placementOfferReceived: (data: { studentName: string; companyName: string; designation?: string | null; packageLabel?: string | null }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#16a34a;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">🎉 Congratulations — You've Been Selected!</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.studentName},</p>
+          <p>Wonderful news — you've been selected for an offer:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Company</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.companyName}</td></tr>
+            ${data.designation ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Designation</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.designation}</td></tr>` : ''}
+            ${data.packageLabel ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f0fdf4;"><strong>Package</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#f0fdf4;"><strong>${data.packageLabel}</strong></td></tr>` : ''}
+          </table>
+          <p>The placement team will reach out with the formal offer letter and next steps. Congratulations once again on this achievement!</p>
+        </div>
+      </div>`,
+
     attendanceEscalation: (data: {
       studentName: string;
       studentCode: string;

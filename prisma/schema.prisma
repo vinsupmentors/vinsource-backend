@@ -2246,11 +2246,20 @@ model PlacementResult {
   package     Float?
   createdAt   DateTime @default(now())
 
+  // Only meaningful for off-campus/direct offers (driveId is null) — for
+  // drive-linked offers the company is derived from drive.partner.name
+  // instead, so this stays unset there to avoid two sources of truth.
+  companyName String?
+
   // ── Offer details, filled in once result = SELECTED ──────────────────────
   designation     String?
   joiningDate     DateTime?
   offerLetterUrl  String?
   offerSentAt     DateTime?
+
+  // ── Student's response to the offer, recorded by the placement team ──────
+  offerStatus     String    @default("PENDING") // PENDING | ACCEPTED | DECLINED
+  offerRespondedAt DateTime?
 
   // driveId is optional so direct/off-campus offers can be recorded straight
   // from the Placement Pool without requiring an associated Drive.

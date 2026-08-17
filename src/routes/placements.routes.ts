@@ -12,6 +12,7 @@ router.get('/stats', placementsController.stats);
 router.get('/pool', placementsController.pool);
 router.get('/filters', placementsController.listFilterOptions);
 router.get('/reports', placementsController.reports);
+router.get('/analytics', requireModule('PLACEMENTS', 'ADMIN'), placementsController.analytics);
 router.get('/students/:id/profile', placementsController.getStudentProfile);
 
 router.get('/partners', placementsController.listPartners);
@@ -24,6 +25,7 @@ router.put('/drives/:id', requireModule('PLACEMENTS', 'EDIT'), placementsControl
 router.get('/results', placementsController.listResults);
 router.post('/results', requireModule('PLACEMENTS', 'EDIT'), uploadOfferLetter, placementsController.createResult);
 router.put('/results/:id', requireModule('PLACEMENTS', 'EDIT'), uploadOfferLetter, placementsController.updateResult);
+router.put('/results/:id/offer-response', requireModule('PLACEMENTS', 'EDIT'), placementsController.recordOfferResponse);
 
 // ── Softskill / Aptitude sessions ──────────────────────────────────────────
 router.get('/softskill-sessions', placementsController.listSoftskillSessions);
@@ -38,6 +40,7 @@ router.put('/drive-candidates/:id', requireModule('PLACEMENTS', 'EDIT'), placeme
 
 // ── Interviews ───────────────────────────────────────────────────────────────
 router.get('/interviews', placementsController.listInterviews);
+router.post('/interviews', requireModule('PLACEMENTS', 'EDIT'), placementsController.createInterview);
 router.put('/interviews/:id', requireModule('PLACEMENTS', 'EDIT'), placementsController.updateInterview);
 
 export default router;

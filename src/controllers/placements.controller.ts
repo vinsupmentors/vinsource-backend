@@ -2,8 +2,16 @@ import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { emailService } from '../services/email.service';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
+
+// Same convention used elsewhere (onboarding signed-document emails): skip
+// placeholder ".local" addresses rather than let a real send attempt fail.
+const hasRealEmail = (email?: string | null): email is string => !!email && !email.trim().endsWith('.local');
+
+const SLA_MIN_INTERVIEWS = 3;
+const SLA_WINDOW_DAYS = 90;
 
 // Computes the "Ready for Placement" / "Not Yet Ready" split for one pool
 // student: ready = every isCapstone Project released to a schedule the
@@ -46,6 +54,52 @@ function computeReadiness(
   }
 
   return { ready: missing.length === 0, missing };
+}
+
+// Interview-SLA: a pool student should have at least SLA_MIN_INTERVIEWS
+// within SLA_WINDOW_DAYS of entering the pool (Student.movedToPlacementAt).
+// "At risk" only fires once the window has actually elapsed — a student who
+// entered the pool last week isn't behind yet just because they have 0
+// interviews so far, they still have time.
+function computeSlaStatus(movedToPlacementAt: Date | null, interviewCount: number) {
+  if (!movedToPlacementAt) return { daysInPool: null, slaAtRisk: false };
+  const daysInPool = Math.floor((Date.now() - movedToPlacementAt.getTime()) / (1000 * 60 * 60 * 24));
+  const slaAtRisk = daysInPool >= SLA_WINDOW_DAYS && interviewCount < SLA_MIN_INTERVIEWS;
+  return { daysInPool, slaAtRisk };
+}
+
+/** Fires the "you've been selected" email once a result transitions into
+ * SELECTED. Company name prefers the linked drive's partner (source of
+ * truth for drive-linked offers) and falls back to the manually-entered
+ * companyName field for off-campus offers. Silently skipped if there's no
+ * studentId or no real email on file — never throws into the caller. */
+async function notifyOfferReceived(result: {
+  studentId: string | null;
+  studentName: string;
+  package: number | null;
+  designation: string | null;
+  companyName: string | null;
+  drive?: { partner: { name: string } } | null;
+}) {
+  if (!result.studentId) return;
+  const student = await prisma.student.findUnique({ where: { id: result.studentId }, select: { email: true } });
+  const email = student?.email;
+  if (!hasRealEmail(email)) return;
+
+  const companyName = result.drive?.partner.name || result.companyName || 'the company';
+  const packageLabel = result.package ? `₹${result.package.toLocaleString('en-IN')} LPA` : null;
+
+  emailService.send({
+    to: email,
+    subject: `Congratulations — You've Been Selected by ${companyName}!`,
+    html: emailService.templates.placementOfferReceived({
+      studentName: result.studentName,
+      companyName,
+      designation: result.designation,
+      packageLabel,
+    }),
+    template: 'placement_offer_received',
+  }).catch((err) => console.error('Placement offer-received email failed:', err));
 }
 
 export const placementsController = {
@@ -151,7 +205,7 @@ export const placementsController = {
 
   async createResult(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { driveId, studentId, studentName, result, package: pkg, designation, joiningDate } = req.body;
+      const { driveId, studentId, studentName, result, package: pkg, designation, joiningDate, companyName } = req.body;
       if (!studentName) throw new AppError('studentName is required', 400);
 
       const file = req.file as Express.Multer.File | undefined;
@@ -167,12 +221,17 @@ export const placementsController = {
           joiningDate: joiningDate ? new Date(joiningDate) : undefined,
           offerLetterUrl: file ? `/uploads/offer-letters/${file.filename}` : undefined,
           offerSentAt: file ? new Date() : undefined,
+          // Only meaningful for off-campus offers — drive-linked ones resolve
+          // the company from drive.partner.name instead (see schema comment).
+          companyName: driveId ? undefined : (companyName || undefined),
         },
+        include: { drive: { include: { partner: { select: { name: true } } } } },
       });
 
       // A SELECTED result with a studentId moves the student to PLACED.
       if (studentId && result === 'SELECTED') {
         await prisma.student.update({ where: { id: studentId }, data: { status: 'PLACED' } });
+        await notifyOfferReceived(placementResult);
       }
 
       res.status(201).json({ success: true, data: placementResult });
@@ -181,7 +240,7 @@ export const placementsController = {
 
   async updateResult(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { result, package: pkg, designation, joiningDate } = req.body;
+      const { result, package: pkg, designation, joiningDate, companyName } = req.body;
       const file = req.file as Express.Multer.File | undefined;
 
       const existing = await prisma.placementResult.findUnique({ where: { id: req.params.id } });
@@ -196,13 +255,34 @@ export const placementsController = {
           joiningDate: joiningDate ? new Date(joiningDate) : undefined,
           offerLetterUrl: file ? `/uploads/offer-letters/${file.filename}` : undefined,
           offerSentAt: file ? new Date() : undefined,
+          companyName: existing.driveId ? undefined : (companyName || undefined),
         },
+        include: { drive: { include: { partner: { select: { name: true } } } } },
       });
 
-      if (existing.studentId && result === 'SELECTED') {
+      // Only fire the "you're selected" email on the transition INTO
+      // SELECTED — re-saving an already-SELECTED result (e.g. attaching the
+      // offer letter afterward) shouldn't re-send it.
+      if (existing.studentId && result === 'SELECTED' && existing.result !== 'SELECTED') {
         await prisma.student.update({ where: { id: existing.studentId }, data: { status: 'PLACED' } });
+        await notifyOfferReceived(updated);
       }
 
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  /** Records whether the student actually accepted or declined a SELECTED offer. */
+  async recordOfferResponse(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { offerStatus } = req.body;
+      if (!['ACCEPTED', 'DECLINED', 'PENDING'].includes(offerStatus)) {
+        throw new AppError('offerStatus must be ACCEPTED, DECLINED, or PENDING', 400);
+      }
+      const updated = await prisma.placementResult.update({
+        where: { id: req.params.id },
+        data: { offerStatus, offerRespondedAt: offerStatus === 'PENDING' ? null : new Date() },
+      });
       res.json({ success: true, data: updated });
     } catch (err) { next(err); }
   },
@@ -259,7 +339,7 @@ export const placementsController = {
         // students who have at least one SELECTED result → "Placed"
         prisma.placementResult.findMany({
           where: { studentId: { in: allStudentIds }, result: 'SELECTED' },
-          select: { studentId: true, package: true, designation: true },
+          select: { id: true, studentId: true, package: true, designation: true, offerStatus: true },
           orderBy: { createdAt: 'desc' },
         }),
       ]);
@@ -270,11 +350,13 @@ export const placementsController = {
       for (const iv of recentInterviews) {
         if (!lastOutcomeMap.has(iv.studentId)) lastOutcomeMap.set(iv.studentId, iv.outcome);
       }
-      // keep only the most-recent SELECTED result per student
-      const placedMap = new Map<string, { package: number | null; designation: string | null }>();
+      // keep only the most-recent SELECTED result per student — id/offerStatus
+      // let the Pool UI record the accept/decline decision directly, without
+      // needing to know which Drive (if any) the offer came from.
+      const placedMap = new Map<string, { id: string; package: number | null; designation: string | null; offerStatus: string }>();
       for (const r of selectedResults) {
         if (!r.studentId) continue;
-        if (!placedMap.has(r.studentId)) placedMap.set(r.studentId, { package: r.package, designation: r.designation });
+        if (!placedMap.has(r.studentId)) placedMap.set(r.studentId, { id: r.id, package: r.package, designation: r.designation, offerStatus: r.offerStatus });
       }
 
       const allScheduleIds = Array.from(
@@ -295,33 +377,35 @@ export const placementsController = {
         capstoneReleasesByScheduleId.set(release.scheduleId, list);
       }
 
-      let withReadiness = students.map((s) => {
+      const allWithReadiness = students.map((s) => {
         const scheduleIds = s.enrollments.map((e) => e.schedule.id);
         const { ready, missing } = computeReadiness(s, capstoneReleasesByScheduleId, scheduleIds);
+        const interviewCount = interviewCountMap.get(s.id) || 0;
         return {
           ...s,
           placementReadiness: { ready, missing },
           interviewSummary: {
-            count: interviewCountMap.get(s.id) || 0,
+            count: interviewCount,
             lastOutcome: lastOutcomeMap.get(s.id) || null,
           },
           isPlaced: placedMap.has(s.id),
           placedInfo: placedMap.get(s.id) || null,
+          sla: computeSlaStatus(s.movedToPlacementAt, interviewCount),
         };
       });
 
+      let withReadiness = allWithReadiness;
       if (readiness === 'ready') withReadiness = withReadiness.filter((s) => s.placementReadiness.ready);
       if (readiness === 'not_ready') withReadiness = withReadiness.filter((s) => !s.placementReadiness.ready);
       if (readiness === 'placed') withReadiness = withReadiness.filter((s) => s.isPlaced);
+      if (readiness === 'sla_at_risk') withReadiness = withReadiness.filter((s) => s.sla.slaAtRisk);
 
       res.json({
         success: true,
         data: withReadiness,
         total: withReadiness.length,
-        readyCount: students.filter((s) => {
-          const scheduleIds = s.enrollments.map((e) => e.schedule.id);
-          return computeReadiness(s, capstoneReleasesByScheduleId, scheduleIds).ready;
-        }).length,
+        readyCount: allWithReadiness.filter((s) => s.placementReadiness.ready).length,
+        slaAtRiskCount: allWithReadiness.filter((s) => s.sla.slaAtRisk).length,
       });
     } catch (err) { next(err); }
   },
@@ -409,6 +493,7 @@ export const placementsController = {
       const notReadyCount = totalStudents - readyCount;
       const placedCount = withReady.filter((s) => s.status === 'PLACED').length;
       const firstInterviewGivenCount = withReady.filter((s) => (s._count?.interviews || 0) >= 1).length;
+      const slaAtRiskCount = withReady.filter((s) => computeSlaStatus(s.movedToPlacementAt, s._count?.interviews || 0).slaAtRisk).length;
 
       const [drivesThisMonth, drivesThisMonthByStatusRaw] = await Promise.all([
         prisma.placementDrive.count({ where: { driveDate: { gte: monthStart, lt: monthEnd } } }),
@@ -451,9 +536,91 @@ export const placementsController = {
             firstInterviewGivenCount,
             placedCount,
             drivesThisMonth,
+            slaAtRiskCount,
           },
           drivesThisMonthByStatus,
           byBatch,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Placements Analytics — placement rate, the shortlisted → interviewed →
+   * selected conversion funnel, package distribution, and a monthly
+   * placements trend. ADMIN-only (cross-cohort aggregate view), separate
+   * from the operational month-scoped `reports` above.
+   */
+  async analytics(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const monthsBack = Math.max(1, Math.min(24, Number(req.query.months) || 6));
+      const now = new Date();
+      const trendStart = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1), 1);
+
+      const [poolCount, placedCount, shortlisted, interviewed, selectedResults, offerResponses] = await Promise.all([
+        prisma.student.count({ where: { status: { in: ['IN_PLACEMENT', 'PLACED'] } } }),
+        prisma.student.count({ where: { status: 'PLACED' } }),
+        prisma.placementDriveCandidate.findMany({ select: { studentId: true }, distinct: ['studentId'] }),
+        prisma.placementInterview.findMany({ select: { studentId: true }, distinct: ['studentId'] }),
+        prisma.placementResult.findMany({
+          where: { result: 'SELECTED' },
+          select: { studentId: true, package: true, createdAt: true, offerStatus: true },
+        }),
+        prisma.placementResult.groupBy({
+          by: ['offerStatus'],
+          where: { result: 'SELECTED' },
+          _count: { _all: true },
+        }),
+      ]);
+
+      const selectedStudentIds = new Set(selectedResults.filter((r) => r.studentId).map((r) => r.studentId as string));
+
+      const funnel = {
+        shortlisted: shortlisted.length,
+        interviewed: interviewed.length,
+        selected: selectedStudentIds.size,
+      };
+
+      const packages = selectedResults
+        .map((r) => r.package)
+        .filter((p): p is number => p !== null && p !== undefined)
+        .sort((a, b) => a - b);
+      const sum = packages.reduce((s, p) => s + p, 0);
+      const packageDistribution = packages.length
+        ? {
+            min: packages[0],
+            max: packages[packages.length - 1],
+            avg: Math.round((sum / packages.length) * 100) / 100,
+            median: packages.length % 2 === 0
+              ? Math.round(((packages[packages.length / 2 - 1] + packages[packages.length / 2]) / 2) * 100) / 100
+              : packages[Math.floor(packages.length / 2)],
+            count: packages.length,
+          }
+        : null;
+
+      // Monthly trend — every month in the window gets an entry, even 0.
+      const trendMap = new Map<string, number>();
+      for (let i = 0; i < monthsBack; i++) {
+        const d = new Date(trendStart.getFullYear(), trendStart.getMonth() + i, 1);
+        trendMap.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, 0);
+      }
+      for (const r of selectedResults) {
+        if (r.createdAt < trendStart) continue;
+        const key = `${r.createdAt.getFullYear()}-${String(r.createdAt.getMonth() + 1).padStart(2, '0')}`;
+        if (trendMap.has(key)) trendMap.set(key, (trendMap.get(key) || 0) + 1);
+      }
+      const trend = Array.from(trendMap.entries()).map(([month, placements]) => ({ month, placements }));
+
+      res.json({
+        success: true,
+        data: {
+          placementRate: poolCount ? Math.round((placedCount / poolCount) * 1000) / 10 : 0,
+          poolCount,
+          placedCount,
+          funnel,
+          packageDistribution,
+          offerResponseBreakdown: Object.fromEntries(offerResponses.map((r) => [r.offerStatus, r._count._all])),
+          trend,
         },
       });
     } catch (err) { next(err); }
@@ -577,8 +744,27 @@ export const placementsController = {
 
       const candidate = await prisma.placementDriveCandidate.create({
         data: { driveId, studentId, notes, addedById: req.user?.employeeId || undefined },
-        include: { student: { select: { id: true, firstName: true, lastName: true, studentCode: true } } },
+        include: {
+          student: { select: { id: true, firstName: true, lastName: true, studentCode: true, email: true } },
+          drive: { include: { partner: { select: { name: true } } } },
+        },
       });
+
+      const student = candidate.student;
+      if (hasRealEmail(student.email)) {
+        emailService.send({
+          to: student.email,
+          subject: `You've been shortlisted — ${candidate.drive.partner.name}`,
+          html: emailService.templates.placementShortlisted({
+            studentName: `${student.firstName} ${student.lastName}`,
+            companyName: candidate.drive.partner.name,
+            role: candidate.drive.role,
+            driveDate: candidate.drive.driveDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }),
+          }),
+          template: 'placement_shortlisted',
+        }).catch((err) => console.error('Placement shortlist email failed:', err));
+      }
+
       res.status(201).json({ success: true, data: candidate });
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
@@ -629,6 +815,7 @@ export const placementsController = {
       if (!studentId || !scheduledAt) {
         throw new AppError('studentId and scheduledAt are required', 400);
       }
+      const resolvedOutcome = outcome || 'SCHEDULED';
       const interview = await prisma.placementInterview.create({
         data: {
           studentId,
@@ -637,7 +824,7 @@ export const placementsController = {
           interviewerName: interviewerName || null,
           scheduledAt: new Date(scheduledAt),
           round: round ? Number(round) : 1,
-          outcome: outcome || 'SCHEDULED',
+          outcome: resolvedOutcome,
           feedback: feedback || null,
           rating: rating ? Number(rating) : null,
           notes: notes || null,
@@ -646,9 +833,28 @@ export const placementsController = {
         include: {
           drive: { include: { partner: { select: { id: true, name: true } } } },
           feedbackGivenBy: { select: employeeSelect },
-          student: { select: { id: true, firstName: true, lastName: true, studentCode: true } },
+          student: { select: { id: true, firstName: true, lastName: true, studentCode: true, email: true } },
         },
       });
+
+      // Only notify when it's actually still upcoming — a backfilled/past
+      // interview logged with a final outcome shouldn't trigger a "you have
+      // an interview coming up" email.
+      if (resolvedOutcome === 'SCHEDULED' && hasRealEmail(interview.student.email)) {
+        emailService.send({
+          to: interview.student.email,
+          subject: `Interview Scheduled — ${interview.companyName || interview.drive?.partner.name || 'Placement'}`,
+          html: emailService.templates.placementInterviewScheduled({
+            studentName: `${interview.student.firstName} ${interview.student.lastName}`,
+            companyName: interview.companyName || interview.drive?.partner.name || '',
+            round: interview.round,
+            scheduledAt: interview.scheduledAt.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' }),
+            interviewerName: interview.interviewerName,
+          }),
+          template: 'placement_interview_scheduled',
+        }).catch((err) => console.error('Placement interview-scheduled email failed:', err));
+      }
+
       res.status(201).json({ success: true, data: interview });
     } catch (err) { next(err); }
   },
