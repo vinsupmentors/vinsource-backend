@@ -2,8 +2,13 @@ import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { emailService } from '../services/email.service';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true } as const;
+
+// Always CC'd on every certificate email, regardless of which student it's
+// going to — Gaurav + the ops mailbox, per the requested delivery flow.
+const CERTIFICATE_EMAIL_CC = ['v7032vinsup@gmail.com', 'v7030vinsup@gmail.com'];
 
 async function nextCertNo(): Promise<string> {
   const year = new Date().getFullYear();
@@ -151,6 +156,66 @@ export const batchCertificateController = {
     try {
       await prisma.batchCertificate.delete({ where: { id: req.params.id } });
       res.json({ success: true, message: 'Certificate deleted' });
+    } catch (err) { next(err); }
+  },
+
+  /** Emails the certificate directly to the student, CC'ing the fixed ops
+   * addresses above. The PDF itself is rendered client-side (it's the live
+   * React template, not something this backend can re-render) and arrives
+   * here as a plain upload — never written to disk, just forwarded straight
+   * into the email attachment and discarded. */
+  async emailCertificate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const file = req.file as Express.Multer.File | undefined;
+      if (!file) throw new AppError('No PDF was uploaded to send', 400);
+
+      const cert = await prisma.batchCertificate.findUnique({
+        where: { id: req.params.id },
+        include: { student: { select: { email: true } } },
+      });
+      if (!cert) throw new AppError('Certificate not found', 404);
+
+      const studentEmail = (cert.student.email || '').trim();
+      if (!studentEmail || studentEmail.endsWith('.local')) {
+        throw new AppError('This student has no real email on file to send the certificate to', 400);
+      }
+
+      const filename = `${cert.studentName.replace(/[^a-z0-9]+/gi, '_')}_${cert.certNo.replace(/[^a-z0-9]+/gi, '_')}.pdf`;
+      const html = `
+        <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <div style="background:#1e3a8a;padding:24px;text-align:center;">
+            <h1 style="color:#fff;margin:0;font-size:22px;">🎓 Course Completion Certificate</h1>
+            <p style="color:#93c5fd;margin:6px 0 0;font-size:13px;">Vinsup Skill Academy</p>
+          </div>
+          <div style="padding:24px;">
+            <p>Dear ${cert.studentName},</p>
+            <p>Congratulations on successfully completing <strong>${cert.course}</strong>! Your Course Completion Certificate is attached to this email.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Certificate No.</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${cert.certNo}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Course</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${cert.course}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Batch</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${cert.batchLabel}</td></tr>
+            </table>
+            <p>Congratulations once again, and best wishes for your future endeavors!</p>
+            <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:20px;">Vinsup Skill Academy</p>
+          </div>
+        </div>`;
+
+      await emailService.send({
+        to: studentEmail,
+        cc: CERTIFICATE_EMAIL_CC,
+        subject: `Your Course Completion Certificate — ${cert.course}`,
+        html,
+        template: 'batch_certificate_delivery',
+        attachments: [{ filename, content: file.buffer, contentType: 'application/pdf' }],
+      });
+
+      const updated = await prisma.batchCertificate.update({
+        where: { id: cert.id },
+        data: { emailedAt: new Date(), emailedTo: studentEmail },
+        include: { generatedBy: { select: employeeSelect } },
+      });
+
+      res.json({ success: true, data: updated, message: `Certificate emailed to ${studentEmail}` });
     } catch (err) { next(err); }
   },
 };

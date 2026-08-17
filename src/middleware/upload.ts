@@ -359,3 +359,16 @@ export const uploadCertificatePhoto = multer({
   fileFilter: imageOnlyFilter,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
 }).single('photo');
+
+// ── Batch Certificates: the finished PDF, generated client-side (the
+// template is a React component + background image, not something this
+// backend can re-render), uploaded just long enough to attach to an outbound
+// email — never written to disk, so memoryStorage is the right fit here.
+export const uploadCertificateEmailPdf = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    if (file.mimetype === 'application/pdf') cb(null, true);
+    else cb(new AppError(`Only PDF files are allowed (got "${file.mimetype}")`, 400));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+}).single('pdf');

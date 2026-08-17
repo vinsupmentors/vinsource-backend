@@ -2189,6 +2189,11 @@ model BatchCertificate {
   /// time, replaceable independently afterward via the single-certificate editor.
   photoUrl      String?
   generatedById String?
+  /// Set when the certificate PDF was last emailed to the student — null
+  /// means never sent. emailedTo captures the address actually used (which
+  /// may drift from the student's current on-file email over time).
+  emailedAt     DateTime?
+  emailedTo     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
