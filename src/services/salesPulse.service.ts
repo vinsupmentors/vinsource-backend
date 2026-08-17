@@ -31,11 +31,15 @@ export interface SalesPulse {
  * "As of right now" snapshot of today's sales activity — shared by the live
  * in-app Sales Pulse panel and the hourly/EOD report emails so both always
  * show the exact same numbers.
+ *
+ * Accepts an optional explicit range so the Pulse tab's date-range picker
+ * can reuse this same computation for "this week"/"this month"/custom —
+ * defaults to today when omitted, which is what the cron emails rely on.
  */
-export async function computeSalesPulse(): Promise<SalesPulse> {
+export async function computeSalesPulse(range?: { start: Date; end: Date }): Promise<SalesPulse> {
   const now = new Date();
-  const dayStart = startOfDay(now);
-  const dayEnd = endOfDay(now);
+  const dayStart = range ? startOfDay(range.start) : startOfDay(now);
+  const dayEnd = range ? endOfDay(range.end) : endOfDay(now);
 
   const [
     callsMadeToday,

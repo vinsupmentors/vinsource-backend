@@ -540,12 +540,15 @@ model Employee {
   demosCoConducted  Demo[]              @relation("DemoCoConductor")
   leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
   salesDevices      SalesDevice[]       @relation("SalesDeviceOwner")
+  salesTargets      SalesTarget[]       @relation("SalesTargetOwner")
+  salesTargetsSet   SalesTarget[]       @relation("SalesTargetSetBy")
   feeCollections    FeeCollection[]     @relation("FeeCollector")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
   budgetsAllocated  BudgetAllocation[]  @relation("BudgetAllocator")
   certificatesIssued GeneratedCertificate[] @relation("CertificateIssuer")
+  batchCertificatesGenerated BatchCertificate[] @relation("BatchCertificateGenerator")
   materialsUploaded  CourseMaterial[]       @relation("MaterialUploader")
   hoFundsRecorded   HOFundReceipt[]     @relation("HOFundRecorder")
   vendorsCreated    Vendor[]            @relation("VendorCreator")
@@ -1365,6 +1368,28 @@ model SalesDevice {
   callLogs LeadCallLog[]
 }
 
+/// One row per employee per calendar month — the enrollment-count and
+/// revenue goals a SALES ADMIN sets for that salesperson. Achievement itself
+/// isn't stored here; the Leaderboard computes it live off Lead/Student data
+/// for the same month, so a target never goes stale relative to real numbers.
+model SalesTarget {
+  id             String   @id @default(uuid())
+  employeeId     String
+  month          Int      // 1-12
+  year           Int
+  enrollmentGoal Int      @default(0)
+  revenueGoal    Float    @default(0)
+  setById        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  employee Employee  @relation("SalesTargetOwner", fields: [employeeId], references: [id], onDelete: Cascade)
+  setBy    Employee? @relation("SalesTargetSetBy", fields: [setById], references: [id])
+
+  @@unique([employeeId, month, year])
+  @@index([employeeId])
+}
+
 enum DemoMode {
   ONLINE
   OFFLINE
@@ -1678,6 +1703,7 @@ model Student {
   placementResults PlacementResult[]
   interviews       PlacementInterview[]
   certificates     Certificate[]
+  batchCertificates BatchCertificate[] @relation("BatchCertificateStudent")
   courseFeedbacks  CourseFeedback[]
   referrals        Referral[]
 
@@ -1884,6 +1910,7 @@ model Batch {
 
   createdBy Employee? @relation("BatchCreator", fields: [createdById], references: [id])
   schedules BatchCourseSchedule[]
+  certificates BatchCertificate[]
 }
 
 // One course running inside a batch, with its own timing/day-pattern/mode.
@@ -2133,6 +2160,44 @@ model Certificate {
 
   student Student       @relation(fields: [studentId], references: [id])
   course  AcademyCourse @relation(fields: [courseId], references: [id])
+}
+
+/// Course Completion certificates generated in bulk for a whole Batch, one
+/// row per student. Distinct from GeneratedCertificate (the older one-at-a-
+/// time letter/certificate form) — this one is built for the "select a
+/// batch, pull every enrolled student automatically, review/edit each one
+/// individually" workflow, and actually persists the cropped photo file
+/// (GeneratedCertificate only ever stored a "(photo attached)" placeholder,
+/// so nothing was left to re-edit later).
+///
+/// Text fields (studentName/course/batchLabel/issuedOn) are a snapshot taken
+/// at generation time, not a live join — editable per-certificate afterward
+/// without touching the underlying Student/Batch records, and stay stable
+/// even if a student's name or a course's title changes later.
+model BatchCertificate {
+  id            String   @id @default(uuid())
+  studentId     String
+  batchId       String
+  certNo        String   @unique
+  studentName   String
+  studentCode   String
+  course        String
+  batchLabel    String
+  issuedOn      DateTime @default(now())
+  /// The actual cropped/positioned photo for this certificate, stored as a
+  /// file — defaults to a copy of the student's on-file photo at generation
+  /// time, replaceable independently afterward via the single-certificate editor.
+  photoUrl      String?
+  generatedById String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  student     Student   @relation("BatchCertificateStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  batch       Batch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  generatedBy Employee? @relation("BatchCertificateGenerator", fields: [generatedById], references: [id])
+
+  @@unique([studentId, batchId])
+  @@index([batchId])
 }
 
 // ─── PLACEMENTS ───────────────────────────────────────────────────────────────

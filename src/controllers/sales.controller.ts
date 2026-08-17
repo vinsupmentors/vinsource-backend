@@ -5,6 +5,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { paginate, formatPagination, nextDemoBookingNumber } from '../utils/helpers';
 import { computeSalesPulse } from '../services/salesPulse.service';
+import { computeSalesLeaderboard } from '../services/salesLeaderboard.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { normalizePhone } from '../utils/phone';
 
@@ -710,10 +711,68 @@ export const salesController = {
   },
 
   /** Live "as of right now" snapshot for the Sales Pulse panel — same numbers the hourly/EOD emails use. */
-  async pulse(_req: AuthRequest, res: Response, next: NextFunction) {
+  async pulse(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const data = await computeSalesPulse();
+      const { start, end } = req.query;
+      let range: { start: Date; end: Date } | undefined;
+      if (start && end) {
+        const s = new Date(String(start)), e = new Date(String(end));
+        if (isNaN(s.getTime()) || isNaN(e.getTime())) throw new AppError('Invalid start/end date', 400);
+        range = { start: s, end: e };
+      }
+      const data = await computeSalesPulse(range);
       res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  // ── Leaderboard + Targets — per-salesperson KPI breakdown and the monthly
+  // goals a SALES ADMIN sets against them. Both ADMIN-only, same as Pulse.
+
+  async leaderboard(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { start, end, month, year } = req.query;
+      if (!start || !end) throw new AppError('start and end dates are required', 400);
+      const s = new Date(String(start)), e = new Date(String(end));
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) throw new AppError('Invalid start/end date', 400);
+      const m = month ? Number(month) : undefined;
+      const y = year ? Number(year) : undefined;
+      const data = await computeSalesLeaderboard(s, e, m, y);
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  async listTargets(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { month, year } = req.query;
+      if (!month || !year) throw new AppError('month and year are required', 400);
+      const targets = await prisma.salesTarget.findMany({
+        where: { month: Number(month), year: Number(year) },
+        include: { employee: { select: employeeSelect } },
+      });
+      res.json({ success: true, data: targets });
+    } catch (err) { next(err); }
+  },
+
+  /** Upsert — setting a target for a rep who already has one this month
+   * just overwrites it, so admins can freely revise a goal mid-month. */
+  async setTarget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { employeeId, month, year, enrollmentGoal, revenueGoal } = req.body;
+      if (!employeeId || !month || !year) throw new AppError('employeeId, month, and year are required', 400);
+      const m = Number(month), y = Number(year);
+      if (m < 1 || m > 12) throw new AppError('month must be between 1 and 12', 400);
+
+      const target = await prisma.salesTarget.upsert({
+        where: { employeeId_month_year: { employeeId, month: m, year: y } },
+        update: { enrollmentGoal: Number(enrollmentGoal) || 0, revenueGoal: Number(revenueGoal) || 0, setById: req.user!.employeeId },
+        create: {
+          employeeId, month: m, year: y,
+          enrollmentGoal: Number(enrollmentGoal) || 0, revenueGoal: Number(revenueGoal) || 0,
+          setById: req.user!.employeeId,
+        },
+        include: { employee: { select: employeeSelect } },
+      });
+      res.json({ success: true, data: target });
     } catch (err) { next(err); }
   },
 

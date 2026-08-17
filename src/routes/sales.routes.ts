@@ -44,6 +44,12 @@ router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesContro
 router.get('/pulse', requireModule('SALES', 'ADMIN'), salesController.pulse);
 router.get('/lead-quality', requireModule('SALES', 'ADMIN'), salesController.leadQuality);
 
+// Leaderboard + Targets — per-salesperson KPI breakdown and the monthly
+// goals set against them, both management-level views like Pulse above.
+router.get('/leaderboard', requireModule('SALES', 'ADMIN'), salesController.leaderboard);
+router.get('/targets', requireModule('SALES', 'ADMIN'), salesController.listTargets);
+router.post('/targets', requireModule('SALES', 'ADMIN'), salesController.setTarget);
+
 // Report recipients — who gets the Sales Pulse / EOD emails (11,12,1,2,4,5,6).
 router.get('/report-recipients', requireModule('SALES', 'ADMIN'), salesController.listReportRecipients);
 router.post('/report-recipients', requireModule('SALES', 'ADMIN'), salesController.addReportRecipient);

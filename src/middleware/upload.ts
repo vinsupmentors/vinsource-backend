@@ -339,3 +339,23 @@ export const uploadViolationSnapshot = multer({
   fileFilter: imageOnlyFilter,
   limits: { fileSize: 3 * 1024 * 1024 }, // 3 MB — a single compressed video frame
 }).single('snapshot');
+
+// ── Batch Certificates: per-certificate photo — starts as a copy of the
+// student's on-file photo, replaceable independently via the editor's photo
+// cropper without touching the student's actual profile photo.
+const CERTIFICATE_PHOTO_DIR = path.join(process.cwd(), 'uploads', 'certificate-photos');
+if (!fs.existsSync(CERTIFICATE_PHOTO_DIR)) fs.mkdirSync(CERTIFICATE_PHOTO_DIR, { recursive: true });
+
+const certificatePhotoStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, CERTIFICATE_PHOTO_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    cb(null, `${req.params.id}_${Date.now()}${ext}`);
+  },
+});
+
+export const uploadCertificatePhoto = multer({
+  storage: certificatePhotoStorage,
+  fileFilter: imageOnlyFilter,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+}).single('photo');
