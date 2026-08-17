@@ -1083,4 +1083,68 @@ export const trainerPortalController = {
       res.json({ success: true, data: { reassignedCount: toReset.length } });
     } catch (err) { next(err); }
   },
+
+  // ── Softskill / Aptitude sessions assigned to me ────────────────────────────
+  // These aren't tied to a TrainerAssignment/schedule — a Placement-team member
+  // assigns a trainer directly on the SoftskillSession, so ownership here is
+  // just "is this session's trainerId me", not assertOwnsSchedule.
+  async mySoftskillSessions(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      if (!employeeId) return res.json({ success: true, data: [] });
+      const sessions = await prisma.softskillSession.findMany({
+        where: { trainerId: employeeId },
+        include: { _count: { select: { attendances: true } } },
+        orderBy: { startDate: 'desc' },
+      });
+      res.json({ success: true, data: sessions });
+    } catch (err) { next(err); }
+  },
+
+  async mySoftskillSessionAttendance(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.trainerId !== employeeId) throw new AppError('You are not the assigned trainer for this session', 403);
+
+      const attendances = await prisma.softskillAttendance.findMany({
+        where: { sessionId },
+        include: { student: { select: { id: true, firstName: true, lastName: true, studentCode: true } } },
+      });
+      res.json({ success: true, data: attendances });
+    } catch (err) { next(err); }
+  },
+
+  /** Same upsert semantics as placements.controller.ts's markSoftskillAttendance, just ownership-scoped to the assigned trainer instead of gated by the PLACEMENTS module. */
+  async markMySoftskillAttendance(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.trainerId !== employeeId) throw new AppError('You are not the assigned trainer for this session', 403);
+
+      const { attendances } = req.body as { attendances: { studentId: string; present: boolean; score?: number; remarks?: string }[] };
+      if (!Array.isArray(attendances) || attendances.length === 0) throw new AppError('attendances array is required', 400);
+
+      const results = await prisma.$transaction(
+        attendances.map((entry) =>
+          prisma.softskillAttendance.upsert({
+            where: { sessionId_studentId: { sessionId, studentId: entry.studentId } },
+            create: {
+              sessionId, studentId: entry.studentId, present: entry.present,
+              score: entry.score !== undefined ? Number(entry.score) : undefined,
+              remarks: entry.remarks,
+            },
+            update: {
+              present: entry.present,
+              score: entry.score !== undefined ? Number(entry.score) : undefined,
+              remarks: entry.remarks,
+            },
+          })
+        )
+      );
+      res.json({ success: true, data: results });
+    } catch (err) { next(err); }
+  },
 };

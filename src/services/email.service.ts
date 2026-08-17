@@ -689,6 +689,23 @@ export const emailService = {
         </div>
       </div>`,
 
+    softskillSessionScheduled: (data: { studentName: string; topic: string; typeLabel: string; startDate: string; endDateLabel?: string | null; trainerName?: string | null }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#0d9488;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">📚 ${data.typeLabel} Session Scheduled</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.studentName},</p>
+          <p>You've been added to an upcoming ${data.typeLabel.toLowerCase()} session:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Topic</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.topic}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.endDateLabel ? 'Dates' : 'Date'}</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.startDate}${data.endDateLabel ? ` – ${data.endDateLabel}` : ''}</strong></td></tr>
+            ${data.trainerName ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Trainer</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.trainerName}</td></tr>` : ''}
+          </table>
+          <p>Please make sure you attend — reach out to the placement team if you have any questions.</p>
+        </div>
+      </div>`,
+
     attendanceEscalation: (data: {
       studentName: string;
       studentCode: string;

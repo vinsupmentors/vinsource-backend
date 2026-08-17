@@ -102,6 +102,43 @@ async function notifyOfferReceived(result: {
   }).catch((err) => console.error('Placement offer-received email failed:', err));
 }
 
+const SOFTSKILL_TYPE_LABEL: Record<string, string> = {
+  SOFTSKILL: 'Softskill', APTITUDE: 'Aptitude', SK_APT: 'Softskill & Aptitude',
+};
+
+async function notifySoftskillSession(
+  session: { type: string; topic: string; startDate: Date; endDate: Date | null; trainerId: string | null },
+  studentIds: string[],
+) {
+  if (!studentIds.length) return;
+  const [students, trainer] = await Promise.all([
+    prisma.student.findMany({ where: { id: { in: studentIds } }, select: { firstName: true, lastName: true, email: true } }),
+    session.trainerId
+      ? prisma.employee.findUnique({ where: { id: session.trainerId }, select: { firstName: true, lastName: true } })
+      : Promise.resolve(null),
+  ]);
+  const trainerName = trainer ? `${trainer.firstName} ${trainer.lastName}` : undefined;
+  const typeLabel = SOFTSKILL_TYPE_LABEL[session.type] || 'Softskill';
+  const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', year: 'numeric' };
+
+  for (const s of students) {
+    if (!hasRealEmail(s.email)) continue;
+    emailService.send({
+      to: s.email,
+      subject: `${typeLabel} session scheduled — ${session.topic}`,
+      html: emailService.templates.softskillSessionScheduled({
+        studentName: `${s.firstName} ${s.lastName}`,
+        topic: session.topic,
+        typeLabel,
+        startDate: session.startDate.toLocaleDateString('en-IN', dateOpts),
+        endDateLabel: session.endDate ? session.endDate.toLocaleDateString('en-IN', dateOpts) : null,
+        trainerName,
+      }),
+      template: 'softskill_session_scheduled',
+    }).catch((err) => console.error('Softskill session email failed:', err));
+  }
+}
+
 export const placementsController = {
   async listPartners(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -479,7 +516,7 @@ export const placementsController = {
    */
   async listFilterOptions(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const [courses, batches] = await Promise.all([
+      const [courses, batches, schedules] = await Promise.all([
         prisma.academyCourse.findMany({
           select: { id: true, name: true },
           orderBy: { name: 'asc' },
@@ -488,8 +525,31 @@ export const placementsController = {
           select: { id: true, code: true },
           orderBy: { code: 'asc' },
         }),
+        // Sub-batches with an active-student count — used by the Softskill/
+        // Aptitude "New Session" roster picker so Placements-only users (who
+        // don't have PRODUCTION_TRAINING access) can still pick a sub-batch's
+        // students without hitting /api/production/batches.
+        prisma.batchCourseSchedule.findMany({
+          select: {
+            id: true, code: true, timing: true,
+            batch: { select: { code: true } },
+            course: { select: { name: true } },
+            _count: { select: { enrollments: { where: { status: 'ACTIVE' } } } },
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
       ]);
-      res.json({ success: true, data: { courses, batches } });
+      res.json({
+        success: true,
+        data: {
+          courses, batches,
+          schedules: schedules.map((s) => ({
+            id: s.id, code: s.code, timing: s.timing,
+            batchCode: s.batch.code, courseName: s.course.name,
+            activeStudentCount: s._count.enrollments,
+          })),
+        },
+      });
     } catch (err) { next(err); }
   },
 
@@ -722,21 +782,89 @@ export const placementsController = {
           trainer: { select: employeeSelect },
           _count: { select: { attendances: true } },
         },
-        orderBy: { sessionDate: 'desc' },
+        orderBy: { startDate: 'desc' },
       });
       res.json({ success: true, data: sessions });
     } catch (err) { next(err); }
   },
 
+  /**
+   * Creates a session and, in the same call, seeds its student roster — a
+   * union of every ACTIVE student in the picked sub-batches (scheduleIds)
+   * plus any individually-picked students — as SoftskillAttendance rows with
+   * present:false. That roster IS the attendance list from then on (see
+   * getSoftskillAttendance), and everyone in it gets an email now.
+   */
   async createSoftskillSession(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { type, topic, sessionDate, trainerId, notes } = req.body;
-      if (!type || !topic || !sessionDate) throw new AppError('type, topic, and sessionDate are required', 400);
+      const { type, topic, startDate, endDate, trainerId, notes, scheduleIds, studentIds } = req.body;
+      if (!type || !topic || !startDate) throw new AppError('type, topic, and startDate are required', 400);
+
+      const rosterIds = new Set<string>(Array.isArray(studentIds) ? studentIds : []);
+      if (Array.isArray(scheduleIds) && scheduleIds.length) {
+        const enrollments = await prisma.studentBatchEnrollment.findMany({
+          where: { scheduleId: { in: scheduleIds }, status: 'ACTIVE' },
+          select: { studentId: true },
+        });
+        for (const e of enrollments) rosterIds.add(e.studentId);
+      }
 
       const session = await prisma.softskillSession.create({
-        data: { type, topic, sessionDate: new Date(sessionDate), trainerId: trainerId || undefined, notes },
+        data: {
+          type, topic,
+          startDate: new Date(startDate),
+          endDate: endDate ? new Date(endDate) : undefined,
+          trainerId: trainerId || undefined,
+          notes,
+        },
       });
+
+      if (rosterIds.size) {
+        await prisma.softskillAttendance.createMany({
+          data: Array.from(rosterIds).map((studentId) => ({ sessionId: session.id, studentId, present: false })),
+          skipDuplicates: true,
+        });
+        notifySoftskillSession(session, Array.from(rosterIds)).catch((err) => console.error('notifySoftskillSession failed:', err));
+      }
+
       res.status(201).json({ success: true, data: session });
+    } catch (err) { next(err); }
+  },
+
+  /** Adds more students to an existing session's roster (batches and/or individuals) — only the newly-added ones get the email, not the whole roster again. */
+  async addStudentsToSession(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { scheduleIds, studentIds } = req.body;
+      const sessionId = req.params.id;
+      const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
+      if (!session) throw new AppError('Session not found', 404);
+
+      const candidateIds = new Set<string>(Array.isArray(studentIds) ? studentIds : []);
+      if (Array.isArray(scheduleIds) && scheduleIds.length) {
+        const enrollments = await prisma.studentBatchEnrollment.findMany({
+          where: { scheduleId: { in: scheduleIds }, status: 'ACTIVE' },
+          select: { studentId: true },
+        });
+        for (const e of enrollments) candidateIds.add(e.studentId);
+      }
+      if (!candidateIds.size) throw new AppError('No students to add', 400);
+
+      const existing = await prisma.softskillAttendance.findMany({
+        where: { sessionId, studentId: { in: Array.from(candidateIds) } },
+        select: { studentId: true },
+      });
+      const existingIds = new Set(existing.map((e) => e.studentId));
+      const toAdd = Array.from(candidateIds).filter((id) => !existingIds.has(id));
+
+      if (toAdd.length) {
+        await prisma.softskillAttendance.createMany({
+          data: toAdd.map((studentId) => ({ sessionId, studentId, present: false })),
+          skipDuplicates: true,
+        });
+        notifySoftskillSession(session, toAdd).catch((err) => console.error('notifySoftskillSession failed:', err));
+      }
+
+      res.status(201).json({ success: true, data: { added: toAdd.length, alreadyIn: existingIds.size } });
     } catch (err) { next(err); }
   },
 
@@ -750,15 +878,15 @@ export const placementsController = {
     } catch (err) { next(err); }
   },
 
-  // Bulk upsert attendance for a session: body.entries = [{ studentId, present, score, remarks }]
+  // Bulk upsert attendance for a session: body.attendances = [{ studentId, present, score, remarks }]
   async markSoftskillAttendance(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { entries } = req.body as { entries: { studentId: string; present: boolean; score?: number; remarks?: string }[] };
-      if (!Array.isArray(entries) || entries.length === 0) throw new AppError('entries array is required', 400);
+      const { attendances } = req.body as { attendances: { studentId: string; present: boolean; score?: number; remarks?: string }[] };
+      if (!Array.isArray(attendances) || attendances.length === 0) throw new AppError('attendances array is required', 400);
 
       const sessionId = req.params.id;
       const results = await prisma.$transaction(
-        entries.map((entry) =>
+        attendances.map((entry) =>
           prisma.softskillAttendance.upsert({
             where: { sessionId_studentId: { sessionId, studentId: entry.studentId } },
             create: {

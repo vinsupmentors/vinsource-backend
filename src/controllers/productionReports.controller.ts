@@ -389,7 +389,7 @@ export const productionReportsController = {
         prisma.studentPortfolio.findFirst({ where: { studentId }, select: { status: true, publicSlug: true } }),
         prisma.softskillAttendance.findMany({
           where: { studentId },
-          include: { session: { select: { type: true, topic: true, sessionDate: true } } },
+          include: { session: { select: { type: true, topic: true, startDate: true } } },
           orderBy: { sessionId: 'asc' },
         }),
         prisma.placementDriveCandidate.findMany({
@@ -437,7 +437,7 @@ export const productionReportsController = {
             readiness: { ready: placementMissing.length === 0, missing: placementMissing },
             portfolio: portfolio ? { status: portfolio.status, publicSlug: portfolio.publicSlug } : null,
             softskillAttendance: softskillAttendance.map((a) => ({
-              id: a.id, type: a.session.type, topic: a.session.topic, sessionDate: a.session.sessionDate,
+              id: a.id, type: a.session.type, topic: a.session.topic, startDate: a.session.startDate,
               present: a.present, score: a.score,
             })),
             driveCandidacies: driveCandidacies.map((c) => ({

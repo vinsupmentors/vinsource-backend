@@ -2328,6 +2328,7 @@ model PlacementDriveCandidate {
 enum SoftskillSessionType {
   SOFTSKILL
   APTITUDE
+  SK_APT // combined Softskill & Aptitude session
 }
 
 // A single Softskill or Aptitude class session run by the Placement team
@@ -2337,7 +2338,11 @@ model SoftskillSession {
   id          String               @id @default(uuid())
   type        SoftskillSessionType
   topic       String
-  sessionDate DateTime
+  // Renamed from sessionDate — a session can now span multiple days (a
+  // multi-day training program), with a single attendance mark covering the
+  // whole thing. endDate is optional so a same-day session just leaves it unset.
+  startDate   DateTime
+  endDate     DateTime?
   trainerId   String?
   notes       String?              @db.Text
   createdAt   DateTime             @default(now())

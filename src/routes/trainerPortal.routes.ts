@@ -41,4 +41,9 @@ router.get('/schedules/:scheduleId/test-releases/:releaseId/results', trainerPor
 router.get('/schedules/:scheduleId/test-releases/:releaseId/students/:studentId/review', trainerPortalController.studentTestReview);
 router.post('/schedules/:scheduleId/test-releases/:releaseId/reassign', trainerPortalController.reassignTestAttempt);
 
+// Softskill / Aptitude sessions assigned to me
+router.get('/softskill-sessions', trainerPortalController.mySoftskillSessions);
+router.get('/softskill-sessions/:sessionId/attendance', trainerPortalController.mySoftskillSessionAttendance);
+router.post('/softskill-sessions/:sessionId/attendance', trainerPortalController.markMySoftskillAttendance);
+
 export default router;

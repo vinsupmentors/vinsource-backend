@@ -31,6 +31,7 @@ router.put('/results/:id/offer-response', requireModule('PLACEMENTS', 'EDIT'), p
 // ── Softskill / Aptitude sessions ──────────────────────────────────────────
 router.get('/softskill-sessions', placementsController.listSoftskillSessions);
 router.post('/softskill-sessions', requireModule('PLACEMENTS', 'EDIT'), placementsController.createSoftskillSession);
+router.post('/softskill-sessions/:id/students', requireModule('PLACEMENTS', 'EDIT'), placementsController.addStudentsToSession);
 router.get('/softskill-sessions/:id/attendance', placementsController.getSoftskillAttendance);
 router.post('/softskill-sessions/:id/attendance', requireModule('PLACEMENTS', 'EDIT'), placementsController.markSoftskillAttendance);
 
