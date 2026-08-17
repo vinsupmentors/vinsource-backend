@@ -478,14 +478,19 @@ export const productionController = {
     try {
       const { scheduleId } = req.params;
 
-      const [enrollmentCount, attendanceCount, testCount, kraCount] = await Promise.all([
-        prisma.studentBatchEnrollment.count({ where: { scheduleId } }),
+      // Only enrollments that still represent "this student is/was actually
+      // being taught here" should block deletion. DROPPED rows are left behind
+      // by batch transfers (student moved to a different sub-batch) and carry
+      // no attendance/marks/tests of their own here — they're safe to clean up
+      // along with the schedule itself rather than blocking its deletion forever.
+      const [liveEnrollmentCount, attendanceCount, testCount, kraCount] = await Promise.all([
+        prisma.studentBatchEnrollment.count({ where: { scheduleId, status: { not: 'DROPPED' } } }),
         prisma.studentAttendance.count({ where: { scheduleId } }),
         prisma.moduleTest.count({ where: { scheduleId } }),
         prisma.kRAEntry.count({ where: { scheduleId } }),
       ]);
 
-      if (enrollmentCount || attendanceCount || testCount || kraCount) {
+      if (liveEnrollmentCount || attendanceCount || testCount || kraCount) {
         throw new AppError(
           'Cannot delete this sub-batch — it has enrolled students, attendance, test, or KRA records. Remove those first.',
           400,
@@ -494,6 +499,7 @@ export const productionController = {
 
       await prisma.$transaction([
         prisma.trainerAssignment.deleteMany({ where: { scheduleId } }),
+        prisma.studentBatchEnrollment.deleteMany({ where: { scheduleId } }),
         prisma.batchCourseSchedule.delete({ where: { id: scheduleId } }),
       ]);
 
