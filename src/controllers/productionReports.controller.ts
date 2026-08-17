@@ -244,6 +244,17 @@ export const productionReportsController = {
         include: { schedule: { include: { course: { select: { id: true, name: true } }, batch: { select: { code: true } } } } },
       });
 
+      // Trainer's internal holistic per-course assessment (certificate eligibility,
+      // placement readiness note, JRP->IOP recommendation) — distinct from the
+      // per-module moduleFeedback below. Previously fetched on the Students tab
+      // (production.controller.ts) but missing here on the A-Z report detail.
+      const trainerFeedbacks = await prisma.trainerFeedback.findMany({
+        where: { studentId },
+        include: { course: { select: { id: true, name: true } }, trainer: { select: employeeSelect } },
+        orderBy: { updatedAt: 'desc' },
+      });
+      const trainerFeedbackByCourse = new Map(trainerFeedbacks.map((tf) => [tf.courseId, tf]));
+
       const data = [];
       for (const e of enrollments) {
         const scheduleId = e.scheduleId;
@@ -357,6 +368,19 @@ export const productionReportsController = {
             trainerName: f.trainer ? `${f.trainer.firstName} ${f.trainer.lastName}` : null,
             updatedAt: f.updatedAt,
           })),
+          trainerFeedback: (() => {
+            const tf = trainerFeedbackByCourse.get(e.schedule.course.id);
+            if (!tf) return null;
+            return {
+              id: tf.id,
+              performanceRating: tf.performanceRating,
+              placementReadinessNote: tf.placementReadinessNote,
+              jrpToIopRecommended: tf.jrpToIopRecommended,
+              certificateEligible: tf.certificateEligible,
+              trainerName: tf.trainer ? `${tf.trainer.firstName} ${tf.trainer.lastName}` : null,
+              updatedAt: tf.updatedAt,
+            };
+          })(),
         });
       }
 
