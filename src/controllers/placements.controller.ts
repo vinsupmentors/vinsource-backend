@@ -411,6 +411,68 @@ export const placementsController = {
   },
 
   /**
+   * Bulk-push students into the Placement Pool from an uploaded list of
+   * student codes (e.g. an Excel sheet with a studentCode column) — the same
+   * status/movedToPlacementAt flip as Production's "Push Sub-batch to
+   * Placements" and the trainer's one-at-a-time push, just keyed by
+   * studentCode instead of scheduleId/studentId since that's what's visible
+   * to whoever is preparing the spreadsheet. Returns a per-row outcome so the
+   * uploader can see exactly what happened to each code.
+   */
+  async bulkPushToPool(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { studentCodes } = req.body;
+      if (!Array.isArray(studentCodes) || !studentCodes.length) {
+        throw new AppError('studentCodes (non-empty array) is required', 400);
+      }
+      const codes = Array.from(new Set(studentCodes.map((c) => String(c).trim()).filter(Boolean)));
+      if (!codes.length) throw new AppError('No valid student codes found in the upload', 400);
+
+      const students = await prisma.student.findMany({
+        where: { studentCode: { in: codes } },
+        select: { id: true, studentCode: true, firstName: true, lastName: true, status: true, movedToPlacementAt: true },
+      });
+      const byCode = new Map(students.map((s) => [s.studentCode, s]));
+
+      type RowResult = { studentCode: string; outcome: 'pushed' | 'already_in_pool' | 'skipped' | 'not_found'; studentName?: string; message?: string };
+      const results: RowResult[] = [];
+      const needsClockStart: string[] = [];
+      const alreadyClocked: string[] = [];
+
+      for (const code of codes) {
+        const s = byCode.get(code);
+        if (!s) { results.push({ studentCode: code, outcome: 'not_found', message: 'No student with this code' }); continue; }
+        const studentName = `${s.firstName} ${s.lastName}`;
+        if (s.status === 'PLACED' || s.status === 'BATCH_TRANSFER') {
+          results.push({ studentCode: code, outcome: 'skipped', studentName, message: `Currently ${s.status} — not moved` });
+          continue;
+        }
+        if (s.status === 'IN_PLACEMENT') {
+          results.push({ studentCode: code, outcome: 'already_in_pool', studentName });
+          continue;
+        }
+        if (s.movedToPlacementAt) alreadyClocked.push(s.id); else needsClockStart.push(s.id);
+        results.push({ studentCode: code, outcome: 'pushed', studentName });
+      }
+
+      const now = new Date();
+      await prisma.$transaction([
+        ...(needsClockStart.length
+          ? [prisma.student.updateMany({ where: { id: { in: needsClockStart } }, data: { status: 'IN_PLACEMENT', movedToPlacementAt: now } })]
+          : []),
+        ...(alreadyClocked.length
+          ? [prisma.student.updateMany({ where: { id: { in: alreadyClocked } }, data: { status: 'IN_PLACEMENT' } })]
+          : []),
+      ]);
+
+      res.json({
+        success: true,
+        data: { results, pushed: needsClockStart.length + alreadyClocked.length, total: codes.length },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /**
    * Lightweight option lists for the Pool filters (Course / Batch dropdowns).
    * Scoped under PLACEMENTS so non-Production users can populate filters
    * without needing PRODUCTION_TRAINING access.

@@ -10,6 +10,7 @@ router.use(requireModule('PLACEMENTS', 'VIEW'));
 
 router.get('/stats', placementsController.stats);
 router.get('/pool', placementsController.pool);
+router.post('/pool/bulk-push', requireModule('PLACEMENTS', 'EDIT'), placementsController.bulkPushToPool);
 router.get('/filters', placementsController.listFilterOptions);
 router.get('/reports', placementsController.reports);
 router.get('/analytics', requireModule('PLACEMENTS', 'ADMIN'), placementsController.analytics);
