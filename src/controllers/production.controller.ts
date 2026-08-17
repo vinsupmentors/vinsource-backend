@@ -364,6 +364,27 @@ export const productionController = {
   async updateBatch(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { code, startDate, endDate, status } = req.body;
+
+      // A Batch can only be marked COMPLETED once every non-cancelled
+      // sub-batch (course) within it is itself COMPLETED — different courses
+      // in the same batch finish at different times, so this used to be a
+      // no-op check (sub-batches had no status of their own at all).
+      if (status === 'COMPLETED') {
+        const schedules = await prisma.batchCourseSchedule.findMany({
+          where: { batchId: req.params.id },
+          include: { course: { select: { name: true } } },
+        });
+        const relevant = schedules.filter((s) => s.status !== 'CANCELLED');
+        if (relevant.length === 0) {
+          throw new AppError('Cannot mark this batch Completed — it has no sub-batches yet.', 400);
+        }
+        const notDone = relevant.filter((s) => s.status !== 'COMPLETED');
+        if (notDone.length > 0) {
+          const names = notDone.map((s) => s.code || s.course.name).join(', ');
+          throw new AppError(`Cannot mark this batch Completed — these sub-batches aren't Completed yet: ${names}`, 400);
+        }
+      }
+
       const batch = await prisma.batch.update({
         where: { id: req.params.id },
         data: {
@@ -454,12 +475,12 @@ export const productionController = {
   async updateSchedule(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { scheduleId } = req.params;
-      const { timing, dayPattern, mode, startDate, endDate, capacity } = req.body;
+      const { timing, dayPattern, mode, startDate, endDate, capacity, status } = req.body;
 
       const schedule = await prisma.batchCourseSchedule.update({
         where: { id: scheduleId },
         data: {
-          timing, dayPattern, mode,
+          timing, dayPattern, mode, status,
           startDate: startDate ? new Date(startDate) : undefined,
           endDate: endDate === '' ? null : endDate ? new Date(endDate) : undefined,
           capacity: capacity === '' ? null : capacity !== undefined ? Number(capacity) : undefined,

@@ -1926,6 +1926,10 @@ model BatchCourseSchedule {
   endDate   DateTime?
   capacity  Int?
   createdAt DateTime     @default(now())
+  // Tracked independently of the parent Batch's status — a Batch can only be
+  // marked COMPLETED once all of its (non-cancelled) sub-batches are, since
+  // different courses within the same batch finish at different times.
+  status    BatchStatus  @default(UPCOMING)
 
   batch  Batch         @relation(fields: [batchId], references: [id])
   course AcademyCourse @relation(fields: [courseId], references: [id])
