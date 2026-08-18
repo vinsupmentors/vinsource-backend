@@ -150,7 +150,7 @@ async function performStudentDelete(id: string, force = false, approvedById?: st
  * Student.email is optional, but User.email is required + unique, so rows
  * without a real email get a synthetic, obviously-fake placeholder address.
  */
-async function buildStudentUserCreate(studentCode: string, email?: string | null) {
+export async function buildStudentUserCreate(studentCode: string, email?: string | null) {
   const loginEmail = (email && email.trim()) || `${studentCode.toLowerCase()}@students.vinsupacademy.local`;
   const password = await hashPassword(studentCode);
   return {
@@ -860,7 +860,7 @@ export const productionController = {
           }
 
           const trackRaw = String(row.track || 'JRP').trim().toUpperCase();
-          const track = ['JRP', 'IOP', 'PAP'].includes(trackRaw) ? trackRaw : 'JRP';
+          const track = ['JRP', 'IOP', 'PAP', 'PT'].includes(trackRaw) ? trackRaw : 'JRP';
 
           // Preferred: direct sub-batch code (e.g. "B14-DA-EVE") maps the student exactly
           const rowSubBatch = String(row.subBatchCode || row.subBatch || '').trim().toUpperCase();

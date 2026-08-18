@@ -3,6 +3,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { emailService } from '../services/email.service';
+import { buildStudentUserCreate, sendStudentWelcomeEmail } from './production.controller';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
@@ -34,7 +35,14 @@ function computeReadiness(
     }
   }
 
-  if (requiredReleases.size === 0) {
+  // A student with no batch enrollment at all (e.g. a PT / direct-placement
+  // student who skips the course entirely) has no course to have a capstone
+  // project assigned from — don't hold that against them. Only students who
+  // ARE enrolled in at least one schedule are required to have a capstone
+  // release lined up.
+  if (scheduleIds.length === 0) {
+    // no capstone requirement to check
+  } else if (requiredReleases.size === 0) {
     missing.push('Capstone project not yet assigned by the trainer');
   } else {
     for (const release of requiredReleases.values()) {
@@ -513,6 +521,49 @@ export const placementsController = {
         success: true,
         data: { results, pushed: needsClockStart.length + alreadyClocked.length, total: codes.length },
       });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Adds a PT (direct-placement) student straight into the Placement Pool.
+   * Unlike JRP/IOP/PAP students — who enroll in a course, sit classes, get
+   * trainer-reviewed, and only THEN get pushed into the pool — a PT student
+   * never takes a course at all. They're created with status IN_PLACEMENT
+   * and movedToPlacementAt set immediately, no StudentBatchEnrollment. From
+   * here on they're a completely normal pool candidate: same onboarding
+   * document e-sign (scoped by track like everyone else), same welcome
+   * email, same portfolio-only readiness gate (see computeReadiness above),
+   * same interview/offer flow.
+   */
+  async addPtStudent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { studentCode, firstName, lastName, email, phone } = req.body;
+      if (!studentCode || !firstName || !email) {
+        throw new AppError('studentCode, firstName and email are required', 400);
+      }
+      const now = new Date();
+      const student = await prisma.student.create({
+        data: {
+          studentCode,
+          firstName,
+          lastName: lastName || '',
+          email,
+          phone: phone || 'PENDING',
+          track: 'PT',
+          status: 'IN_PLACEMENT',
+          movedToPlacementAt: now,
+          user: await buildStudentUserCreate(studentCode, email),
+        },
+        include: { user: { select: { id: true, email: true } } },
+      });
+
+      sendStudentWelcomeEmail({
+        name: `${student.firstName} ${student.lastName}`.trim() || undefined,
+        studentCode,
+        email,
+      });
+
+      res.status(201).json({ success: true, data: student, message: 'Student added to the Placement Pool. Login credentials emailed.' });
     } catch (err) { next(err); }
   },
 

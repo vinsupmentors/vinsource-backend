@@ -8,7 +8,7 @@ import { getOnboardingStatus } from '../utils/onboardingStatus';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
-const VALID_TRACKS = ['JRP', 'IOP', 'PAP'];
+const VALID_TRACKS = ['JRP', 'IOP', 'PAP', 'PT'];
 
 /** Accepts either an array (JSON body) or a comma-separated string (multipart
  * form field) and normalises to a clean array of valid StudentTrack values.

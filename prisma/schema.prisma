@@ -296,6 +296,7 @@ enum StudentTrack {
   JRP // Job Readiness Program — non-placement, course only
   IOP // Interview Opportunities — placement-driven
   PAP // Placement Assurance Program — placement-driven
+  PT  // Placement Training — joins directly for placement, no course at all
 }
 
 enum StudentStatus {
