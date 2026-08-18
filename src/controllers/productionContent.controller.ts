@@ -54,11 +54,12 @@ export const productionContentController = {
   async updateProject(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { id } = req.params;
-      const { title, description } = req.body;
+      const { title, description, moduleId } = req.body;
       const file = req.file as Express.Multer.File | undefined;
       const project = await prisma.project.update({
         where: { id },
         data: {
+          moduleId: moduleId || undefined,
           title: title || undefined,
           description: description ?? undefined,
           resourceUrl: file ? `/uploads/project-resources/${file.filename}` : undefined,
@@ -294,10 +295,14 @@ export const productionContentController = {
   async updateOnlineTest(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { id } = req.params;
-      const { title, durationMinutes } = req.body;
+      const { title, durationMinutes, moduleId } = req.body;
       const test = await prisma.onlineTest.update({
         where: { id },
-        data: { title: title || undefined, durationMinutes: durationMinutes ? Number(durationMinutes) : undefined },
+        data: {
+          moduleId: moduleId || undefined,
+          title: title || undefined,
+          durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
+        },
       });
       res.json({ success: true, data: test });
     } catch (err) { next(err); }
