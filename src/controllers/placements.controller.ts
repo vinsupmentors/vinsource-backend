@@ -789,15 +789,20 @@ export const placementsController = {
   },
 
   /**
-   * Creates a session and, in the same call, seeds its student roster — a
-   * union of every ACTIVE student in the picked sub-batches (scheduleIds)
-   * plus any individually-picked students — as SoftskillAttendance rows with
-   * present:false. That roster IS the attendance list from then on (see
-   * getSoftskillAttendance), and everyone in it gets an email now.
+   * Creates a session and, in the same call, seeds its student roster from an
+   * uploaded list of student codes (e.g. an Excel sheet with a studentCode
+   * column) — same input shape as bulkPushToPool, since that's what
+   * Placements-team users have on hand rather than internal schedule/student
+   * ids. scheduleIds/studentIds are still accepted for backward compatibility
+   * but the frontend no longer offers a sub-batch picker. Seeded as
+   * SoftskillAttendance rows with present:false — that roster IS the
+   * attendance list from then on (see getSoftskillAttendance), and everyone
+   * in it gets an email now. Unresolved codes are reported back, not thrown,
+   * so a typo in one row doesn't block creating the session.
    */
   async createSoftskillSession(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { type, topic, startDate, endDate, trainerId, notes, scheduleIds, studentIds } = req.body;
+      const { type, topic, startDate, endDate, trainerId, notes, scheduleIds, studentIds, studentCodes } = req.body;
       if (!type || !topic || !startDate) throw new AppError('type, topic, and startDate are required', 400);
 
       const rosterIds = new Set<string>(Array.isArray(studentIds) ? studentIds : []);
@@ -807,6 +812,14 @@ export const placementsController = {
           select: { studentId: true },
         });
         for (const e of enrollments) rosterIds.add(e.studentId);
+      }
+      const notFoundCodes: string[] = [];
+      if (Array.isArray(studentCodes) && studentCodes.length) {
+        const codes = Array.from(new Set(studentCodes.map((c: string) => String(c).trim()).filter(Boolean)));
+        const matched = await prisma.student.findMany({ where: { studentCode: { in: codes } }, select: { id: true, studentCode: true } });
+        const byCode = new Set(matched.map((s) => s.studentCode));
+        for (const code of codes) { if (byCode.has(code)) { /* resolved below */ } else notFoundCodes.push(code); }
+        for (const s of matched) rosterIds.add(s.id);
       }
 
       const session = await prisma.softskillSession.create({
@@ -827,14 +840,14 @@ export const placementsController = {
         notifySoftskillSession(session, Array.from(rosterIds)).catch((err) => console.error('notifySoftskillSession failed:', err));
       }
 
-      res.status(201).json({ success: true, data: session });
+      res.status(201).json({ success: true, data: { ...session, rosterCount: rosterIds.size, notFoundCodes } });
     } catch (err) { next(err); }
   },
 
-  /** Adds more students to an existing session's roster (batches and/or individuals) — only the newly-added ones get the email, not the whole roster again. */
+  /** Adds more students to an existing session's roster by student code (Excel upload, same shape as bulkPushToPool) — only the newly-added ones get the email, not the whole roster again. */
   async addStudentsToSession(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { scheduleIds, studentIds } = req.body;
+      const { scheduleIds, studentIds, studentCodes } = req.body;
       const sessionId = req.params.id;
       const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
       if (!session) throw new AppError('Session not found', 404);
@@ -847,7 +860,15 @@ export const placementsController = {
         });
         for (const e of enrollments) candidateIds.add(e.studentId);
       }
-      if (!candidateIds.size) throw new AppError('No students to add', 400);
+      const notFoundCodes: string[] = [];
+      if (Array.isArray(studentCodes) && studentCodes.length) {
+        const codes = Array.from(new Set(studentCodes.map((c: string) => String(c).trim()).filter(Boolean)));
+        const matched = await prisma.student.findMany({ where: { studentCode: { in: codes } }, select: { id: true, studentCode: true } });
+        const byCode = new Set(matched.map((s) => s.studentCode));
+        for (const code of codes) { if (!byCode.has(code)) notFoundCodes.push(code); }
+        for (const s of matched) candidateIds.add(s.id);
+      }
+      if (!candidateIds.size) throw new AppError('No students to add — check the student codes and try again', 400);
 
       const existing = await prisma.softskillAttendance.findMany({
         where: { sessionId, studentId: { in: Array.from(candidateIds) } },
@@ -864,7 +885,7 @@ export const placementsController = {
         notifySoftskillSession(session, toAdd).catch((err) => console.error('notifySoftskillSession failed:', err));
       }
 
-      res.status(201).json({ success: true, data: { added: toAdd.length, alreadyIn: existingIds.size } });
+      res.status(201).json({ success: true, data: { added: toAdd.length, alreadyIn: existingIds.size, notFoundCodes } });
     } catch (err) { next(err); }
   },
 
