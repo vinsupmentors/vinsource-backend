@@ -589,6 +589,7 @@ model Employee {
   interviewFeedbacksGiven PlacementInterview[]      @relation("InterviewFeedbackGiver")
   driveCandidatesAdded    PlacementDriveCandidate[] @relation("DriveCandidateAdder")
   softskillSessionsRun    SoftskillSession[]        @relation("SoftskillTrainer")
+  softskillAttendanceDaysMarked SoftskillAttendanceDay[] @relation("SoftskillAttendanceDayMarker")
 
   // Placement Training (standalone Softskill/Aptitude Projects & Tests)
   placementProjectsCreated       PlacementProject[]           @relation("PlacementProjectCreator")
@@ -1719,8 +1720,9 @@ model Student {
   onlineTestAttempts    OnlineTestAttempt[]
   portfolio             StudentPortfolio?
 
-  softskillAttendances SoftskillAttendance[]
-  driveCandidacies     PlacementDriveCandidate[]
+  softskillAttendances    SoftskillAttendance[]
+  softskillAttendanceDays SoftskillAttendanceDay[]
+  driveCandidacies        PlacementDriveCandidate[]
 
   placementProjectSubmissions PlacementProjectSubmission[]
   placementTestAttempts       PlacementTestAttempt[]
@@ -2359,23 +2361,51 @@ model SoftskillSession {
 
   trainer     Employee?            @relation("SoftskillTrainer", fields: [trainerId], references: [id])
   attendances SoftskillAttendance[]
+  attendanceDays SoftskillAttendanceDay[]
 
   placementProjectReleases PlacementProjectRelease[]
   placementTestReleases    PlacementTestRelease[]
 }
 
+// Roster for a session — one row per student added to it. This is also the
+// authorization mechanism for Placement Training content (a student can only
+// see/submit to what's released to a session if they have a row here). Kept
+// separate from day-to-day attendance marks (see SoftskillAttendanceDay
+// below) — this table no longer records a per-session present/score; that's
+// now tracked per calendar day, same as course attendance.
 model SoftskillAttendance {
   id        String   @id @default(uuid())
   sessionId String
   studentId String
   present   Boolean  @default(true)
-  score     Float?   // optional aptitude test score out of 100
+  score     Float?   // legacy — no longer written to; see SoftskillAttendanceDay
   remarks   String?  @db.Text
 
   session SoftskillSession @relation(fields: [sessionId], references: [id])
   student Student          @relation(fields: [studentId], references: [id])
 
   @@unique([sessionId, studentId])
+}
+
+// Per-day attendance for a Softskill/Aptitude session — a session can span
+// multiple days (startDate–endDate), and each day is marked separately, the
+// same way course attendance (StudentAttendance) works per BatchCourseSchedule.
+model SoftskillAttendanceDay {
+  id         String                  @id @default(uuid())
+  sessionId  String
+  studentId  String
+  date       DateTime
+  status     StudentAttendanceStatus @default(PRESENT)
+  score      Float?                  // optional aptitude test score out of 100, for that day
+  remarks    String?                 @db.Text
+  markedById String?
+  createdAt  DateTime                @default(now())
+
+  session  SoftskillSession @relation(fields: [sessionId], references: [id])
+  student  Student          @relation(fields: [studentId], references: [id])
+  markedBy Employee?        @relation("SoftskillAttendanceDayMarker", fields: [markedById], references: [id])
+
+  @@unique([sessionId, studentId, date])
 }
 
 // ─── DIGITAL MARKETING ────────────────────────────────────────────────────────

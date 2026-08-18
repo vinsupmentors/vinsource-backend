@@ -385,12 +385,12 @@ export const productionReportsController = {
       }
 
       // ── Placement (surfaced only once the student has been pushed in; harmless empty-state otherwise) ──
-      const [portfolio, softskillAttendance, driveCandidacies, interviews, placementResults] = await Promise.all([
+      const [portfolio, softskillAttendanceDays, driveCandidacies, interviews, placementResults] = await Promise.all([
         prisma.studentPortfolio.findFirst({ where: { studentId }, select: { status: true, publicSlug: true } }),
-        prisma.softskillAttendance.findMany({
+        prisma.softskillAttendanceDay.findMany({
           where: { studentId },
-          include: { session: { select: { type: true, topic: true, startDate: true } } },
-          orderBy: { sessionId: 'asc' },
+          include: { session: { select: { type: true, topic: true, startDate: true, endDate: true } } },
+          orderBy: [{ sessionId: 'asc' }, { date: 'asc' }],
         }),
         prisma.placementDriveCandidate.findMany({
           where: { studentId },
@@ -426,6 +426,31 @@ export const productionReportsController = {
       if (!portfolio) placementMissing.push('Portfolio not yet submitted');
       else if (portfolio.status !== 'APPROVED') placementMissing.push(portfolio.status === 'PENDING' ? 'Portfolio awaiting approval' : 'Portfolio rejected — needs resubmission');
 
+      // Day-wise attendance rolled up per session — a session can span
+      // multiple days now, so this reports days-present/absent/late + an
+      // average score rather than a single present/score pair.
+      type SessionAgg = {
+        type: string; topic: string; startDate: Date; endDate: Date | null;
+        present: number; absent: number; late: number; scores: number[];
+      };
+      const bySession = new Map<string, SessionAgg>();
+      for (const d of softskillAttendanceDays) {
+        let entry = bySession.get(d.sessionId);
+        if (!entry) {
+          entry = { type: d.session.type, topic: d.session.topic, startDate: d.session.startDate, endDate: d.session.endDate, present: 0, absent: 0, late: 0, scores: [] };
+          bySession.set(d.sessionId, entry);
+        }
+        if (d.status === 'PRESENT') entry.present += 1;
+        else if (d.status === 'ABSENT') entry.absent += 1;
+        else if (d.status === 'LATE') entry.late += 1;
+        if (d.score !== null && d.score !== undefined) entry.scores.push(d.score);
+      }
+      const softskillAttendance = Array.from(bySession.entries()).map(([sessionId, s]) => ({
+        sessionId, type: s.type, topic: s.topic, startDate: s.startDate, endDate: s.endDate,
+        daysPresent: s.present, daysAbsent: s.absent, daysLate: s.late, daysMarked: s.present + s.absent + s.late,
+        avgScore: s.scores.length ? Math.round((s.scores.reduce((a, b) => a + b, 0) / s.scores.length) * 100) / 100 : null,
+      }));
+
       res.json({
         success: true,
         data: {
@@ -436,10 +461,7 @@ export const productionReportsController = {
             movedToPlacementAt: student.movedToPlacementAt ?? null,
             readiness: { ready: placementMissing.length === 0, missing: placementMissing },
             portfolio: portfolio ? { status: portfolio.status, publicSlug: portfolio.publicSlug } : null,
-            softskillAttendance: softskillAttendance.map((a) => ({
-              id: a.id, type: a.session.type, topic: a.session.topic, startDate: a.session.startDate,
-              present: a.present, score: a.score,
-            })),
+            softskillAttendance,
             driveCandidacies: driveCandidacies.map((c) => ({
               id: c.id, status: c.status, partnerName: c.drive.partner.name, role: c.drive.role, driveDate: c.drive.driveDate,
             })),

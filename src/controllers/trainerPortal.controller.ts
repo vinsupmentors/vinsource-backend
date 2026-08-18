@@ -1114,18 +1114,33 @@ export const trainerPortalController = {
     } catch (err) { next(err); }
   },
 
+  /** Roster + attendance status for one calendar day, scoped to the assigned trainer. Mirrors placements.controller.ts's getSoftskillAttendance. */
   async mySoftskillSessionAttendance(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employeeId = req.user!.employeeId;
       const { sessionId } = req.params;
+      const { date } = req.query;
       const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
       if (!session || session.trainerId !== employeeId) throw new AppError('You are not the assigned trainer for this session', 403);
+      if (!date) throw new AppError('date query param is required (YYYY-MM-DD)', 400);
+      const day = new Date(String(date));
+      const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
 
-      const attendances = await prisma.softskillAttendance.findMany({
-        where: { sessionId },
-        include: { student: { select: { id: true, firstName: true, lastName: true, studentCode: true } } },
-      });
-      res.json({ success: true, data: attendances });
+      const [roster, marked] = await Promise.all([
+        prisma.softskillAttendance.findMany({
+          where: { sessionId },
+          include: { student: { select: { id: true, firstName: true, lastName: true, studentCode: true } } },
+        }),
+        prisma.softskillAttendanceDay.findMany({ where: { sessionId, date: dayStart } }),
+      ]);
+      const byStudent = new Map(marked.map((m) => [m.studentId, m]));
+      const data = roster.map((r) => ({
+        student: r.student,
+        status: byStudent.get(r.studentId)?.status ?? null,
+        score: byStudent.get(r.studentId)?.score ?? null,
+        remarks: byStudent.get(r.studentId)?.remarks ?? null,
+      }));
+      res.json({ success: true, data });
     } catch (err) { next(err); }
   },
 
@@ -1137,22 +1152,26 @@ export const trainerPortalController = {
       const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
       if (!session || session.trainerId !== employeeId) throw new AppError('You are not the assigned trainer for this session', 403);
 
-      const { attendances } = req.body as { attendances: { studentId: string; present: boolean; score?: number; remarks?: string }[] };
-      if (!Array.isArray(attendances) || attendances.length === 0) throw new AppError('attendances array is required', 400);
+      const { date, records } = req.body as { date: string; records: { studentId: string; status: 'PRESENT' | 'ABSENT' | 'LATE'; score?: number; remarks?: string }[] };
+      if (!date || !Array.isArray(records) || !records.length) throw new AppError('date and a non-empty records array are required', 400);
+      const day = new Date(String(date));
+      const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
 
       const results = await prisma.$transaction(
-        attendances.map((entry) =>
-          prisma.softskillAttendance.upsert({
-            where: { sessionId_studentId: { sessionId, studentId: entry.studentId } },
+        records.map((entry) =>
+          prisma.softskillAttendanceDay.upsert({
+            where: { sessionId_studentId_date: { sessionId, studentId: entry.studentId, date: dayStart } },
             create: {
-              sessionId, studentId: entry.studentId, present: entry.present,
+              sessionId, studentId: entry.studentId, date: dayStart, status: entry.status,
               score: entry.score !== undefined ? Number(entry.score) : undefined,
               remarks: entry.remarks,
+              markedById: employeeId,
             },
             update: {
-              present: entry.present,
+              status: entry.status,
               score: entry.score !== undefined ? Number(entry.score) : undefined,
               remarks: entry.remarks,
+              markedById: employeeId,
             },
           })
         )
