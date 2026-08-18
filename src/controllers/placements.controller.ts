@@ -1233,6 +1233,44 @@ export const placementsController = {
             orderBy: { updatedAt: 'desc' },
           });
 
+          // Per-test breakdown (which test, what mark) — offline (trainer-graded
+          // ModuleTest/ModuleMark) and online (self-administered OnlineTest) tests
+          // combined into one chronological list, mirroring what feeds the
+          // aggregate totals above.
+          const [myModuleMarks, myOnlineAttempts] = await Promise.all([
+            prisma.moduleMark.findMany({
+              where: { studentId: id, test: { scheduleId } },
+              include: { test: { select: { id: true, title: true, testDate: true, maxMarks: true } } },
+            }),
+            prisma.onlineTestAttempt.findMany({
+              where: { studentId: id, release: { scheduleId }, score: { not: null }, totalMarks: { not: null } },
+              include: { release: { include: { test: { select: { id: true, title: true } } } } },
+            }),
+          ]);
+          const tests = [
+            ...myModuleMarks.map((m) => ({
+              id: m.id, title: m.test.title, type: 'Offline' as const,
+              marksObtained: m.marksObtained, maxMarks: m.test.maxMarks, date: m.test.testDate,
+            })),
+            ...myOnlineAttempts.map((a) => ({
+              id: a.id, title: a.release.test.title, type: 'Online' as const,
+              marksObtained: a.score!, maxMarks: a.totalMarks!, date: a.submittedAt ?? a.startedAt,
+            })),
+          ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+          // Attendance summary for this schedule — total classes marked vs.
+          // how many the student was present/late/absent for.
+          const attendanceRows = await prisma.studentAttendance.findMany({
+            where: { studentId: id, scheduleId },
+            select: { status: true },
+          });
+          const attendance = {
+            present: attendanceRows.filter((a) => a.status === 'PRESENT').length,
+            absent: attendanceRows.filter((a) => a.status === 'ABSENT').length,
+            late: attendanceRows.filter((a) => a.status === 'LATE').length,
+            total: attendanceRows.length,
+          };
+
           return {
             scheduleId,
             courseId: e.schedule.course.id,
@@ -1244,6 +1282,8 @@ export const placementsController = {
             marksMax: myTotals.max,
             percentage: Math.round((myTotals.max ? (myTotals.obtained / myTotals.max) * 100 : 0) * 10) / 10,
             classAverage: Math.round(classAverage * 10) / 10,
+            attendance,
+            tests,
             projects: projectSubmissions.map((s) => ({
               id: s.id,
               projectTitle: s.release.project.title,
@@ -1251,6 +1291,8 @@ export const placementsController = {
               isCapstone: s.release.project.isCapstone,
               status: s.status,
               submittedAt: s.submittedAt,
+              fileUrl: s.fileUrl,
+              linkUrl: s.linkUrl,
               graded: s.grade !== null,
               grade: s.grade,
               maxGrade: s.maxGrade,
