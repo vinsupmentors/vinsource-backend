@@ -117,6 +117,7 @@ async function performStudentDelete(id: string, force = false, approvedById?: st
     await tx.referral.deleteMany({ where: { studentId: id } });
     await tx.softskillAttendance.deleteMany({ where: { studentId: id } });
     await tx.softskillAttendanceDay.deleteMany({ where: { studentId: id } });
+    await tx.softskillFeedback.deleteMany({ where: { studentId: id } });
     await tx.placementDriveCandidate.deleteMany({ where: { studentId: id } });
     await tx.placementInterview.deleteMany({ where: { studentId: id } });
     await tx.studentPortfolio.deleteMany({ where: { studentId: id } });

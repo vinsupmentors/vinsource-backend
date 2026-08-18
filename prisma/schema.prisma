@@ -590,6 +590,7 @@ model Employee {
   driveCandidatesAdded    PlacementDriveCandidate[] @relation("DriveCandidateAdder")
   softskillSessionsRun    SoftskillSession[]        @relation("SoftskillTrainer")
   softskillAttendanceDaysMarked SoftskillAttendanceDay[] @relation("SoftskillAttendanceDayMarker")
+  softskillFeedbackGiven  SoftskillFeedback[]       @relation("SoftskillFeedbackTrainer")
 
   // Placement Training (standalone Softskill/Aptitude Projects & Tests)
   placementProjectsCreated       PlacementProject[]           @relation("PlacementProjectCreator")
@@ -1722,6 +1723,7 @@ model Student {
 
   softskillAttendances    SoftskillAttendance[]
   softskillAttendanceDays SoftskillAttendanceDay[]
+  softskillFeedback       SoftskillFeedback[]
   driveCandidacies        PlacementDriveCandidate[]
 
   placementProjectSubmissions PlacementProjectSubmission[]
@@ -2362,6 +2364,7 @@ model SoftskillSession {
   trainer     Employee?            @relation("SoftskillTrainer", fields: [trainerId], references: [id])
   attendances SoftskillAttendance[]
   attendanceDays SoftskillAttendanceDay[]
+  feedback    SoftskillFeedback[]
 
   placementProjectReleases PlacementProjectRelease[]
   placementTestReleases    PlacementTestRelease[]
@@ -2406,6 +2409,26 @@ model SoftskillAttendanceDay {
   markedBy Employee?        @relation("SoftskillAttendanceDayMarker", fields: [markedById], references: [id])
 
   @@unique([sessionId, studentId, date])
+}
+
+// Trainer-private feedback on a student's performance in a Softskill/Aptitude
+// session — the SK&APT equivalent of TrainerFeedback (course-scoped). Never
+// shown to students.
+model SoftskillFeedback {
+  id                String   @id @default(uuid())
+  sessionId         String
+  studentId         String
+  trainerId         String?
+  performanceRating Int?
+  note              String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  session SoftskillSession @relation(fields: [sessionId], references: [id])
+  student Student          @relation(fields: [studentId], references: [id])
+  trainer Employee?        @relation("SoftskillFeedbackTrainer", fields: [trainerId], references: [id])
+
+  @@unique([sessionId, studentId])
 }
 
 // ─── DIGITAL MARKETING ────────────────────────────────────────────────────────

@@ -1180,6 +1180,53 @@ export const trainerPortalController = {
     } catch (err) { next(err); }
   },
 
+  /** Roster + my private feedback for one Softskill/Aptitude session — the SK&APT equivalent of listFeedback/upsertFeedback (course-scoped). Never shown to students. */
+  async mySoftskillFeedback(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const [roster, feedback] = await Promise.all([
+        prisma.softskillAttendance.findMany({
+          where: { sessionId },
+          include: { student: { select: { id: true, firstName: true, lastName: true, studentCode: true } } },
+        }),
+        prisma.softskillFeedback.findMany({ where: { sessionId } }),
+      ]);
+      const byStudent = new Map(feedback.map((f) => [f.studentId, f]));
+      const data = roster.map((r) => ({
+        student: r.student,
+        feedback: byStudent.get(r.studentId)
+          ? { performanceRating: byStudent.get(r.studentId)!.performanceRating, note: byStudent.get(r.studentId)!.note, updatedAt: byStudent.get(r.studentId)!.updatedAt }
+          : null,
+      }));
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /** Create/update my feedback for a student in one Softskill/Aptitude session. Body: { studentId, performanceRating?, note? } */
+  async upsertSoftskillFeedback(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const { studentId, performanceRating, note } = req.body as { studentId: string; performanceRating?: number; note?: string };
+      if (!studentId) throw new AppError('studentId is required', 400);
+
+      const onRoster = await prisma.softskillAttendance.findUnique({ where: { sessionId_studentId: { sessionId, studentId } } });
+      if (!onRoster) throw new AppError('That student is not on this session\'s roster', 404);
+
+      const feedback = await prisma.softskillFeedback.upsert({
+        where: { sessionId_studentId: { sessionId, studentId } },
+        update: { trainerId: employeeId, performanceRating, note },
+        create: { sessionId, studentId, trainerId: employeeId, performanceRating, note },
+      });
+      res.json({ success: true, data: feedback });
+    } catch (err) { next(err); }
+  },
+
   // ── Placement Training — review my sessions' project submissions / test results ──
   // Roster for a session is its SoftskillAttendance rows (no separate
   // enrollment table exists for softskill sessions), joined the same way
