@@ -1167,6 +1167,309 @@ export const studentPortalController = {
       res.json({ success: true, data: portfolio });
     } catch (err) { next(err); }
   },
+
+  // ── PLACEMENT TRAINING — standalone Projects/Tests released to Softskill/
+  // Aptitude sessions. Same shape and flow as the course Project/OnlineTest
+  // endpoints above, just keyed by PlacementProjectRelease/PlacementTestRelease
+  // (sessionId instead of scheduleId) and authorized off SoftskillAttendance
+  // (the session "roster") instead of StudentBatchEnrollment.
+
+  async myPlacementProjects(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const attendances = await prisma.softskillAttendance.findMany({ where: { studentId }, select: { sessionId: true } });
+      const sessionIds = attendances.map((a) => a.sessionId);
+
+      const releases = await prisma.placementProjectRelease.findMany({
+        where: { sessionId: { in: sessionIds } },
+        include: {
+          project: true,
+          session: { select: { id: true, type: true, topic: true } },
+          submissions: { where: { studentId } },
+        },
+        orderBy: { releasedAt: 'desc' },
+      });
+
+      const data = releases.map((r) => ({
+        releaseId: r.id,
+        status: r.status,
+        releasedAt: r.releasedAt,
+        project: r.project,
+        session: r.session,
+        mySubmission: r.submissions[0] ?? null,
+      }));
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /** Submit work for a released placement project — either a file upload or a link, plus an optional note. */
+  async submitPlacementProject(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { releaseId } = req.params;
+      const { linkUrl, note } = req.body;
+      const file = req.file as Express.Multer.File | undefined;
+
+      const release = await prisma.placementProjectRelease.findUnique({ where: { id: releaseId } });
+      if (!release) throw new AppError('Project release not found', 404);
+      if (release.status !== 'ACTIVE') throw new AppError('This project is no longer accepting submissions', 400);
+
+      const onRoster = await prisma.softskillAttendance.findUnique({
+        where: { sessionId_studentId: { sessionId: release.sessionId, studentId } },
+      });
+      if (!onRoster) throw new AppError('You are not on the roster for this session', 403);
+
+      if (!file && !linkUrl) throw new AppError('A file or a link is required to submit', 400);
+
+      const submission = await prisma.placementProjectSubmission.upsert({
+        where: { releaseId_studentId: { releaseId, studentId } },
+        update: {
+          fileUrl: file ? `/uploads/project-submissions/${file.filename}` : undefined,
+          linkUrl: linkUrl ?? undefined,
+          note: note ?? undefined,
+          status: 'SUBMITTED',
+          submittedAt: new Date(),
+        },
+        create: {
+          releaseId,
+          studentId,
+          fileUrl: file ? `/uploads/project-submissions/${file.filename}` : undefined,
+          linkUrl: linkUrl ?? undefined,
+          note: note ?? undefined,
+        },
+      });
+      res.status(201).json({ success: true, data: submission });
+    } catch (err) { next(err); }
+  },
+
+  /** Placement tests activated for any session I'm on the roster of, with my own attempt status (if started). */
+  async myPlacementTests(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const attendances = await prisma.softskillAttendance.findMany({ where: { studentId }, select: { sessionId: true } });
+      const sessionIds = attendances.map((a) => a.sessionId);
+
+      const releases = await prisma.placementTestRelease.findMany({
+        where: { sessionId: { in: sessionIds } },
+        include: {
+          test: { include: { _count: { select: { questions: true } } } },
+          session: { select: { id: true, type: true, topic: true } },
+          attempts: { where: { studentId } },
+        },
+        orderBy: { activatedAt: 'desc' },
+      });
+
+      const data = releases.map((r) => ({
+        releaseId: r.id,
+        status: r.status,
+        activatedAt: r.activatedAt,
+        session: r.session,
+        test: { id: r.test.id, title: r.test.title, durationMinutes: r.test.durationMinutes, questionCount: r.test._count.questions },
+        myAttempt: r.attempts[0]
+          ? { id: r.attempts[0].id, status: r.attempts[0].status, startedAt: r.attempts[0].startedAt, deadlineAt: r.attempts[0].deadlineAt, score: r.attempts[0].score, totalMarks: r.attempts[0].totalMarks }
+          : null,
+      }));
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /** Start (or resume) my attempt for an activated placement test. Deadline is computed server-side, once, at first start. */
+  async startPlacementTestAttempt(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { releaseId } = req.params;
+
+      const release = await prisma.placementTestRelease.findUnique({
+        where: { id: releaseId },
+        include: { test: { include: { questions: { orderBy: { order: 'asc' } } } } },
+      });
+      if (!release) throw new AppError('Test release not found', 404);
+      if (release.status !== 'ACTIVE') throw new AppError('This test is not currently active', 400);
+
+      const onRoster = await prisma.softskillAttendance.findUnique({
+        where: { sessionId_studentId: { sessionId: release.sessionId, studentId } },
+      });
+      if (!onRoster) throw new AppError('You are not on the roster for this session', 403);
+
+      let attempt = await prisma.placementTestAttempt.findUnique({ where: { releaseId_studentId: { releaseId, studentId } } });
+      if (!attempt) {
+        const deadlineAt = new Date(Date.now() + release.test.durationMinutes * 60 * 1000);
+        attempt = await prisma.placementTestAttempt.create({ data: { releaseId, studentId, deadlineAt } });
+      } else if (attempt.status !== 'IN_PROGRESS') {
+        throw new AppError('You have already completed this test', 409);
+      }
+
+      const questions = release.test.questions.map((q) => ({ id: q.id, order: q.order, prompt: q.prompt, options: q.options, marks: q.marks }));
+      res.status(201).json({ success: true, data: { attempt, questions } });
+    } catch (err) { next(err); }
+  },
+
+  /** Resume/poll an in-progress placement-test attempt — used by the timer UI; never returns correctIndex. */
+  async getPlacementTestAttempt(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+
+      const attempt = await prisma.placementTestAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          release: { include: { test: { include: { questions: { orderBy: { order: 'asc' } } } } } },
+          answers: true,
+        },
+      });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+
+      if (attempt.status === 'IN_PROGRESS' && attempt.deadlineAt.getTime() <= Date.now()) {
+        await gradeAndClosePlacementAttempt(attempt.id, 'EXPIRED');
+        const refreshed = await prisma.placementTestAttempt.findUnique({ where: { id: attemptId } });
+        return res.json({ success: true, data: { attempt: refreshed, questions: [], answers: [] } });
+      }
+
+      const questions = attempt.release.test.questions.map((q) => ({ id: q.id, order: q.order, prompt: q.prompt, options: q.options, marks: q.marks }));
+      const answers = attempt.answers.map((a) => ({ questionId: a.questionId, selectedIndex: a.selectedIndex }));
+      res.json({ success: true, data: { attempt, questions, answers } });
+    } catch (err) { next(err); }
+  },
+
+  /** Save/update one answer while a placement-test attempt is in progress. Body: { questionId, selectedIndex } */
+  async savePlacementTestAnswer(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+      const { questionId, selectedIndex } = req.body;
+      if (!questionId || selectedIndex === undefined || selectedIndex === null) {
+        throw new AppError('questionId and selectedIndex are required', 400);
+      }
+
+      const attempt = await prisma.placementTestAttempt.findUnique({ where: { id: attemptId } });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+      if (attempt.status !== 'IN_PROGRESS') throw new AppError('This attempt is no longer in progress', 400);
+      if (attempt.deadlineAt.getTime() <= Date.now()) {
+        await gradeAndClosePlacementAttempt(attempt.id, 'EXPIRED');
+        throw new AppError('Time is up — this attempt has been submitted automatically', 400);
+      }
+
+      const answer = await prisma.placementTestAnswer.upsert({
+        where: { attemptId_questionId: { attemptId, questionId } },
+        update: { selectedIndex },
+        create: { attemptId, questionId, selectedIndex },
+      });
+      res.json({ success: true, data: answer });
+    } catch (err) { next(err); }
+  },
+
+  /** Record a violation during an in-progress placement-test attempt — identical semantics to recordTestViolation. */
+  async recordPlacementTestViolation(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+      const type = (req.body?.type as string) || 'TAB_SWITCH';
+      const file = req.file as Express.Multer.File | undefined;
+      const MAX_WARNINGS = 2; // 1st + 2nd violation = warning, 3rd ends the test
+
+      const attempt = await prisma.placementTestAttempt.findUnique({ where: { id: attemptId } });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+
+      if (attempt.status !== 'IN_PROGRESS') {
+        res.json({ success: true, data: { attempt, action: 'none', violationCount: attempt.violationCount } });
+        return;
+      }
+      if (attempt.deadlineAt.getTime() <= Date.now()) {
+        const graded = await gradeAndClosePlacementAttempt(attemptId, 'EXPIRED');
+        res.json({ success: true, data: { attempt: graded, action: 'ended', violationCount: attempt.violationCount } });
+        return;
+      }
+
+      await prisma.placementTestViolationSnapshot.create({
+        data: {
+          attemptId,
+          type: type as never,
+          snapshotUrl: file ? `/uploads/test-violations/${file.filename}` : undefined,
+        },
+      });
+
+      const violationCount = attempt.violationCount + 1;
+
+      if (violationCount > MAX_WARNINGS) {
+        const graded = await gradeAndClosePlacementAttempt(attemptId, 'AUTO_SUBMITTED_VIOLATION');
+        res.json({ success: true, data: { attempt: graded, action: 'ended', violationCount } });
+        return;
+      }
+
+      const updated = await prisma.placementTestAttempt.update({ where: { id: attemptId }, data: { violationCount } });
+      res.json({ success: true, data: { attempt: updated, action: 'warning', violationCount } });
+    } catch (err) { next(err); }
+  },
+
+  /** Submit (finish) my placement-test attempt and reveal the score immediately. Body: { violation?: boolean } */
+  async submitPlacementTestAttempt(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+      const { violation } = req.body as { violation?: boolean };
+
+      const attempt = await prisma.placementTestAttempt.findUnique({ where: { id: attemptId } });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+      if (attempt.status !== 'IN_PROGRESS') {
+        const already = await prisma.placementTestAttempt.findUnique({ where: { id: attemptId } });
+        return res.json({ success: true, data: already });
+      }
+
+      const expired = attempt.deadlineAt.getTime() <= Date.now();
+      const finalStatus = violation ? 'AUTO_SUBMITTED_VIOLATION' : expired ? 'EXPIRED' : 'SUBMITTED';
+      const graded = await gradeAndClosePlacementAttempt(attemptId, finalStatus);
+      res.json({ success: true, data: graded });
+    } catch (err) { next(err); }
+  },
+
+  /** Review my own completed placement-test attempt — per-question breakdown. Only available once no longer IN_PROGRESS. */
+  async getPlacementTestAttemptReview(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const { attemptId } = req.params;
+
+      const attempt = await prisma.placementTestAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          release: { include: { test: { include: { questions: { orderBy: { order: 'asc' } } } } } },
+          answers: true,
+        },
+      });
+      if (!attempt || attempt.studentId !== studentId) throw new AppError('Attempt not found', 404);
+      if (attempt.status === 'IN_PROGRESS') throw new AppError('This test is still in progress', 400);
+
+      const answersByQuestion = new Map(attempt.answers.map((a) => [a.questionId, a]));
+      const questions = attempt.release.test.questions.map((q) => {
+        const a = answersByQuestion.get(q.id);
+        return {
+          id: q.id,
+          order: q.order,
+          prompt: q.prompt,
+          options: q.options,
+          marks: q.marks,
+          correctIndex: q.correctIndex,
+          selectedIndex: a?.selectedIndex ?? null,
+          isCorrect: a?.isCorrect ?? false,
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          attempt: {
+            id: attempt.id,
+            status: attempt.status,
+            score: attempt.score,
+            totalMarks: attempt.totalMarks,
+            startedAt: attempt.startedAt,
+            submittedAt: attempt.submittedAt,
+          },
+          testTitle: attempt.release.test.title,
+          questions,
+        },
+      });
+    } catch (err) { next(err); }
+  },
 };
 
 /** Grades every answer for an attempt against OnlineTestQuestion.correctIndex, sets score/totalMarks/status. */
@@ -1200,4 +1503,37 @@ async function gradeAndCloseAttempt(
   });
 
   return prisma.onlineTestAttempt.findUnique({ where: { id: attemptId } });
+}
+
+/** Grades every answer for a placement-test attempt against PlacementTestQuestion.correctIndex, sets score/totalMarks/status. Identical logic to gradeAndCloseAttempt above, mirrored for the standalone Placement Training tables. */
+async function gradeAndClosePlacementAttempt(
+  attemptId: string,
+  status: 'SUBMITTED' | 'AUTO_SUBMITTED_VIOLATION' | 'EXPIRED'
+) {
+  const attempt = await prisma.placementTestAttempt.findUnique({
+    where: { id: attemptId },
+    include: { release: { include: { test: { include: { questions: true } } } }, answers: true },
+  });
+  if (!attempt) throw new AppError('Attempt not found', 404);
+  if (attempt.status !== 'IN_PROGRESS') return attempt;
+
+  const questionsById = new Map(attempt.release.test.questions.map((q) => [q.id, q]));
+  let score = 0;
+  const totalMarks = attempt.release.test.questions.reduce((sum, q) => sum + q.marks, 0);
+
+  await prisma.$transaction(async (tx) => {
+    for (const a of attempt.answers) {
+      const q = questionsById.get(a.questionId);
+      if (!q) continue;
+      const isCorrect = a.selectedIndex !== null && a.selectedIndex === q.correctIndex;
+      if (isCorrect) score += q.marks;
+      await tx.placementTestAnswer.update({ where: { id: a.id }, data: { isCorrect } });
+    }
+    await tx.placementTestAttempt.update({
+      where: { id: attemptId },
+      data: { status, submittedAt: new Date(), score, totalMarks },
+    });
+  });
+
+  return prisma.placementTestAttempt.findUnique({ where: { id: attemptId } });
 }

@@ -663,6 +663,14 @@ export const productionController = {
         trainingMode, totalProgramFee, amountPaid, paymentMode,
       } = req.body;
       const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
+      // JRP is course-only, non-placement — block a direct edit from ever
+      // setting a JRP student's status to IN_PLACEMENT (covers whichever
+      // track — the one already on file, or a new one being set in this
+      // same request — ends up applying).
+      const resultingTrack = track !== undefined ? track : existing?.track;
+      if (status === 'IN_PLACEMENT' && resultingTrack === 'JRP') {
+        throw new AppError('JRP students cannot be moved to the Placement Pool', 400);
+      }
       // Starts the 90-day / 3-interview placement SLA clock the first time a
       // PAP/IOP student's status flips to COMPLETED (handed off to placement team).
       const startsPlacementClock = status === 'COMPLETED' && existing?.status !== 'COMPLETED' && !existing?.movedToPlacementAt;
@@ -1007,6 +1015,9 @@ export const productionController = {
     try {
       const { scheduleId, track } = req.body;
       if (!scheduleId) throw new AppError('scheduleId is required', 400);
+      // JRP is course-only, non-placement — only IOP/PAP students may ever be
+      // pushed to Placements.
+      if (track === 'JRP') throw new AppError('JRP students cannot be pushed to Placements', 400);
 
       const schedule = await prisma.batchCourseSchedule.findUnique({
         where: { id: scheduleId },
@@ -1017,8 +1028,10 @@ export const productionController = {
       const studentWhere: Record<string, unknown> = {
         enrollments: { some: { scheduleId } },
         status: { notIn: ['PLACED', 'BATCH_TRANSFER'] },
+        // When no specific track was requested ("ALL"), still silently
+        // exclude JRP students rather than pushing the whole sub-batch.
+        track: track || { not: 'JRP' },
       };
-      if (track) studentWhere.track = track;
 
       const candidates = await prisma.student.findMany({
         where: studentWhere,
@@ -1090,11 +1103,15 @@ export const productionController = {
       if (status === 'IN_PLACEMENT') {
         const candidates = await prisma.student.findMany({
           where: { id: { in: studentIds } },
-          select: { id: true, movedToPlacementAt: true },
+          select: { id: true, track: true, movedToPlacementAt: true },
         });
+        // JRP is course-only, non-placement — silently exclude JRP students
+        // from this bulk push rather than failing the whole batch.
+        const skippedJrp = candidates.filter((c) => c.track === 'JRP').map((c) => c.id);
+        const eligible = candidates.filter((c) => c.track !== 'JRP');
         const now = new Date();
-        const needsClockStart = candidates.filter((c) => !c.movedToPlacementAt).map((c) => c.id);
-        const alreadyClocked = candidates.filter((c) => c.movedToPlacementAt).map((c) => c.id);
+        const needsClockStart = eligible.filter((c) => !c.movedToPlacementAt).map((c) => c.id);
+        const alreadyClocked = eligible.filter((c) => c.movedToPlacementAt).map((c) => c.id);
 
         await prisma.$transaction([
           ...(needsClockStart.length
@@ -1111,7 +1128,7 @@ export const productionController = {
             : []),
         ]);
 
-        return res.json({ success: true, data: { updated: candidates.length, status } });
+        return res.json({ success: true, data: { updated: eligible.length, status, skippedJrp: skippedJrp.length } });
       }
 
       const result = await prisma.student.updateMany({

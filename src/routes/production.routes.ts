@@ -3,6 +3,7 @@ import { productionController } from '../controllers/production.controller';
 import { productionContentController } from '../controllers/productionContent.controller';
 import { productionReportsController } from '../controllers/productionReports.controller';
 import { portfolioController } from '../controllers/portfolio.controller';
+import { placementTrainingController } from '../controllers/placementTraining.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule, requireRole } from '../middleware/rbac';
 import { uploadProjectResource, uploadCourseMaterial } from '../middleware/upload';
@@ -89,6 +90,21 @@ router.delete('/online-tests/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'),
 router.post('/online-tests/:id/questions', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.addQuestion);
 router.post('/online-tests/:id/questions/bulk', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.bulkUploadQuestions);
 router.delete('/online-tests/:id/questions/:questionId', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionContentController.deleteQuestion);
+
+// Placement Training — standalone Project/Test content authored here, released
+// per Softskill/Aptitude session from Placements (see placements.routes.ts).
+router.get('/placement-projects', placementTrainingController.listPlacementProjects);
+router.post('/placement-projects', requireModule('PRODUCTION_TRAINING', 'EDIT'), uploadProjectResource, placementTrainingController.createPlacementProject);
+router.put('/placement-projects/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), uploadProjectResource, placementTrainingController.updatePlacementProject);
+
+router.get('/placement-tests', placementTrainingController.listPlacementTests);
+router.get('/placement-tests/:id', placementTrainingController.getPlacementTest);
+router.post('/placement-tests', requireModule('PRODUCTION_TRAINING', 'EDIT'), placementTrainingController.createPlacementTest);
+router.put('/placement-tests/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), placementTrainingController.updatePlacementTest);
+router.delete('/placement-tests/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), placementTrainingController.deletePlacementTest);
+router.post('/placement-tests/:id/questions', requireModule('PRODUCTION_TRAINING', 'EDIT'), placementTrainingController.addPlacementQuestion);
+router.post('/placement-tests/:id/questions/bulk', requireModule('PRODUCTION_TRAINING', 'EDIT'), placementTrainingController.bulkUploadPlacementQuestions);
+router.delete('/placement-tests/:id/questions/:questionId', requireModule('PRODUCTION_TRAINING', 'EDIT'), placementTrainingController.deletePlacementQuestion);
 
 // ── Reports (PM/admin view — read-only aggregates over existing data) ──────
 router.get('/reports/trainer', productionReportsController.trainerReport);

@@ -21,6 +21,14 @@ async function assertOwnsSchedule(employeeId: string | undefined, scheduleId: st
   if (!assignment) throw new AppError('You are not assigned as a trainer for this sub-batch', 403);
 }
 
+/** SoftskillSession ownership — a single trainerId per session (not a many-to-many TrainerAssignment like schedules have). */
+async function assertOwnsSession(employeeId: string | undefined, sessionId: string) {
+  if (!employeeId) throw new AppError('No trainer profile is linked to this account', 403);
+  const session = await prisma.softskillSession.findUnique({ where: { id: sessionId } });
+  if (!session || session.trainerId !== employeeId) throw new AppError('You are not the assigned trainer for this session', 403);
+  return session;
+}
+
 function formatDeadline(deadline: Date | string | null | undefined): string | null {
   if (!deadline) return null;
   // `en-IN` alone only sets formatting style, not the actual timezone — the
@@ -343,8 +351,13 @@ export const trainerPortalController = {
         throw new AppError('Mark this student certificate eligible before transferring them to the Placement Pool', 400);
       }
 
-      const student = await prisma.student.findUnique({ where: { id: studentId }, select: { status: true, movedToPlacementAt: true } });
+      const student = await prisma.student.findUnique({ where: { id: studentId }, select: { status: true, track: true, movedToPlacementAt: true } });
       if (!student) throw new AppError('Student not found', 404);
+      // JRP is course-only, non-placement — only IOP/PAP students may ever be
+      // moved into the Placement Pool.
+      if (student.track === 'JRP') {
+        throw new AppError('JRP students cannot be moved to the Placement Pool', 400);
+      }
       if (student.status === 'PLACED' || student.status === 'BATCH_TRANSFER') {
         throw new AppError(`Cannot move a student with status ${student.status} to the Placement Pool`, 400);
       }
@@ -1145,6 +1158,200 @@ export const trainerPortalController = {
         )
       );
       res.json({ success: true, data: results });
+    } catch (err) { next(err); }
+  },
+
+  // ── Placement Training — review my sessions' project submissions / test results ──
+  // Roster for a session is its SoftskillAttendance rows (no separate
+  // enrollment table exists for softskill sessions), joined the same way
+  // studentBatchEnrollment is joined against ProjectSubmission/OnlineTestAttempt
+  // above — so un-submitted/not-yet-attempted students still show up.
+
+  /** Placement Projects released to my sessions, with this session's release (if any). */
+  async myPlacementReleasableContent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const [projects, tests] = await Promise.all([
+        prisma.placementProject.findMany({ include: { releases: { where: { sessionId } } }, orderBy: { createdAt: 'desc' } }),
+        prisma.placementTest.findMany({ include: { releases: { where: { sessionId } }, _count: { select: { questions: true } } }, orderBy: { createdAt: 'desc' } }),
+      ]);
+      res.json({ success: true, data: { projects, tests } });
+    } catch (err) { next(err); }
+  },
+
+  /** Project submissions for a release, joined with the session roster (SoftskillAttendance). */
+  async placementProjectSubmissions(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId, releaseId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const release = await prisma.placementProjectRelease.findUnique({ where: { id: releaseId }, include: { project: true } });
+      if (!release || release.sessionId !== sessionId) throw new AppError('Release not found for this session', 404);
+
+      const [roster, submissions] = await Promise.all([
+        prisma.softskillAttendance.findMany({
+          where: { sessionId },
+          include: { student: { select: { id: true, studentCode: true, firstName: true, lastName: true } } },
+        }),
+        prisma.placementProjectSubmission.findMany({ where: { releaseId } }),
+      ]);
+      const byStudent = new Map(submissions.map((s) => [s.studentId, s]));
+      const rosterOut = roster.map((a) => ({ student: a.student, submission: byStudent.get(a.studentId) ?? null }));
+      res.json({ success: true, data: { release, roster: rosterOut } });
+    } catch (err) { next(err); }
+  },
+
+  /** Mark a placement project submission reviewed and grade it. Body: { reviewNote?, grade?, maxGrade? } */
+  async reviewPlacementProjectSubmission(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId, submissionId } = req.params;
+      const { reviewNote, grade, maxGrade } = req.body;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const submission = await prisma.placementProjectSubmission.findUnique({ where: { id: submissionId }, include: { release: true } });
+      if (!submission || submission.release.sessionId !== sessionId) throw new AppError('Submission not found for this session', 404);
+
+      const updated = await prisma.placementProjectSubmission.update({
+        where: { id: submissionId },
+        data: {
+          status: 'REVIEWED',
+          reviewedById: employeeId,
+          reviewedAt: new Date(),
+          reviewNote: reviewNote ?? undefined,
+          grade: grade !== undefined ? Number(grade) : undefined,
+          maxGrade: maxGrade !== undefined ? Number(maxGrade) : undefined,
+        },
+      });
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  /** Placement test results for a release — every attempt, joined with the session roster. */
+  async placementTestResults(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId, releaseId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const release = await prisma.placementTestRelease.findUnique({ where: { id: releaseId }, include: { test: true } });
+      if (!release || release.sessionId !== sessionId) throw new AppError('Release not found for this session', 404);
+
+      const [roster, attempts] = await Promise.all([
+        prisma.softskillAttendance.findMany({
+          where: { sessionId },
+          include: { student: { select: { id: true, studentCode: true, firstName: true, lastName: true } } },
+        }),
+        prisma.placementTestAttempt.findMany({ where: { releaseId } }),
+      ]);
+      const byStudent = new Map(attempts.map((a) => [a.studentId, a]));
+      const rosterOut = roster.map((a) => ({ student: a.student, attempt: byStudent.get(a.studentId) ?? null }));
+      res.json({ success: true, data: { release, roster: rosterOut } });
+    } catch (err) { next(err); }
+  },
+
+  /** Per-question breakdown of one student's completed placement test attempt. */
+  async placementStudentTestReview(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId, releaseId, studentId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const release = await prisma.placementTestRelease.findUnique({
+        where: { id: releaseId },
+        include: { test: { include: { questions: { orderBy: { order: 'asc' } } } } },
+      });
+      if (!release || release.sessionId !== sessionId) throw new AppError('Release not found for this session', 404);
+
+      const onRoster = await prisma.softskillAttendance.findUnique({
+        where: { sessionId_studentId: { sessionId, studentId } },
+        include: { student: { select: { id: true, studentCode: true, firstName: true, lastName: true } } },
+      });
+      if (!onRoster) throw new AppError('That student is not on this session\'s roster', 404);
+
+      const attempt = await prisma.placementTestAttempt.findUnique({
+        where: { releaseId_studentId: { releaseId, studentId } },
+        include: { answers: true, violationSnapshots: { orderBy: { createdAt: 'asc' } } },
+      });
+      if (!attempt) throw new AppError('This student has not attempted this test yet', 404);
+      if (attempt.status === 'IN_PROGRESS') throw new AppError('This attempt is still in progress', 400);
+
+      const answersByQuestion = new Map(attempt.answers.map((a) => [a.questionId, a]));
+      const questions = release.test.questions.map((q) => {
+        const a = answersByQuestion.get(q.id);
+        return {
+          id: q.id,
+          order: q.order,
+          prompt: q.prompt,
+          options: q.options,
+          marks: q.marks,
+          correctIndex: q.correctIndex,
+          selectedIndex: a?.selectedIndex ?? null,
+          isCorrect: a?.isCorrect ?? false,
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          student: onRoster.student,
+          attempt: {
+            id: attempt.id,
+            status: attempt.status,
+            score: attempt.score,
+            totalMarks: attempt.totalMarks,
+            startedAt: attempt.startedAt,
+            submittedAt: attempt.submittedAt,
+            violationCount: attempt.violationCount,
+          },
+          testTitle: release.test.title,
+          questions,
+          violations: attempt.violationSnapshots.map((v) => ({ id: v.id, type: v.type, snapshotUrl: v.snapshotUrl, createdAt: v.createdAt })),
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /** Reassign (allow a retake of) a placement test release — same semantics as reassignTestAttempt. Body: { studentId? } */
+  async reassignPlacementTestAttempt(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId, releaseId } = req.params;
+      const { studentId } = req.body as { studentId?: string };
+      await assertOwnsSession(employeeId, sessionId);
+
+      const release = await prisma.placementTestRelease.findUnique({ where: { id: releaseId } });
+      if (!release || release.sessionId !== sessionId) throw new AppError('Release not found for this session', 404);
+
+      if (studentId) {
+        const onRoster = await prisma.softskillAttendance.findUnique({ where: { sessionId_studentId: { sessionId, studentId } } });
+        if (!onRoster) throw new AppError('That student is not on this session\'s roster', 404);
+      }
+
+      const toReset = await prisma.placementTestAttempt.findMany({
+        where: { releaseId, status: { not: 'IN_PROGRESS' }, ...(studentId ? { studentId } : {}) },
+        select: { id: true },
+      });
+
+      if (toReset.length === 0) {
+        res.json({
+          success: true,
+          data: {
+            reassignedCount: 0,
+            message: studentId
+              ? "That student has no completed attempt to reassign (or their attempt is still in progress)."
+              : 'No completed attempts to reassign — either nobody has attempted yet, or everyone is still in progress.',
+          },
+        });
+        return;
+      }
+
+      await prisma.placementTestAttempt.deleteMany({ where: { id: { in: toReset.map((a) => a.id) } } });
+      res.json({ success: true, data: { reassignedCount: toReset.length } });
     } catch (err) { next(err); }
   },
 };

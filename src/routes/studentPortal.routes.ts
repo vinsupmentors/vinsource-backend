@@ -41,6 +41,17 @@ router.post('/online-tests/attempts/:attemptId/answer', studentPortalController.
 router.post('/online-tests/attempts/:attemptId/violation', uploadViolationSnapshot, studentPortalController.recordTestViolation);
 router.post('/online-tests/attempts/:attemptId/submit', studentPortalController.submitOnlineTestAttempt);
 
+// Placement Training — Projects/Tests released to Softskill/Aptitude sessions
+router.get('/placement-projects', studentPortalController.myPlacementProjects);
+router.post('/placement-projects/:releaseId/submit', uploadProjectSubmission, studentPortalController.submitPlacementProject);
+router.get('/placement-tests', studentPortalController.myPlacementTests);
+router.post('/placement-tests/:releaseId/start', studentPortalController.startPlacementTestAttempt);
+router.get('/placement-tests/attempts/:attemptId', studentPortalController.getPlacementTestAttempt);
+router.get('/placement-tests/attempts/:attemptId/review', studentPortalController.getPlacementTestAttemptReview);
+router.post('/placement-tests/attempts/:attemptId/answer', studentPortalController.savePlacementTestAnswer);
+router.post('/placement-tests/attempts/:attemptId/violation', uploadViolationSnapshot, studentPortalController.recordPlacementTestViolation);
+router.post('/placement-tests/attempts/:attemptId/submit', studentPortalController.submitPlacementTestAttempt);
+
 // Portfolio
 router.get('/portfolio', studentPortalController.getPortfolio);
 router.post('/portfolio', studentPortalController.submitPortfolio);

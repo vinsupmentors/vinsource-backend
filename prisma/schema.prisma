@@ -590,6 +590,13 @@ model Employee {
   driveCandidatesAdded    PlacementDriveCandidate[] @relation("DriveCandidateAdder")
   softskillSessionsRun    SoftskillSession[]        @relation("SoftskillTrainer")
 
+  // Placement Training (standalone Softskill/Aptitude Projects & Tests)
+  placementProjectsCreated       PlacementProject[]           @relation("PlacementProjectCreator")
+  placementProjectsReleased      PlacementProjectRelease[]    @relation("PlacementProjectReleaser")
+  placementProjectSubmissionsReviewed PlacementProjectSubmission[] @relation("PlacementProjectReviewer")
+  placementTestsCreated          PlacementTest[]              @relation("PlacementTestCreator")
+  placementTestsActivated        PlacementTestRelease[]       @relation("PlacementTestActivator")
+
   // Appointment letters
   appointmentLetters AppointmentLetter[] @relation("AppointmentLetterEmployee")
 }
@@ -1714,6 +1721,9 @@ model Student {
 
   softskillAttendances SoftskillAttendance[]
   driveCandidacies     PlacementDriveCandidate[]
+
+  placementProjectSubmissions PlacementProjectSubmission[]
+  placementTestAttempts       PlacementTestAttempt[]
 }
 
 // Permanent audit trail for student deletions. The Student row (and every
@@ -2349,6 +2359,9 @@ model SoftskillSession {
 
   trainer     Employee?            @relation("SoftskillTrainer", fields: [trainerId], references: [id])
   attendances SoftskillAttendance[]
+
+  placementProjectReleases PlacementProjectRelease[]
+  placementTestReleases    PlacementTestRelease[]
 }
 
 model SoftskillAttendance {
@@ -2901,6 +2914,160 @@ model OnlineTestAnswer {
   question OnlineTestQuestion @relation(fields: [questionId], references: [id])
 
   @@unique([attemptId, questionId])
+}
+
+// ── PLACEMENT TRAINING — standalone Project/Test system for Softskill &
+// Aptitude sessions. Deliberately NOT wired into AcademyModule/AcademyCourse
+// or BatchCourseSchedule — SoftskillSession has no course/module of its own,
+// so this mirrors Project/OnlineTest field-for-field but keys releases off
+// `sessionId` (SoftskillSession) instead of `scheduleId`, and the "roster" for
+// authorization is the set of SoftskillAttendance rows for that session
+// (there's no separate enrollment table for softskill sessions). Reuses the
+// existing ReleaseStatus / OnlineTestAttemptStatus / ProjectSubmissionStatus /
+// ViolationType enums since their meaning is identical here.
+
+model PlacementProject {
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  resourceUrl String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy Employee                  @relation("PlacementProjectCreator", fields: [createdById], references: [id])
+  releases  PlacementProjectRelease[]
+}
+
+model PlacementProjectRelease {
+  id           String        @id @default(uuid())
+  projectId    String
+  sessionId    String
+  releasedById String
+  status       ReleaseStatus @default(ACTIVE)
+  releasedAt   DateTime      @default(now())
+  deadline     DateTime?
+
+  project    PlacementProject @relation(fields: [projectId], references: [id])
+  session    SoftskillSession @relation(fields: [sessionId], references: [id])
+  releasedBy Employee         @relation("PlacementProjectReleaser", fields: [releasedById], references: [id])
+
+  submissions PlacementProjectSubmission[]
+
+  @@unique([projectId, sessionId])
+}
+
+model PlacementProjectSubmission {
+  id           String                  @id @default(uuid())
+  releaseId    String
+  studentId    String
+  fileUrl      String?
+  linkUrl      String?
+  note         String?                 @db.Text
+  status       ProjectSubmissionStatus @default(SUBMITTED)
+  submittedAt  DateTime                @default(now())
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?                 @db.Text
+  grade        Float?
+  maxGrade     Float?                  @default(100)
+
+  release    PlacementProjectRelease @relation(fields: [releaseId], references: [id])
+  student    Student                 @relation(fields: [studentId], references: [id])
+  reviewedBy Employee?               @relation("PlacementProjectReviewer", fields: [reviewedById], references: [id])
+
+  @@unique([releaseId, studentId])
+}
+
+model PlacementTest {
+  id              String   @id @default(uuid())
+  title           String
+  durationMinutes Int      @default(45)
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  createdBy Employee                @relation("PlacementTestCreator", fields: [createdById], references: [id])
+  questions PlacementTestQuestion[]
+  releases  PlacementTestRelease[]
+}
+
+model PlacementTestQuestion {
+  id           String @id @default(uuid())
+  testId       String
+  order        Int
+  prompt       String @db.Text
+  options      Json
+  correctIndex Int
+  marks        Int    @default(1)
+
+  test    PlacementTest         @relation(fields: [testId], references: [id], onDelete: Cascade)
+  answers PlacementTestAnswer[]
+
+  @@unique([testId, order])
+}
+
+model PlacementTestRelease {
+  id            String        @id @default(uuid())
+  testId        String
+  sessionId     String
+  activatedById String
+  status        ReleaseStatus @default(ACTIVE)
+  activatedAt   DateTime      @default(now())
+  deadline      DateTime?
+
+  test        PlacementTest    @relation(fields: [testId], references: [id])
+  session     SoftskillSession @relation(fields: [sessionId], references: [id])
+  activatedBy Employee         @relation("PlacementTestActivator", fields: [activatedById], references: [id])
+
+  attempts PlacementTestAttempt[]
+
+  @@unique([testId, sessionId])
+}
+
+model PlacementTestAttempt {
+  id             String                  @id @default(uuid())
+  releaseId      String
+  studentId      String
+  startedAt      DateTime                @default(now())
+  deadlineAt     DateTime
+  submittedAt    DateTime?
+  status         OnlineTestAttemptStatus @default(IN_PROGRESS)
+  score          Int?
+  totalMarks     Int?
+  violationCount Int                     @default(0)
+
+  release            PlacementTestRelease             @relation(fields: [releaseId], references: [id])
+  student            Student                          @relation(fields: [studentId], references: [id])
+  answers            PlacementTestAnswer[]
+  violationSnapshots PlacementTestViolationSnapshot[]
+
+  @@unique([releaseId, studentId])
+}
+
+model PlacementTestAnswer {
+  id            String   @id @default(uuid())
+  attemptId     String
+  questionId    String
+  selectedIndex Int?
+  isCorrect     Boolean?
+
+  attempt  PlacementTestAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question PlacementTestQuestion @relation(fields: [questionId], references: [id])
+
+  @@unique([attemptId, questionId])
+}
+
+model PlacementTestViolationSnapshot {
+  id          String        @id @default(uuid())
+  attemptId   String
+  type        ViolationType
+  snapshotUrl String?
+  createdAt   DateTime      @default(now())
+
+  attempt PlacementTestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
 }
 
 enum PortfolioStatus {
