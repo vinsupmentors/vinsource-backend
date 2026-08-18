@@ -3140,8 +3140,9 @@ model StudentPortfolio {
   studentId String @unique
 
   summary    String? @db.Text // short intro / career objective
+  targetRole String? // "Aspiring <role>" shown on the public page, e.g. "Data Analyst"
   education  Json? // [{ degree, institution, fieldOfStudy, year, grade }]
-  skills     Json? // [{ name, level }]
+  skills     Json? // [{ name, stars (1-5) }] — legacy rows may still have { name, level } text instead of stars
   projects   Json? // [{ title, description, link, techStack }]
   experience Json? // [{ company, role, duration, description }]
 

@@ -7,9 +7,13 @@ import { computeGamification } from '../services/gamification.service';
 
 const studentSelect = {
   id: true, firstName: true, lastName: true, studentCode: true, track: true, photo: true, email: true, phone: true,
+  // Used to group portfolios by course on the Production Portfolio Approvals
+  // screen. PT (direct-placement) students have no enrollment at all — the
+  // frontend buckets those under a "PT — Direct Placement" card instead.
+  enrollments: { select: { schedule: { select: { course: { select: { id: true, name: true } } } } } },
 };
 
-/** Short, URL-safe, unique-enough slug for the public portfolio link (e.g. `a1b2c3d4e5f6`). */
+/** Fallback slug generator — only used if a student somehow has no studentCode. */
 function generateSlug(): string {
   return crypto.randomBytes(8).toString('hex');
 }
@@ -61,10 +65,16 @@ export const portfolioController = {
   async approve(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { note } = req.body as { note?: string };
-      const existing = await prisma.studentPortfolio.findUnique({ where: { id: req.params.id } });
+      const existing = await prisma.studentPortfolio.findUnique({
+        where: { id: req.params.id },
+        include: { student: { select: { studentCode: true } } },
+      });
       if (!existing) throw new AppError('Portfolio not found', 404);
 
-      const publicSlug = existing.publicSlug || generateSlug();
+      // The public URL is the student's roll number (studentCode), not a
+      // random hash — clean, memorable, and consistent every time the
+      // portfolio is (re)approved.
+      const publicSlug = existing.student.studentCode || generateSlug();
 
       const portfolio = await prisma.studentPortfolio.update({
         where: { id: existing.id },
@@ -96,6 +106,22 @@ export const portfolioController = {
         },
       });
       res.json({ success: true, data: portfolio });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Admin delete — pulls a portfolio (pending, approved, or rejected) off the
+   * board entirely, e.g. to take down a live public page or clear out a
+   * submission that should never have gone in. Hard delete: the student's
+   * `GET /api/student-portal/portfolio` will come back null afterward and
+   * they can start fresh with a new submission.
+   */
+  async remove(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const existing = await prisma.studentPortfolio.findUnique({ where: { id: req.params.id } });
+      if (!existing) throw new AppError('Portfolio not found', 404);
+      await prisma.studentPortfolio.delete({ where: { id: existing.id } });
+      res.json({ success: true, message: 'Portfolio deleted' });
     } catch (err) { next(err); }
   },
 

@@ -1145,12 +1145,12 @@ export const studentPortalController = {
   async submitPortfolio(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const studentId = getStudentId(req);
-      const { summary, education, skills, projects, experience } = req.body;
+      const { summary, targetRole, education, skills, projects, experience } = req.body;
 
       const portfolio = await prisma.studentPortfolio.upsert({
         where: { studentId },
         update: {
-          summary, education, skills, projects, experience,
+          summary, targetRole, education, skills, projects, experience,
           status: 'PENDING',
           submittedAt: new Date(),
           reviewedById: null,
@@ -1159,7 +1159,7 @@ export const studentPortalController = {
           publicSlug: null,
         },
         create: {
-          studentId, summary, education, skills, projects, experience,
+          studentId, summary, targetRole, education, skills, projects, experience,
           status: 'PENDING',
           submittedAt: new Date(),
         },

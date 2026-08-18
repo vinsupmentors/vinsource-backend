@@ -120,6 +120,7 @@ router.get('/portfolios', portfolioController.list);
 router.get('/portfolios/:id', portfolioController.get);
 router.post('/portfolios/:id/approve', requireModule('PRODUCTION_TRAINING', 'EDIT'), portfolioController.approve);
 router.post('/portfolios/:id/reject', requireModule('PRODUCTION_TRAINING', 'EDIT'), portfolioController.reject);
+router.delete('/portfolios/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), portfolioController.remove);
 
 // Report recipients (settings) — who gets the daily attendance report / escalation emails.
 // Mutations require EDIT since this controls who receives sensitive student data.
