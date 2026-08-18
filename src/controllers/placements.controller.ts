@@ -1151,7 +1151,7 @@ export const placementsController = {
 
       const enrollments = await prisma.studentBatchEnrollment.findMany({
         where: { studentId: id },
-        include: { schedule: { include: { course: { select: { id: true, name: true } } } } },
+        include: { schedule: { include: { course: { select: { id: true, name: true } }, batch: { select: { code: true } } } } },
       });
 
       const [interviews, results, trainerFeedbacks] = await Promise.all([
@@ -1165,11 +1165,12 @@ export const placementsController = {
         }),
         prisma.placementResult.findMany({
           where: { studentId: id },
+          include: { drive: { include: { partner: { select: { id: true, name: true } } } } },
           orderBy: { createdAt: 'desc' },
         }),
         prisma.trainerFeedback.findMany({
           where: { studentId: id },
-          include: { trainer: { select: employeeSelect } },
+          include: { trainer: { select: employeeSelect }, course: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'desc' },
         }),
       ]);
@@ -1218,7 +1219,7 @@ export const placementsController = {
           const projectSubmissions = await prisma.projectSubmission.findMany({
             where: { studentId: id, release: { scheduleId } },
             include: {
-              release: { include: { project: { select: { title: true, module: { select: { title: true } } } } } },
+              release: { include: { project: { select: { title: true, isCapstone: true, module: { select: { title: true } } } } } },
             },
             orderBy: { submittedAt: 'desc' },
           });
@@ -1236,6 +1237,7 @@ export const placementsController = {
             scheduleId,
             courseId: e.schedule.course.id,
             courseName: e.schedule.course.name,
+            batchCode: e.schedule.batch.code,
             rank: myIndex === -1 ? null : myIndex + 1,
             totalStudents: ranked.length,
             marksObtained: myTotals.obtained,
@@ -1243,26 +1245,39 @@ export const placementsController = {
             percentage: Math.round((myTotals.max ? (myTotals.obtained / myTotals.max) * 100 : 0) * 10) / 10,
             classAverage: Math.round(classAverage * 10) / 10,
             projects: projectSubmissions.map((s) => ({
+              id: s.id,
               projectTitle: s.release.project.title,
               moduleTitle: s.release.project.module.title,
+              isCapstone: s.release.project.isCapstone,
               status: s.status,
               submittedAt: s.submittedAt,
+              graded: s.grade !== null,
               grade: s.grade,
               maxGrade: s.maxGrade,
               reviewNote: s.reviewNote,
             })),
             moduleFeedback: moduleFeedback.map((f) => ({
+              id: f.id,
               moduleTitle: f.module.title,
               order: f.module.order,
               rating: f.rating,
               comments: f.comments,
               trainerName: f.trainer ? `${f.trainer.firstName} ${f.trainer.lastName}` : null,
+              updatedAt: f.updatedAt,
             })),
           };
         })
       );
 
-      res.json({ success: true, data: { ...student, enrollments, interviews, results, trainerFeedbacks, rankCards } });
+      res.json({
+        success: true,
+        data: {
+          student: { ...student, enrollments, trainerFeedbacks },
+          interviews,
+          results,
+          rankCard: rankCards,
+        },
+      });
     } catch (err) { next(err); }
   },
 };
