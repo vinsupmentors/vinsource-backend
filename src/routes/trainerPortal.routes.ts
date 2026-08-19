@@ -48,8 +48,11 @@ router.post('/softskill-sessions/:sessionId/attendance', trainerPortalController
 router.get('/softskill-sessions/:sessionId/feedback', trainerPortalController.mySoftskillFeedback);
 router.post('/softskill-sessions/:sessionId/feedback', trainerPortalController.upsertSoftskillFeedback);
 
-// Placement Training — review submissions/results for my sessions
+// Placement Training — release content to, and review submissions/results for, my sessions
 router.get('/softskill-sessions/:sessionId/placement-content', trainerPortalController.myPlacementReleasableContent);
+router.post('/softskill-sessions/:sessionId/placement-content/release-project', trainerPortalController.releaseMyPlacementProject);
+router.post('/softskill-sessions/:sessionId/placement-content/activate-test', trainerPortalController.activateMyPlacementTest);
+router.post('/softskill-sessions/:sessionId/placement-content/close-release', trainerPortalController.closeMyPlacementRelease);
 router.get('/softskill-sessions/:sessionId/placement-project-releases/:releaseId/submissions', trainerPortalController.placementProjectSubmissions);
 router.post('/softskill-sessions/:sessionId/placement-project-submissions/:submissionId/review', trainerPortalController.reviewPlacementProjectSubmission);
 router.get('/softskill-sessions/:sessionId/placement-test-releases/:releaseId/results', trainerPortalController.placementTestResults);

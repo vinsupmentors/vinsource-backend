@@ -1251,6 +1251,80 @@ export const trainerPortalController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Release a PlacementProject to my session's roster. Same semantics as
+   * placementTraining.controller.ts's releasePlacementProject (Placements-
+   * side) — this is a trainer self-service shortcut alongside it, not a
+   * replacement; either surface can release content to a session.
+   * Body: { projectId, deadline? }
+   */
+  async releaseMyPlacementProject(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const { projectId, deadline } = req.body;
+      if (!projectId) throw new AppError('projectId is required', 400);
+      const project = await prisma.placementProject.findUnique({ where: { id: projectId } });
+      if (!project) throw new AppError('Placement project not found', 404);
+
+      const release = await prisma.placementProjectRelease.upsert({
+        where: { projectId_sessionId: { projectId, sessionId } },
+        update: { status: 'ACTIVE', releasedAt: new Date(), releasedById: employeeId!, deadline: deadline ? new Date(deadline) : null },
+        create: { projectId, sessionId, releasedById: employeeId!, deadline: deadline ? new Date(deadline) : undefined },
+      });
+      res.status(201).json({ success: true, data: release });
+    } catch (err) { next(err); }
+  },
+
+  /** Activate a PlacementTest for my session's roster. Body: { testId, deadline? } */
+  async activateMyPlacementTest(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const { testId, deadline } = req.body;
+      if (!testId) throw new AppError('testId is required', 400);
+      const test = await prisma.placementTest.findUnique({ where: { id: testId }, include: { _count: { select: { questions: true } } } });
+      if (!test) throw new AppError('Placement test not found', 404);
+      if (test._count.questions === 0) throw new AppError('This test has no questions yet', 400);
+
+      const release = await prisma.placementTestRelease.upsert({
+        where: { testId_sessionId: { testId, sessionId } },
+        update: { status: 'ACTIVE', activatedAt: new Date(), activatedById: employeeId!, deadline: deadline ? new Date(deadline) : null },
+        create: { testId, sessionId, activatedById: employeeId!, deadline: deadline ? new Date(deadline) : undefined },
+      });
+      res.status(201).json({ success: true, data: release });
+    } catch (err) { next(err); }
+  },
+
+  /** Close a project or test release early, for one of my sessions. Body: { kind: 'project' | 'test', releaseId } */
+  async closeMyPlacementRelease(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { sessionId } = req.params;
+      await assertOwnsSession(employeeId, sessionId);
+
+      const { kind, releaseId } = req.body as { kind: 'project' | 'test'; releaseId: string };
+      if (!kind || !releaseId) throw new AppError('kind and releaseId are required', 400);
+
+      if (kind === 'project') {
+        const release = await prisma.placementProjectRelease.findUnique({ where: { id: releaseId } });
+        if (!release || release.sessionId !== sessionId) throw new AppError('Release not found for this session', 404);
+        await prisma.placementProjectRelease.update({ where: { id: releaseId }, data: { status: 'CLOSED' } });
+      } else if (kind === 'test') {
+        const release = await prisma.placementTestRelease.findUnique({ where: { id: releaseId } });
+        if (!release || release.sessionId !== sessionId) throw new AppError('Release not found for this session', 404);
+        await prisma.placementTestRelease.update({ where: { id: releaseId }, data: { status: 'CLOSED' } });
+      } else {
+        throw new AppError('kind must be project or test', 400);
+      }
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
   /** Project submissions for a release, joined with the session roster (SoftskillAttendance). */
   async placementProjectSubmissions(req: AuthRequest, res: Response, next: NextFunction) {
     try {
