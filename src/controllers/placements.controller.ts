@@ -3,7 +3,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { emailService } from '../services/email.service';
-import { buildStudentUserCreate, sendStudentWelcomeEmail } from './production.controller';
+import { buildStudentUserCreate, sendStudentWelcomeEmail, resolveEmployeeByCode } from './production.controller';
 import { ensureCourseCompletionCertRequest } from '../utils/certificateRequests';
 import { computeRankCard } from '../utils/rankCard';
 
@@ -543,10 +543,11 @@ export const placementsController = {
    */
   async addPtStudent(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { studentCode, firstName, lastName, email, phone } = req.body;
+      const { studentCode, firstName, lastName, email, phone, skillAdvisorCode } = req.body;
       if (!studentCode || !firstName || !email) {
         throw new AppError('studentCode, firstName and email are required', 400);
       }
+      const skillAdvisorId = skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : undefined;
       const now = new Date();
       const student = await prisma.student.create({
         data: {
@@ -558,6 +559,7 @@ export const placementsController = {
           track: 'PT',
           status: 'IN_PLACEMENT',
           movedToPlacementAt: now,
+          ...(skillAdvisorId ? { skillAdvisor: { connect: { id: skillAdvisorId } } } : {}),
           user: await buildStudentUserCreate(studentCode, email),
         },
         include: { user: { select: { id: true, email: true } } },

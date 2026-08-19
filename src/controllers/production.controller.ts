@@ -196,6 +196,18 @@ async function resolveScheduleByCode(subBatchCode: string): Promise<string> {
   return schedule.id;
 }
 
+/** Resolves a Skill Advisor's employee code (case-insensitive) to an Employee
+ * id — used at student intake to link the student to the Sales rep who gets
+ * "My Students" visibility over them. Any employee code is accepted (not
+ * restricted to a specific designation). Throws on an unknown code so a typo
+ * doesn't silently create an unlinked student. */
+export async function resolveEmployeeByCode(employeeCode: string): Promise<string> {
+  const code = employeeCode.trim().toUpperCase();
+  const employee = await prisma.employee.findUnique({ where: { employeeCode: code } });
+  if (!employee) throw new AppError(`Skill Advisor employee code "${code}" not found`, 404);
+  return employee.id;
+}
+
 export const productionController = {
   // ── COURSE MATERIALS ──────────────────────────────────────────────────────
   // Students see ALL of a course's materials from day one of enrollment.
@@ -576,6 +588,7 @@ export const productionController = {
               include: { module: { select: { id: true, title: true } }, trainer: { select: employeeSelect } },
               orderBy: { updatedAt: 'desc' },
             },
+            skillAdvisor: { select: employeeSelect },
           },
           orderBy: { createdAt: 'desc' },
           skip,
@@ -605,7 +618,7 @@ export const productionController = {
     try {
       const {
         studentCode, firstName, lastName, email, phone, track, leadId, subBatchCode,
-        trainingMode, totalProgramFee, amountPaid, paymentMode,
+        trainingMode, totalProgramFee, amountPaid, paymentMode, skillAdvisorCode,
       } = req.body;
       let { scheduleId } = req.body;
       if (!studentCode || !email) {
@@ -613,6 +626,9 @@ export const productionController = {
       }
       // Sub-batch code is the friendly way to map the student to a schedule
       if (!scheduleId && subBatchCode) scheduleId = await resolveScheduleByCode(subBatchCode);
+      // Links the student to the Sales rep who owns them for "My Students" —
+      // resolved from an employee code entered at intake rather than an id.
+      const skillAdvisorId = skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : undefined;
       const createdById = req.user?.employeeId;
 
       // Balance is derived from total/paid when both are given, rather than
@@ -637,6 +653,7 @@ export const productionController = {
           balanceAmount: balance,
           paymentMode: paymentMode || undefined,
           ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
+          ...(skillAdvisorId ? { skillAdvisor: { connect: { id: skillAdvisorId } } } : {}),
           user: await buildStudentUserCreate(studentCode, email),
           ...(scheduleId ? { enrollments: { create: { scheduleId } } } : {}),
         },
@@ -663,9 +680,14 @@ export const productionController = {
     try {
       const {
         firstName, lastName, email, phone, track, status,
-        trainingMode, totalProgramFee, amountPaid, paymentMode,
+        trainingMode, totalProgramFee, amountPaid, paymentMode, skillAdvisorCode,
       } = req.body;
       const existing = await prisma.student.findUnique({ where: { id: req.params.id } });
+      // Empty string clears the advisor link; omitted leaves it untouched;
+      // a code resolves to the matching employee (throws if unknown).
+      const skillAdvisorId = skillAdvisorCode !== undefined
+        ? (skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : null)
+        : undefined;
       // JRP is course-only, non-placement — block a direct edit from ever
       // setting a JRP student's status to IN_PLACEMENT (covers whichever
       // track — the one already on file, or a new one being set in this
@@ -689,6 +711,7 @@ export const productionController = {
         where: { id: req.params.id },
         data: {
           firstName, lastName, email, phone, track, status,
+          skillAdvisorId,
           movedToPlacementAt: startsPlacementClock ? new Date() : undefined,
           trainingMode: trainingMode !== undefined ? (trainingMode || null) : undefined,
           totalProgramFee: totalProgramFee !== undefined ? total : undefined,
@@ -821,16 +844,18 @@ export const productionController = {
       }
       const createdById = req.user?.employeeId;
 
-      // Pre-fetch batches/courses once so we don't hit the DB per row.
-      const [allBatches, allCourses] = await Promise.all([
+      // Pre-fetch batches/courses/employees once so we don't hit the DB per row.
+      const [allBatches, allCourses, allEmployees] = await Promise.all([
         prisma.batch.findMany({ include: { schedules: true } }),
         prisma.academyCourse.findMany(),
+        prisma.employee.findMany({ select: { id: true, employeeCode: true } }),
       ]);
       const batchByCode = new Map(allBatches.map((b) => [b.code.trim().toLowerCase(), b]));
       const courseByName = new Map(allCourses.map((c) => [c.name.trim().toLowerCase(), c]));
       const scheduleByCode = new Map(
         allBatches.flatMap((b) => b.schedules.filter((s) => s.code).map((s) => [s.code!.toUpperCase(), s.id] as [string, string]))
       );
+      const employeeByCode = new Map(allEmployees.map((e) => [e.employeeCode.trim().toUpperCase(), e.id]));
 
       const existingCodesCount = await prisma.student.count();
       let autoSeq = existingCodesCount;
@@ -899,6 +924,17 @@ export const productionController = {
           }
 
           const rowEmail = row.email ? String(row.email).trim() : undefined;
+
+          const rowAdvisorCode = String(row.skillAdvisorCode || row.skillAdvisor || '').trim().toUpperCase();
+          let skillAdvisorId: string | undefined;
+          if (rowAdvisorCode) {
+            skillAdvisorId = employeeByCode.get(rowAdvisorCode);
+            if (!skillAdvisorId) {
+              results.push({ row: rowNum, status: 'error', message: `Skill Advisor employee code "${rowAdvisorCode}" not found` });
+              continue;
+            }
+          }
+
           const student = await prisma.student.create({
             data: {
               studentCode,
@@ -908,6 +944,7 @@ export const productionController = {
               phone,
               track: track as never,
               ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
+              ...(skillAdvisorId ? { skillAdvisor: { connect: { id: skillAdvisorId } } } : {}),
               user: await buildStudentUserCreate(studentCode, rowEmail),
             },
           });

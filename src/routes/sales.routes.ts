@@ -68,4 +68,13 @@ router.get('/unmatched-calls', requireModule('SALES', 'EDIT'), callTrackingContr
 router.post('/unmatched-calls/:id/link', requireModule('SALES', 'EDIT'), callTrackingController.linkUnmatchedCall);
 router.post('/unmatched-calls/:id/create-lead', requireModule('SALES', 'EDIT'), callTrackingController.createLeadFromUnmatchedCall);
 
+// My Students — students linked to the caller as Skill Advisor at intake
+// (see Student.skillAdvisorId). VIEW-level like the rest of this router;
+// self-scoped inside the controller for anyone below SALES=ADMIN. The
+// cross-rep "advised-students" overview is ADMIN-only, same treatment as
+// Pulse/Leaderboard above.
+router.get('/my-students', salesController.myStudents);
+router.get('/my-students/:id', salesController.myStudentDetail);
+router.get('/advised-students', requireModule('SALES', 'ADMIN'), salesController.advisedStudents);
+
 export default router;

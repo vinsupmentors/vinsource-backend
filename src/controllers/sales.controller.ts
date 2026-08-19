@@ -8,6 +8,7 @@ import { computeSalesPulse } from '../services/salesPulse.service';
 import { computeSalesLeaderboard } from '../services/salesLeaderboard.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { normalizePhone } from '../utils/phone';
+import { computeRankCard } from '../utils/rankCard';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -80,6 +81,22 @@ const LEGACY_STATUS_MAP: Record<string, { status: LeadStatus; lostReason?: LeadL
 };
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
+
+/** List-view student summary for "My Students" — enough for a roster table, not the full dossier. */
+async function listStudentsSummary(studentWhere: Record<string, unknown>) {
+  return prisma.student.findMany({
+    where: studentWhere,
+    select: {
+      id: true, firstName: true, lastName: true, studentCode: true, photo: true,
+      track: true, status: true, email: true, phone: true, joiningDate: true, movedToPlacementAt: true,
+      enrollments: { select: { schedule: { select: { course: { select: { name: true } }, batch: { select: { code: true } } } } } },
+      portfolio: { select: { status: true, targetRole: true } },
+      certificateRequests: { select: { type: true, feeApprovedAt: true, ldmApprovedAt: true, certificateNo: true } },
+      skillAdvisor: { select: employeeSelect },
+    },
+    orderBy: { joiningDate: 'desc' },
+  });
+}
 
 export const salesController = {
   // ── Leads ────────────────────────────────────────────────────────────────
@@ -910,6 +927,116 @@ export const salesController = {
     try {
       await prisma.reportRecipient.delete({ where: { id: req.params.id } });
       res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
+  // ── My Students (Sales advisor visibility) ──────────────────────────────
+  // Every student can optionally be linked to a "Skill Advisor" — the Sales
+  // employee who enrolled them, set via employee code at intake (Production's
+  // Add Student / bulk upload / PT direct-to-pool, see production.controller
+  // resolveEmployeeByCode). This gives that advisor a self-scoped "My
+  // Students" view of their own students' full academy record, plus a
+  // SALES=ADMIN-gated cross-rep overview — same split as listLeads/listDemos.
+
+  /** Self-scoped: the students where the caller is the Skill Advisor. */
+  async myStudents(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user?.employeeId;
+      if (!employeeId) return res.json({ success: true, data: [] });
+      const students = await listStudentsSummary({ skillAdvisorId: employeeId });
+      res.json({ success: true, data: students });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Cross-rep overview — every student that has a Skill Advisor assigned,
+   * optionally filtered to one advisor. Route-gated SALES=ADMIN (same
+   * treatment as Pulse/Leaderboard), so no in-handler admin check is needed.
+   */
+  async advisedStudents(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { advisorId } = req.query;
+      const students = await listStudentsSummary(
+        advisorId ? { skillAdvisorId: String(advisorId) } : { skillAdvisorId: { not: null } }
+      );
+      res.json({ success: true, data: students });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Full A-to-Z dossier for one advised student: rank card (attendance /
+   * marks / projects / module feedback — shared util with Placements'
+   * getStudentProfile and the certificate approval review screen), trainer
+   * feedback, internal Softskill/Aptitude feedback (never shown to the
+   * student themselves), certificate request status, and placement
+   * interviews/results. A regular advisor may only open their own advisee;
+   * SALES=ADMIN can open anyone's.
+   */
+  async myStudentDetail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const student = await prisma.student.findUnique({
+        where: { id },
+        include: {
+          user: { select: { email: true, lastLoginAt: true } },
+          portfolio: true,
+          skillAdvisor: { select: employeeSelect },
+        },
+      });
+      if (!student) throw new AppError('Student not found', 404);
+      if (student.skillAdvisorId !== req.user?.employeeId && !(await isSalesAdmin(req))) {
+        throw new AppError('You do not have access to this student', 403);
+      }
+
+      const enrollments = await prisma.studentBatchEnrollment.findMany({
+        where: { studentId: id },
+        include: { schedule: { include: { course: { select: { id: true, name: true } }, batch: { select: { code: true } } } } },
+      });
+
+      const [interviews, results, trainerFeedbacks, softskillFeedback, certificateRequests] = await Promise.all([
+        prisma.placementInterview.findMany({
+          where: { studentId: id },
+          include: {
+            drive: { include: { partner: { select: { id: true, name: true } } } },
+            feedbackGivenBy: { select: employeeSelect },
+          },
+          orderBy: { scheduledAt: 'desc' },
+        }),
+        prisma.placementResult.findMany({
+          where: { studentId: id },
+          include: { drive: { include: { partner: { select: { id: true, name: true } } } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.trainerFeedback.findMany({
+          where: { studentId: id },
+          include: { trainer: { select: employeeSelect }, course: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.softskillFeedback.findMany({
+          where: { studentId: id },
+          include: { session: { select: { topic: true, type: true, startDate: true } }, trainer: { select: employeeSelect } },
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.studentCertificateRequest.findMany({
+          where: { studentId: id },
+          include: { course: { select: { name: true } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+
+      const rankCard = await computeRankCard(id);
+
+      res.json({
+        success: true,
+        data: {
+          student: { ...student, enrollments, trainerFeedbacks },
+          interviews,
+          results,
+          rankCard,
+          softskillFeedback,
+          certificateRequests,
+        },
+      });
     } catch (err) { next(err); }
   },
 };

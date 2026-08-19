@@ -570,6 +570,11 @@ model Employee {
   onboardingApprovals    Student[]                   @relation("OnboardingApprover")
   onboardingRejections   Student[]                   @relation("OnboardingRejector")
   studentDeletionRequests Student[]                  @relation("StudentDeletionRequester")
+  // Sales advisor for a student — set at intake (Add Student / bulk upload /
+  // PT direct-to-pool), independent of the Lead→assignedTo chain, so a Sales
+  // rep's "My Students" view has a stable, explicit link even for students
+  // who never came through a Lead (walk-ins, referrals, PT pool adds).
+  advisedStudents Student[] @relation("StudentSkillAdvisor")
   studentDeletionLogsRequested StudentDeletionLog[]   @relation("StudentDeletionLogRequester")
   studentDeletionLogsApproved  StudentDeletionLog[]   @relation("StudentDeletionLogApprover")
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
@@ -1632,6 +1637,7 @@ model Student {
   userId             String?       @unique
   leadId             String?
   createdById        String?
+  skillAdvisorId     String?
   studentCode        String        @unique
   firstName          String
   lastName           String
@@ -1701,6 +1707,7 @@ model Student {
   user             User?     @relation(fields: [userId], references: [id])
   lead              Lead?     @relation(fields: [leadId], references: [id])
   createdBy         Employee? @relation("StudentCreator", fields: [createdById], references: [id])
+  skillAdvisor      Employee? @relation("StudentSkillAdvisor", fields: [skillAdvisorId], references: [id])
   onboardingApprovedBy Employee? @relation("OnboardingApprover", fields: [onboardingApprovedById], references: [id])
   onboardingRejectedBy Employee? @relation("OnboardingRejector", fields: [onboardingRejectedById], references: [id])
   deletionRequestedBy  Employee? @relation("StudentDeletionRequester", fields: [deletionRequestedById], references: [id])
