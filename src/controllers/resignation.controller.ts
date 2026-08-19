@@ -96,11 +96,10 @@ export const resignationController = {
         }).catch(console.error);
       }
 
-      // Update employee status
-      await prisma.employee.update({
-        where: { id: employee.id },
-        data: { status: 'RESIGNED' },
-      });
+      // NOTE: Employee.status intentionally stays ACTIVE here. A submitted
+      // resignation is still pending manager/HR review — the employee keeps
+      // working, checking in, etc. until it's actually finalized. Status only
+      // becomes RESIGNED at _completeExit() (full exit-clearance completion).
 
       res.status(201).json({ success: true, data: resignation, message: 'Resignation submitted' });
     } catch (err) { next(err); }
