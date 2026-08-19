@@ -55,3 +55,20 @@ export async function ensureInternshipCertRequest(studentId: string): Promise<vo
     // Don't block portfolio approval on this.
   }
 }
+
+/**
+ * Batch code for whichever enrollment a student's certificate should
+ * reference — same "most recent enrollment" choice as
+ * ensureCourseCompletionCertRequest, reused here so the render-data
+ * endpoint can fill in the official template's "Batch" field. Returns null
+ * for PT students (no enrollment at all) — the template already renders
+ * "—" when this is missing.
+ */
+export async function lookupBatchCode(studentId: string): Promise<string | null> {
+  const enrollment = await prisma.studentBatchEnrollment.findFirst({
+    where: { studentId },
+    include: { schedule: { include: { batch: { select: { code: true } } } } },
+    orderBy: { enrolledAt: 'desc' },
+  });
+  return enrollment?.schedule.batch.code || null;
+}

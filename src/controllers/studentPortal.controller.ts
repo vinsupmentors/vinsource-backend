@@ -9,7 +9,7 @@ import { resolveIpLocation } from '../utils/ipGeolocation';
 import { getOnboardingStatus } from '../utils/onboardingStatus';
 import { stampSignatureOntoPdf, generateFeeDeclarationPdf } from '../utils/pdfStamp';
 import { emailService } from '../services/email.service';
-import { buildPdfForRequest } from './certificateRequests.controller';
+import { buildRenderData } from './certificateRequests.controller';
 
 const SIGNED_PDF_DIR = path.join(process.cwd(), 'uploads', 'onboarding-signed');
 if (!fs.existsSync(SIGNED_PDF_DIR)) fs.mkdirSync(SIGNED_PDF_DIR, { recursive: true });
@@ -497,16 +497,14 @@ export const studentPortalController = {
     } catch (err) { next(err); }
   },
 
-  /** Student's own download — same PDF-building logic as the staff endpoint. */
-  async downloadMyCertificate(req: AuthRequest, res: Response, next: NextFunction) {
+  /** Student's own render data — same builder the staff endpoint uses, ownership-checked. */
+  async myCertificateRenderData(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const request = await prisma.studentCertificateRequest.findUnique({ where: { id: req.params.id } });
       if (!request || request.studentId !== getStudentId(req)) throw new AppError('Certificate not found', 404);
 
-      const pdf = await buildPdfForRequest(request.id);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${pdf.filename}"`);
-      res.send(pdf.buffer);
+      const data = await buildRenderData(request.id);
+      res.json({ success: true, data });
     } catch (err) { next(err); }
   },
 

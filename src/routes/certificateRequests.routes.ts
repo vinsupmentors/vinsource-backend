@@ -9,7 +9,7 @@ router.use(requireModule('CERTIFICATES', 'VIEW'));
 
 router.get('/', certificateRequestsController.list);
 router.get('/:id', certificateRequestsController.get);
-router.get('/:id/download', certificateRequestsController.download);
+router.get('/:id/render-data', certificateRequestsController.renderData);
 
 // Both approval buttons are open to anyone with CERTIFICATES EDIT access —
 // no designation-specific (e.g. LDM-only) restriction on who may click which.

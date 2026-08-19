@@ -3,7 +3,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { computeRankCard } from '../utils/rankCard';
-import { generateCertificatePdf } from '../utils/certificatePdf';
+import { lookupBatchCode } from '../utils/certificateRequests';
 
 const employeeNameSelect = { firstName: true, lastName: true } as const;
 
@@ -18,30 +18,72 @@ const studentProfileSelect = {
   portfolio: { select: { targetRole: true, summary: true, status: true, publicSlug: true } },
 } as const;
 
+// Our two request types map onto the Certificate Generator's existing
+// GeneratedCertType values — INTERNSHIP here is INTERNSHIP_COMPLETION there.
+// Sharing that type + its VSA/<prefix>/<year>/<seq> numbering + count means
+// certificates issued through this approval workflow land in the exact same
+// numbering sequence and "History" list as ones made by hand in the
+// Certificate Generator, instead of running a separate counter.
+const GENERATED_CERT_TYPE: Record<'COURSE_COMPLETION' | 'INTERNSHIP', 'COURSE_COMPLETION' | 'INTERNSHIP_COMPLETION'> = {
+  COURSE_COMPLETION: 'COURSE_COMPLETION',
+  INTERNSHIP: 'INTERNSHIP_COMPLETION',
+};
+const CERT_PREFIX: Record<'COURSE_COMPLETION' | 'INTERNSHIP_COMPLETION', string> = {
+  COURSE_COMPLETION: 'CCT',
+  INTERNSHIP_COMPLETION: 'ICP',
+};
+
 async function nextCertNo(type: 'COURSE_COMPLETION' | 'INTERNSHIP'): Promise<string> {
+  const genType = GENERATED_CERT_TYPE[type];
+  const prefix = CERT_PREFIX[genType];
   const year = new Date().getFullYear();
-  const prefix = type === 'COURSE_COMPLETION' ? 'VSA/CC' : 'VSA/INT';
-  const count = await prisma.studentCertificateRequest.count({ where: { type, certificateNo: { not: null } } });
-  return `${prefix}/${year}/${String(count + 1).padStart(4, '0')}`;
+  const count = await prisma.generatedCertificate.count({ where: { type: genType } });
+  return `VSA/${prefix}/${year}/${String(count + 1).padStart(4, '0')}`;
 }
 
 /**
- * If both approvals are now in place and this request hasn't been marked
- * generated yet, stamp it with a certificate number + generatedAt. The
- * actual PDF bytes are produced on demand at download time (see
- * `download` below) rather than persisted to disk — the same on-demand
- * approach already used for Appointment Letters elsewhere in this codebase.
+ * If both approvals are now in place and this request hasn't been
+ * finalized yet: assign a certificate number (from the shared Certificate
+ * Generator numbering sequence) and log a GeneratedCertificate row so it
+ * shows up in that unified History alongside hand-made certificates. The
+ * actual PDF is never rendered or stored server-side — it's produced on
+ * demand in the browser from the exact same React templates the manual
+ * Certificate Generator uses (see renderData below), so the output is
+ * pixel-identical to what's already been issued.
  */
-async function maybeFinalize(id: string) {
-  const req_ = await prisma.studentCertificateRequest.findUnique({ where: { id } });
-  if (!req_) return;
-  if (req_.feeApprovedAt && req_.ldmApprovedAt && !req_.generatedAt) {
-    const certificateNo = await nextCertNo(req_.type);
-    await prisma.studentCertificateRequest.update({
+async function maybeFinalize(id: string, approvedById: string) {
+  const req_ = await prisma.studentCertificateRequest.findUnique({
+    where: { id },
+    include: { student: { select: { firstName: true, lastName: true, studentCode: true } }, course: { select: { name: true } } },
+  });
+  if (!req_ || !req_.feeApprovedAt || !req_.ldmApprovedAt || req_.certificateNo) return;
+
+  const [certificateNo, batch] = await Promise.all([
+    nextCertNo(req_.type),
+    lookupBatchCode(req_.studentId),
+  ]);
+  const generatedAt = new Date();
+
+  await prisma.$transaction([
+    prisma.studentCertificateRequest.update({
       where: { id },
-      data: { certificateNo, generatedAt: new Date() },
-    });
-  }
+      data: { certificateNo, generatedAt },
+    }),
+    prisma.generatedCertificate.create({
+      data: {
+        type: GENERATED_CERT_TYPE[req_.type],
+        studentName: `${req_.student.firstName} ${req_.student.lastName}`,
+        certNo: certificateNo,
+        data: {
+          studentId: req_.student.studentCode,
+          course: req_.course?.name || '',
+          batch: batch || '',
+          issueDate: generatedAt.toISOString().slice(0, 10),
+        },
+        issuedById: approvedById,
+      },
+    }),
+  ]);
 }
 
 export const certificateRequestsController = {
@@ -93,7 +135,7 @@ export const certificateRequestsController = {
         where: { id: existing.id },
         data: { feeApprovedById: req.user!.employeeId!, feeApprovedAt: new Date() },
       });
-      await maybeFinalize(existing.id);
+      await maybeFinalize(existing.id, req.user!.employeeId!);
 
       const updated = await prisma.studentCertificateRequest.findUnique({
         where: { id: existing.id },
@@ -114,7 +156,7 @@ export const certificateRequestsController = {
         where: { id: existing.id },
         data: { ldmApprovedById: req.user!.employeeId!, ldmApprovedAt: new Date() },
       });
-      await maybeFinalize(existing.id);
+      await maybeFinalize(existing.id, req.user!.employeeId!);
 
       const updated = await prisma.studentCertificateRequest.findUnique({
         where: { id: existing.id },
@@ -124,30 +166,30 @@ export const certificateRequestsController = {
     } catch (err) { next(err); }
   },
 
-  /** Staff download — regenerates the PDF fresh from stored metadata every time. */
-  async download(req: AuthRequest, res: Response, next: NextFunction) {
+  /** Staff-side render data — feeds the real CourseCompletionTemplate / InternshipCompletionTemplate on the frontend. */
+  async renderData(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const pdf = await buildPdfForRequest(req.params.id);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${pdf.filename}"`);
-      res.send(pdf.buffer);
+      const data = await buildRenderData(req.params.id);
+      res.json({ success: true, data });
     } catch (err) { next(err); }
   },
 };
 
 /**
- * Shared PDF-building logic — used by both the staff download endpoint
- * above and the student portal's own download endpoint (studentPortal.controller.ts).
+ * Shared render-data builder — used by both the staff endpoint above and
+ * the student portal's own endpoint (studentPortal.controller.ts). Returns
+ * exactly the fields the existing CourseCompletionTemplate /
+ * InternshipCompletionTemplate React components need; the frontend renders
+ * them off-screen and captures a PDF client-side, so the output is
+ * identical to a hand-made certificate — nothing new is designed here.
  * Throws AppError if the request isn't fully approved yet.
  */
-export async function buildPdfForRequest(id: string): Promise<{ buffer: Buffer; filename: string }> {
+export async function buildRenderData(id: string) {
   const request = await prisma.studentCertificateRequest.findUnique({
     where: { id },
     include: {
-      student: { select: { firstName: true, lastName: true, studentCode: true } },
+      student: { select: { firstName: true, lastName: true, studentCode: true, photo: true } },
       course: { select: { name: true } },
-      feeApprovedBy: { select: employeeNameSelect },
-      ldmApprovedBy: { select: employeeNameSelect },
     },
   });
   if (!request) throw new AppError('Certificate request not found', 404);
@@ -155,19 +197,16 @@ export async function buildPdfForRequest(id: string): Promise<{ buffer: Buffer; 
     throw new AppError('This certificate is still awaiting approval', 400);
   }
 
-  const studentName = `${request.student.firstName} ${request.student.lastName}`;
-  const buffer = await generateCertificatePdf({
-    type: request.type,
-    studentName,
-    studentCode: request.student.studentCode,
-    courseName: request.course?.name,
-    certificateNo: request.certificateNo,
-    issuedOn: request.generatedAt || new Date(),
-    feeApproverName: request.feeApprovedBy ? `${request.feeApprovedBy.firstName} ${request.feeApprovedBy.lastName}` : '—',
-    ldmApproverName: request.ldmApprovedBy ? `${request.ldmApprovedBy.firstName} ${request.ldmApprovedBy.lastName}` : '—',
-  });
+  const batch = await lookupBatchCode(request.studentId);
 
-  const label = request.type === 'COURSE_COMPLETION' ? 'Course_Completion' : 'Internship';
-  const filename = `${label}_Certificate_${studentName.replace(/\s+/g, '_')}.pdf`;
-  return { buffer, filename };
+  return {
+    type: request.type,
+    studentName: `${request.student.firstName} ${request.student.lastName}`,
+    studentId: request.student.studentCode,
+    course: request.course?.name || null,
+    batch,
+    issueDate: request.generatedAt,
+    photoUrl: request.student.photo,
+    certificateNo: request.certificateNo,
+  };
 }
