@@ -89,7 +89,11 @@ async function listStudentsSummary(studentWhere: Record<string, unknown>) {
     select: {
       id: true, firstName: true, lastName: true, studentCode: true, photo: true,
       track: true, status: true, email: true, phone: true, joiningDate: true, movedToPlacementAt: true,
-      enrollments: { select: { schedule: { select: { course: { select: { name: true } }, batch: { select: { code: true } } } } } },
+      enrollments: {
+        select: {
+          schedule: { select: { id: true, timing: true, course: { select: { id: true, name: true } }, batch: { select: { id: true, code: true } } } },
+        },
+      },
       portfolio: { select: { status: true, targetRole: true } },
       certificateRequests: { select: { type: true, feeApprovedAt: true, ldmApprovedAt: true, certificateNo: true } },
       skillAdvisor: { select: employeeSelect },
