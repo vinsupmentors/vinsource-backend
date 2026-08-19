@@ -7,20 +7,35 @@ import { emailService } from '../services/email.service';
 import { config } from '../config/env';
 import { ensureCourseCompletionCertRequest } from '../utils/certificateRequests';
 
+// Screen-recorded walkthrough of first login / registration on the student
+// portal — linked from the welcome email so a student who gets stuck can
+// just watch it instead of calling in. Update this if the recording moves.
+const STUDENT_PORTAL_DEMO_VIDEO_URL = 'https://drive.google.com/file/d/1HCe3-I5WqnQXMvDMjdX1QxC-SN84y1QV/view?usp=sharing';
+
 /**
  * Sends the student welcome email (credentials + first-login steps).
  * Skips synthetic placeholder addresses. Never blocks the request.
+ *
+ * CC's the production team copy (Gaurav) plus, when the student has a Skill
+ * Advisor on file, that advisor's own email — so the Sales rep who enrolled
+ * the student sees the credentials go out and has the same portal-demo link
+ * on hand for follow-up.
  */
-export function sendStudentWelcomeEmail(opts: { name?: string | null; studentCode: string; email?: string | null; batchLine?: string }) {
+export function sendStudentWelcomeEmail(opts: {
+  name?: string | null; studentCode: string; email?: string | null; batchLine?: string; advisorEmail?: string | null;
+}) {
   const email = (opts.email || '').trim();
   if (!email || email.endsWith('.local')) return Promise.resolve(); // no real inbox to send to
+  const cc = ['v7032vinsup@gmail.com']; // production team copy (Gaurav)
+  const advisorEmail = opts.advisorEmail?.trim();
+  if (advisorEmail && !cc.some((c) => c.toLowerCase() === advisorEmail.toLowerCase())) cc.push(advisorEmail);
   // Returns the send promise (existing fire-and-forget call sites just don't
   // await it) so one-off scripts like resendWelcomeEmail.ts CAN await it
   // before the process exits — otherwise node would exit before the SMTP
   // send actually completes.
   return emailService.send({
     to: email,
-    cc: 'v7032vinsup@gmail.com', // production team copy (Gaurav)
+    cc,
     subject: '🎓 Welcome to Vinsup Skill Academy — Your Student Portal Login',
     html: emailService.templates.studentWelcome({
       name: opts.name?.trim() || 'Student',
@@ -29,6 +44,7 @@ export function sendStudentWelcomeEmail(opts: { name?: string | null; studentCod
       loginUrl: `${config.FRONTEND_URL}/login`,
       batchLine: opts.batchLine,
       logoUrl: `${config.FRONTEND_URL}/vinsup-logo.png`,
+      demoVideoUrl: STUDENT_PORTAL_DEMO_VIDEO_URL,
     }),
     template: 'student_welcome',
   }).catch((err) => console.error('Student welcome email failed:', err));
@@ -201,11 +217,11 @@ async function resolveScheduleByCode(subBatchCode: string): Promise<string> {
  * "My Students" visibility over them. Any employee code is accepted (not
  * restricted to a specific designation). Throws on an unknown code so a typo
  * doesn't silently create an unlinked student. */
-export async function resolveEmployeeByCode(employeeCode: string): Promise<string> {
+export async function resolveEmployeeByCode(employeeCode: string): Promise<{ id: string; email: string }> {
   const code = employeeCode.trim().toUpperCase();
-  const employee = await prisma.employee.findUnique({ where: { employeeCode: code } });
+  const employee = await prisma.employee.findUnique({ where: { employeeCode: code }, select: { id: true, email: true } });
   if (!employee) throw new AppError(`Skill Advisor employee code "${code}" not found`, 404);
-  return employee.id;
+  return employee;
 }
 
 export const productionController = {
@@ -628,7 +644,8 @@ export const productionController = {
       if (!scheduleId && subBatchCode) scheduleId = await resolveScheduleByCode(subBatchCode);
       // Links the student to the Sales rep who owns them for "My Students" —
       // resolved from an employee code entered at intake rather than an id.
-      const skillAdvisorId = skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : undefined;
+      // Also CC'd on the welcome email below.
+      const advisor = skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : undefined;
       const createdById = req.user?.employeeId;
 
       // Balance is derived from total/paid when both are given, rather than
@@ -653,7 +670,7 @@ export const productionController = {
           balanceAmount: balance,
           paymentMode: paymentMode || undefined,
           ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
-          ...(skillAdvisorId ? { skillAdvisor: { connect: { id: skillAdvisorId } } } : {}),
+          ...(advisor ? { skillAdvisor: { connect: { id: advisor.id } } } : {}),
           user: await buildStudentUserCreate(studentCode, email),
           ...(scheduleId ? { enrollments: { create: { scheduleId } } } : {}),
         },
@@ -670,6 +687,7 @@ export const productionController = {
         studentCode,
         email,
         batchLine: enr ? `${enr.schedule.batch.code} — ${enr.schedule.course.name} (${enr.schedule.timing})` : undefined,
+        advisorEmail: advisor?.email,
       });
 
       res.status(201).json({ success: true, data: student, message: 'Student created. Login credentials emailed.' });
@@ -686,7 +704,7 @@ export const productionController = {
       // Empty string clears the advisor link; omitted leaves it untouched;
       // a code resolves to the matching employee (throws if unknown).
       const skillAdvisorId = skillAdvisorCode !== undefined
-        ? (skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : null)
+        ? (skillAdvisorCode ? (await resolveEmployeeByCode(skillAdvisorCode)).id : null)
         : undefined;
       // JRP is course-only, non-placement — block a direct edit from ever
       // setting a JRP student's status to IN_PLACEMENT (covers whichever
@@ -848,14 +866,14 @@ export const productionController = {
       const [allBatches, allCourses, allEmployees] = await Promise.all([
         prisma.batch.findMany({ include: { schedules: true } }),
         prisma.academyCourse.findMany(),
-        prisma.employee.findMany({ select: { id: true, employeeCode: true } }),
+        prisma.employee.findMany({ select: { id: true, employeeCode: true, email: true } }),
       ]);
       const batchByCode = new Map(allBatches.map((b) => [b.code.trim().toLowerCase(), b]));
       const courseByName = new Map(allCourses.map((c) => [c.name.trim().toLowerCase(), c]));
       const scheduleByCode = new Map(
         allBatches.flatMap((b) => b.schedules.filter((s) => s.code).map((s) => [s.code!.toUpperCase(), s.id] as [string, string]))
       );
-      const employeeByCode = new Map(allEmployees.map((e) => [e.employeeCode.trim().toUpperCase(), e.id]));
+      const employeeByCode = new Map(allEmployees.map((e) => [e.employeeCode.trim().toUpperCase(), { id: e.id, email: e.email }]));
 
       const existingCodesCount = await prisma.student.count();
       let autoSeq = existingCodesCount;
@@ -926,10 +944,10 @@ export const productionController = {
           const rowEmail = row.email ? String(row.email).trim() : undefined;
 
           const rowAdvisorCode = String(row.skillAdvisorCode || row.skillAdvisor || '').trim().toUpperCase();
-          let skillAdvisorId: string | undefined;
+          let rowAdvisor: { id: string; email: string } | undefined;
           if (rowAdvisorCode) {
-            skillAdvisorId = employeeByCode.get(rowAdvisorCode);
-            if (!skillAdvisorId) {
+            rowAdvisor = employeeByCode.get(rowAdvisorCode);
+            if (!rowAdvisor) {
               results.push({ row: rowNum, status: 'error', message: `Skill Advisor employee code "${rowAdvisorCode}" not found` });
               continue;
             }
@@ -944,7 +962,7 @@ export const productionController = {
               phone,
               track: track as never,
               ...(createdById ? { createdBy: { connect: { id: createdById } } } : {}),
-              ...(skillAdvisorId ? { skillAdvisor: { connect: { id: skillAdvisorId } } } : {}),
+              ...(rowAdvisor ? { skillAdvisor: { connect: { id: rowAdvisor.id } } } : {}),
               user: await buildStudentUserCreate(studentCode, rowEmail),
             },
           });
@@ -960,6 +978,7 @@ export const productionController = {
             name: `${firstName} ${lastName}`.trim(),
             studentCode,
             email: rowEmail,
+            advisorEmail: rowAdvisor?.email,
           });
 
           results.push({ row: rowNum, status: 'created', studentId: student.id });

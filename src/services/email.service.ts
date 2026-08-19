@@ -316,7 +316,7 @@ export const emailService = {
         <p style="font-family:Arial,sans-serif;color:#6b7280;font-size:12px;margin:16px 4px 0;">— With warm wishes from everyone at Vinsup Skill Academy</p>
       </div>`,
 
-    studentWelcome: (data: { name: string; studentCode: string; email: string; loginUrl: string; batchLine?: string; logoUrl?: string }) => `
+    studentWelcome: (data: { name: string; studentCode: string; email: string; loginUrl: string; batchLine?: string; logoUrl?: string; demoVideoUrl?: string }) => `
       <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#1e3a8a;padding:24px;text-align:center;">
           ${data.logoUrl ? `<img src="${data.logoUrl}" alt="Vinsup Skill Academy" height="40" style="height:40px;width:auto;display:inline-block;background:#fff;padding:4px 10px;border-radius:6px;margin-bottom:10px;" /><br/>` : ''}
@@ -325,7 +325,7 @@ export const emailService = {
         </div>
         <div style="padding:26px;">
           <p>Dear <strong>${data.name}</strong>,</p>
-          <p>Congratulations on joining <strong>Vinsup Skill Academy</strong>${data.batchLine ? ` — you have been enrolled in <strong>${data.batchLine}</strong>` : ''}! Your student portal account has been created. Here you'll track your attendance, marks, projects, tests, and more.</p>
+          <p>Congratulations, and welcome aboard! ${data.batchLine ? `You've been enrolled in <strong>${data.batchLine}</strong>, and y` : 'Y'}our Vinsup Skill Academy student portal account is now live. This is where you'll check in throughout your program — attendance, marks, projects, tests, certificates, and placement updates all live here.</p>
 
           <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px;margin:20px 0;">
             <p style="margin:0 0 8px;font-weight:700;color:#0369a1;">Your Login Credentials</p>
@@ -348,6 +348,13 @@ export const emailService = {
           <p style="text-align:center;margin:24px 0;">
             <a href="${data.loginUrl}" style="background:#1e3a8a;color:#fff;padding:13px 30px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:15px;">Log In to Student Portal →</a>
           </p>
+
+          ${data.demoVideoUrl ? `
+          <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:16px;margin:20px 0;text-align:center;">
+            <p style="margin:0 0 6px;font-weight:700;color:#5b21b6;">🎬 New to the portal? Watch a quick walkthrough</p>
+            <p style="margin:0 0 10px;font-size:13px;color:#6d28d9;">A short screen recording showing exactly how to log in and get set up.</p>
+            <a href="${data.demoVideoUrl}" style="background:#5b21b6;color:#fff;padding:10px 22px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;font-size:13px;">Watch the Demo →</a>
+          </div>` : ''}
 
           <p style="color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;padding-top:14px;margin-top:20px;">
             Trouble logging in? Contact your trainer or write to <a href="mailto:operation@vinsupskillacademy.com" style="color:#1e40af;">operation@vinsupskillacademy.com</a><br/>

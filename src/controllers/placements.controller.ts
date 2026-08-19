@@ -547,7 +547,7 @@ export const placementsController = {
       if (!studentCode || !firstName || !email) {
         throw new AppError('studentCode, firstName and email are required', 400);
       }
-      const skillAdvisorId = skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : undefined;
+      const advisor = skillAdvisorCode ? await resolveEmployeeByCode(skillAdvisorCode) : undefined;
       const now = new Date();
       const student = await prisma.student.create({
         data: {
@@ -559,7 +559,7 @@ export const placementsController = {
           track: 'PT',
           status: 'IN_PLACEMENT',
           movedToPlacementAt: now,
-          ...(skillAdvisorId ? { skillAdvisor: { connect: { id: skillAdvisorId } } } : {}),
+          ...(advisor ? { skillAdvisor: { connect: { id: advisor.id } } } : {}),
           user: await buildStudentUserCreate(studentCode, email),
         },
         include: { user: { select: { id: true, email: true } } },
@@ -569,6 +569,7 @@ export const placementsController = {
         name: `${student.firstName} ${student.lastName}`.trim() || undefined,
         studentCode,
         email,
+        advisorEmail: advisor?.email,
       });
 
       res.status(201).json({ success: true, data: student, message: 'Student added to the Placement Pool. Login credentials emailed.' });
