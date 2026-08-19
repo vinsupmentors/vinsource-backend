@@ -19,6 +19,7 @@ router.get('/enrollments', studentPortalController.myEnrollments);
 router.get('/attendance', studentPortalController.myAttendance);
 router.get('/marks', studentPortalController.myMarks);
 router.get('/certificates', studentPortalController.myCertificates);
+router.get('/certificates/:id/download', studentPortalController.downloadMyCertificate);
 router.get('/placements', studentPortalController.myPlacements);
 router.get('/course-content', studentPortalController.courseContent);
 router.get('/rank-card', studentPortalController.rankCard);

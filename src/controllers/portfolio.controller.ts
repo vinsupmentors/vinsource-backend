@@ -4,6 +4,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { computeGamification } from '../services/gamification.service';
+import { ensureInternshipCertRequest } from '../utils/certificateRequests';
 
 const studentSelect = {
   id: true, firstName: true, lastName: true, studentCode: true, track: true, photo: true, email: true, phone: true,
@@ -86,6 +87,9 @@ export const portfolioController = {
           publicSlug,
         },
       });
+
+      await ensureInternshipCertRequest(existing.studentId);
+
       res.json({ success: true, data: portfolio });
     } catch (err) { next(err); }
   },

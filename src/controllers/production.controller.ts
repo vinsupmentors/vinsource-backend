@@ -5,6 +5,7 @@ import { AuthRequest } from '../types';
 import { hashPassword } from '../utils/helpers';
 import { emailService } from '../services/email.service';
 import { config } from '../config/env';
+import { ensureCourseCompletionCertRequest } from '../utils/certificateRequests';
 
 /**
  * Sends the student welcome email (credentials + first-login steps).
@@ -696,6 +697,9 @@ export const productionController = {
           paymentMode: paymentMode !== undefined ? (paymentMode || null) : undefined,
         },
       });
+      if (status === 'IN_PLACEMENT' && existing?.status !== 'IN_PLACEMENT') {
+        await ensureCourseCompletionCertRequest(student.id);
+      }
       res.json({ success: true, data: student });
     } catch (err) { next(err); }
   },
@@ -1065,6 +1069,8 @@ export const productionController = {
           : []),
       ]);
 
+      await Promise.all(candidates.map((c) => ensureCourseCompletionCertRequest(c.id)));
+
       res.json({
         success: true,
         data: {
@@ -1129,6 +1135,8 @@ export const productionController = {
               })]
             : []),
         ]);
+
+        await Promise.all(eligible.map((c) => ensureCourseCompletionCertRequest(c.id)));
 
         return res.json({ success: true, data: { updated: eligible.length, status, skippedJrp: skippedJrp.length } });
       }

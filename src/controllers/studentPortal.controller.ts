@@ -9,6 +9,7 @@ import { resolveIpLocation } from '../utils/ipGeolocation';
 import { getOnboardingStatus } from '../utils/onboardingStatus';
 import { stampSignatureOntoPdf, generateFeeDeclarationPdf } from '../utils/pdfStamp';
 import { emailService } from '../services/email.service';
+import { buildPdfForRequest } from './certificateRequests.controller';
 
 const SIGNED_PDF_DIR = path.join(process.cwd(), 'uploads', 'onboarding-signed');
 if (!fs.existsSync(SIGNED_PDF_DIR)) fs.mkdirSync(SIGNED_PDF_DIR, { recursive: true });
@@ -468,14 +469,44 @@ export const studentPortalController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Certificate approval workflow: a Course Completion request appears here
+   * the moment the student is pushed into the Placement Pool; an Internship
+   * request appears the moment their portfolio is approved. Both start
+   * locked — only once BOTH the Fee/Admin and LDM approvals land does
+   * `downloadable` flip true and the PDF can be fetched.
+   */
   async myCertificates(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const certificates = await prisma.certificate.findMany({
+      const rows = await prisma.studentCertificateRequest.findMany({
         where: { studentId: getStudentId(req) },
         include: { course: { select: { id: true, name: true } } },
-        orderBy: { issuedAt: 'desc' },
+        orderBy: { createdAt: 'asc' },
       });
-      res.json({ success: true, data: certificates });
+      const data = rows.map((r) => ({
+        id: r.id,
+        type: r.type,
+        courseName: r.course?.name || null,
+        feeApproved: !!r.feeApprovedAt,
+        ldmApproved: !!r.ldmApprovedAt,
+        downloadable: !!(r.feeApprovedAt && r.ldmApprovedAt && r.certificateNo),
+        certificateNo: r.certificateNo,
+        generatedAt: r.generatedAt,
+      }));
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /** Student's own download — same PDF-building logic as the staff endpoint. */
+  async downloadMyCertificate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const request = await prisma.studentCertificateRequest.findUnique({ where: { id: req.params.id } });
+      if (!request || request.studentId !== getStudentId(req)) throw new AppError('Certificate not found', 404);
+
+      const pdf = await buildPdfForRequest(request.id);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${pdf.filename}"`);
+      res.send(pdf.buffer);
     } catch (err) { next(err); }
   },
 

@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { notificationService } from '../services/notification.service';
 import { emailService } from '../services/email.service';
+import { ensureCourseCompletionCertRequest } from '../utils/certificateRequests';
 
 /**
  * "My Training" self-service surface for any logged-in Employee who has
@@ -372,6 +373,8 @@ export const trainerPortalController = {
         },
         select: { id: true, status: true, movedToPlacementAt: true },
       });
+
+      await ensureCourseCompletionCertRequest(studentId);
 
       res.json({ success: true, data: updated });
     } catch (err) { next(err); }
