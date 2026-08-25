@@ -1013,6 +1013,27 @@ export const productionController = {
             await tx.studentBatchEnrollment.update({ where: { id: previousEnrollmentId }, data: { status: 'DROPPED' } });
           }
         }
+
+        // A row for this exact (student, schedule) pair may already exist —
+        // e.g. they were DROPPED from this same schedule earlier and are now
+        // being re-enrolled. studentId+scheduleId is unique, so a blind
+        // create() would 500 with an opaque "Record already exists" instead
+        // of doing what the admin actually wants. Reactivate in place; only
+        // block if they're already ACTIVE here.
+        const existing = await tx.studentBatchEnrollment.findUnique({
+          where: { studentId_scheduleId: { studentId, scheduleId } },
+        });
+        if (existing) {
+          if (existing.status === 'ACTIVE') {
+            throw new AppError('This student is already enrolled in that batch/schedule', 409);
+          }
+          return tx.studentBatchEnrollment.update({
+            where: { id: existing.id },
+            data: { status: 'ACTIVE' },
+            include: { student: true, schedule: { include: { course: true, batch: true } } },
+          });
+        }
+
         return tx.studentBatchEnrollment.create({
           data: { studentId, scheduleId },
           include: { student: true, schedule: { include: { course: true, batch: true } } },
@@ -1035,10 +1056,14 @@ export const productionController = {
 
       const existing = await prisma.studentBatchEnrollment.findMany({
         where: { scheduleId, studentId: { in: studentIds } },
-        select: { studentId: true },
+        select: { id: true, studentId: true, status: true },
       });
       const existingIds = new Set(existing.map((e) => e.studentId));
       const toCreate = studentIds.filter((id: string) => !existingIds.has(id));
+      // A student can already have a row for this schedule from an earlier
+      // DROPPED/COMPLETED enrollment — reactivate those rather than silently
+      // leaving them un-enrolled (skipDuplicates would just no-op on them).
+      const toReactivate = existing.filter((e) => e.status !== 'ACTIVE');
 
       if (toCreate.length) {
         await prisma.studentBatchEnrollment.createMany({
@@ -1046,12 +1071,18 @@ export const productionController = {
           skipDuplicates: true,
         });
       }
+      if (toReactivate.length) {
+        await prisma.studentBatchEnrollment.updateMany({
+          where: { id: { in: toReactivate.map((e) => e.id) } },
+          data: { status: 'ACTIVE' },
+        });
+      }
 
       res.status(201).json({
         success: true,
         data: {
-          enrolled: toCreate.length,
-          alreadyEnrolled: existingIds.size,
+          enrolled: toCreate.length + toReactivate.length,
+          alreadyEnrolled: existingIds.size - toReactivate.length,
           total: studentIds.length,
         },
       });
