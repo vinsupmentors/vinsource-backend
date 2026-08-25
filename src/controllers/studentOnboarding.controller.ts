@@ -111,7 +111,7 @@ export const studentOnboardingController = {
                 course: { select: { id: true, name: true } },
                 enrollments: {
                   include: {
-                    student: { select: { id: true, profileCompletedAt: true, documentsCompletedAt: true } },
+                    student: { select: { id: true, profileCompletedAt: true, documentsCompletedAt: true, onboardingApprovedAt: true } },
                   },
                 },
               },
@@ -123,7 +123,7 @@ export const studentOnboardingController = {
       ]);
 
       const data = batches.map((batch) => {
-        const studentMap = new Map<string, { profileCompletedAt: Date | null; documentsCompletedAt: Date | null }>();
+        const studentMap = new Map<string, { profileCompletedAt: Date | null; documentsCompletedAt: Date | null; onboardingApprovedAt: Date | null }>();
         for (const schedule of batch.schedules) {
           for (const enrollment of schedule.enrollments) {
             studentMap.set(enrollment.student.id, enrollment.student);
@@ -132,6 +132,7 @@ export const studentOnboardingController = {
         const students = Array.from(studentMap.values());
         const profileDone = students.filter((s) => s.profileCompletedAt).length;
         const docsDone = students.filter((s) => s.documentsCompletedAt).length;
+        const approvedDone = students.filter((s) => s.onboardingApprovedAt).length;
         return {
           id: batch.id,
           code: batch.code,
@@ -141,6 +142,7 @@ export const studentOnboardingController = {
           totalStudents: students.length,
           profileCompleted: profileDone,
           documentsCompleted: docsDone,
+          approved: approvedDone,
         };
       });
 
@@ -205,6 +207,7 @@ export const studentOnboardingController = {
           courses,
           profileCompletedAt: student.profileCompletedAt,
           documentsCompletedAt: student.documentsCompletedAt,
+          onboardingApprovedAt: student.onboardingApprovedAt,
           dateOfBirth: student.dateOfBirth,
           gender: student.gender,
           address: student.address,
@@ -298,6 +301,27 @@ export const studentOnboardingController = {
       const updated = await prisma.student.update({
         where: { id: studentId },
         data: { onboardingApprovedAt: new Date(), onboardingApprovedById: req.user?.employeeId },
+      });
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  /** Lighter-weight than rejectStudent — just clears the approval sign-off
+   * (e.g. it was granted before a later track change added a new required
+   * document, so it's now stale). Unlike reject, this does NOT touch
+   * signatures/profileCompletedAt — the student isn't sent back to fix
+   * anything, they just need a fresh admin approval once whatever's now
+   * missing is resolved. */
+  async unapproveStudent(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = req.params.studentId;
+      const student = await prisma.student.findUnique({ where: { id: studentId } });
+      if (!student) throw new AppError('Student not found', 404);
+      if (!student.onboardingApprovedAt) throw new AppError('This student is not currently approved', 400);
+
+      const updated = await prisma.student.update({
+        where: { id: studentId },
+        data: { onboardingApprovedAt: null, onboardingApprovedById: null },
       });
       res.json({ success: true, data: updated });
     } catch (err) { next(err); }
