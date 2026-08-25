@@ -6,6 +6,7 @@ import { hashPassword } from '../utils/helpers';
 import { emailService } from '../services/email.service';
 import { config } from '../config/env';
 import { ensureCourseCompletionCertRequest } from '../utils/certificateRequests';
+import { getOnboardingStatus } from '../utils/onboardingStatus';
 
 // Screen-recorded walkthrough of first login / registration on the student
 // portal — linked from the welcome email so a student who gets stuck can
@@ -741,7 +742,27 @@ export const productionController = {
       if (status === 'IN_PLACEMENT' && existing?.status !== 'IN_PLACEMENT') {
         await ensureCourseCompletionCertRequest(student.id);
       }
-      res.json({ success: true, data: student });
+
+      // A track change can change which documents this student is required
+      // to have signed (e.g. JRP -> IOP adds the IOP agreement). The
+      // onboarding checklist itself is always computed live, so it already
+      // reflects this — but a *prior* admin approval (onboardingApprovedAt)
+      // is a point-in-time sign-off and doesn't get automatically revisited.
+      // Without this, a student approved while on JRP would keep showing
+      // "approved" after being moved to IOP despite now having an unsigned
+      // required document. Clear the stale approval so it matches reality.
+      let result: typeof student = student;
+      if (track !== undefined && track !== existing?.track && existing?.onboardingApprovedAt) {
+        const onboardingStatus = await getOnboardingStatus(student.id);
+        if (!onboardingStatus.allSigned) {
+          result = await prisma.student.update({
+            where: { id: student.id },
+            data: { onboardingApprovedAt: null, onboardingApprovedById: null },
+          });
+        }
+      }
+
+      res.json({ success: true, data: result });
     } catch (err) { next(err); }
   },
 
