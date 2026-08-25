@@ -24,26 +24,39 @@
 import prisma from '../config/database';
 import { getOnboardingStatus } from './onboardingStatus';
 
+// Batch.code is a free-text label like "Batch 17" (not "B17"), and this
+// project's MySQL setup doesn't support Prisma's case-insensitive `mode`
+// (throws at runtime — same constraint noted elsewhere in this codebase), so
+// batch matching is done in JS by comparing the batch *number* rather than
+// relying on a DB-level string match. Accepts "17", "B17", "Batch 17", etc.
+function batchNumber(s: string): string | null {
+  return s.match(/\d+/)?.[0] ?? null;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const confirm = args.includes('--confirm');
-  const batchPrefix = args.find((a) => a !== '--confirm')?.trim().toUpperCase();
+  const batchArg = args.find((a) => a !== '--confirm')?.trim();
+  const wantedNum = batchArg ? batchNumber(batchArg) : null;
+  if (batchArg && !wantedNum) {
+    console.error(`Couldn't find a batch number in "${batchArg}" — try e.g. "17" or "Batch 17".`);
+    process.exit(1);
+  }
 
-  const students = await prisma.student.findMany({
-    where: {
-      onboardingApprovedAt: { not: null },
-      ...(batchPrefix
-        ? { enrollments: { some: { schedule: { batch: { code: { startsWith: batchPrefix } } } } } }
-        : {}),
-    },
+  const allApproved = await prisma.student.findMany({
+    where: { onboardingApprovedAt: { not: null } },
     select: {
       id: true, studentCode: true, firstName: true, lastName: true, track: true,
       enrollments: { select: { schedule: { select: { batch: { select: { code: true } } } } } },
     },
   });
 
+  const students = wantedNum
+    ? allApproved.filter((s) => s.enrollments.some((e) => batchNumber(e.schedule.batch.code) === wantedNum))
+    : allApproved;
+
   if (!students.length) {
-    console.log(batchPrefix ? `No approved students found for batch "${batchPrefix}".` : 'No approved students found.');
+    console.log(batchArg ? `No approved students found for batch "${batchArg}".` : 'No approved students found.');
     process.exit(0);
   }
 
