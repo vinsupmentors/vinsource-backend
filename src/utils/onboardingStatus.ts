@@ -90,14 +90,32 @@ export async function getOnboardingStatus(studentId: string) {
 
   const items = [...templateItems, ...declarationItems];
   const signedCount = items.filter((i) => i.signed).length;
+  // Vacuously "all signed" when nothing is required yet — matches the
+  // existing behaviour of not blocking a student on an empty checklist.
+  const allSigned = items.length === 0 || signedCount === items.length;
+
+  // Self-heal: documentsCompletedAt/onboardingApprovedAt are write-once flags
+  // set at the moment everything happened to be signed — nothing revisits
+  // them later. If a new template is added (or an existing one is edited to
+  // newly cover this student's track, or their track itself changes), this
+  // function correctly detects allSigned=false on the very next call, but the
+  // cached flags above would otherwise keep claiming "done" forever,
+  // inflating batch-level counts (Reports, My Students) that read the raw
+  // flag instead of recomputing. Whichever page happens to call this next
+  // corrects it for everyone, rather than requiring a one-off script per drift.
+  let correctedStudent = student;
+  if (!allSigned && (student.documentsCompletedAt || student.onboardingApprovedAt)) {
+    correctedStudent = await prisma.student.update({
+      where: { id: studentId },
+      data: { documentsCompletedAt: null, onboardingApprovedAt: null, onboardingApprovedById: null },
+    });
+  }
 
   return {
-    student,
+    student: correctedStudent,
     items,
     requiredCount: items.length,
     signedCount,
-    // Vacuously "all signed" when nothing is required yet — matches the
-    // existing behaviour of not blocking a student on an empty checklist.
-    allSigned: items.length === 0 || signedCount === items.length,
+    allSigned,
   };
 }
