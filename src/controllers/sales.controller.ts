@@ -9,6 +9,7 @@ import { computeSalesLeaderboard } from '../services/salesLeaderboard.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { normalizePhone } from '../utils/phone';
 import { computeRankCard } from '../utils/rankCard';
+import { getOnboardingStatus } from '../utils/onboardingStatus';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -89,6 +90,7 @@ async function listStudentsSummary(studentWhere: Record<string, unknown>) {
     select: {
       id: true, firstName: true, lastName: true, studentCode: true, photo: true,
       track: true, status: true, email: true, phone: true, joiningDate: true, movedToPlacementAt: true,
+      profileCompletedAt: true, documentsCompletedAt: true, onboardingApprovedAt: true,
       enrollments: {
         select: {
           schedule: { select: { id: true, timing: true, course: { select: { id: true, name: true } }, batch: { select: { id: true, code: true } } } },
@@ -1028,7 +1030,10 @@ export const salesController = {
         }),
       ]);
 
-      const rankCard = await computeRankCard(id);
+      const [rankCard, onboardingStatus] = await Promise.all([
+        computeRankCard(id),
+        getOnboardingStatus(id),
+      ]);
 
       res.json({
         success: true,
@@ -1039,6 +1044,10 @@ export const salesController = {
           rankCard,
           softskillFeedback,
           certificateRequests,
+          onboarding: {
+            allSigned: onboardingStatus.allSigned,
+            items: onboardingStatus.items.map((it) => ({ id: it.id, title: it.title, signed: it.signed, signedAt: it.signedAt })),
+          },
         },
       });
     } catch (err) { next(err); }
