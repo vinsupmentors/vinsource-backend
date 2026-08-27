@@ -5,6 +5,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { getOnboardingStatus } from '../utils/onboardingStatus';
+import { sendStudentWelcomeEmail } from './production.controller';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
@@ -324,6 +325,44 @@ export const studentOnboardingController = {
         data: { onboardingApprovedAt: null, onboardingApprovedById: null },
       });
       res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  /** Manually re-fires the welcome/credentials email — e.g. a student's
+   * track changed (new document now required, like JRP -> IOP) and they
+   * need pinging to log back in and sign it, or the original send
+   * bounced/was missed. Same template, CC, and demo-video-link as the
+   * original send at intake; just re-triggerable on demand. */
+  async resendWelcomeEmail(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const student = await prisma.student.findUnique({
+        where: { id: req.params.studentId },
+        include: {
+          skillAdvisor: { select: { email: true } },
+          enrollments: {
+            where: { status: 'ACTIVE' },
+            orderBy: { enrolledAt: 'desc' },
+            take: 1,
+            include: { schedule: { include: { course: true, batch: true } } },
+          },
+        },
+      });
+      if (!student) throw new AppError('Student not found', 404);
+      const email = (student.email || '').trim();
+      if (!email || email.endsWith('.local')) {
+        throw new AppError('This student has no real email on file to send to', 400);
+      }
+
+      const enr = student.enrollments[0];
+      await sendStudentWelcomeEmail({
+        name: `${student.firstName} ${student.lastName}`.replace('Pending Update', '').trim() || undefined,
+        studentCode: student.studentCode,
+        email,
+        batchLine: enr ? `${enr.schedule.batch.code} — ${enr.schedule.course.name} (${enr.schedule.timing})` : undefined,
+        advisorEmail: student.skillAdvisor?.email,
+      });
+
+      res.json({ success: true, message: `Onboarding email resent to ${email}` });
     } catch (err) { next(err); }
   },
 
