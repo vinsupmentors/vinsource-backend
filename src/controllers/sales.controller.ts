@@ -9,7 +9,7 @@ import { computeSalesLeaderboard } from '../services/salesLeaderboard.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { normalizePhone } from '../utils/phone';
 import { computeRankCard } from '../utils/rankCard';
-import { getOnboardingStatus } from '../utils/onboardingStatus';
+import { getOnboardingStatus, reconcileFlagsBatch } from '../utils/onboardingStatus';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -83,9 +83,18 @@ const LEGACY_STATUS_MAP: Record<string, { status: LeadStatus; lostReason?: LeadL
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
-/** List-view student summary for "My Students" — enough for a roster table, not the full dossier. */
+/**
+ * List-view student summary for "My Students" — enough for a roster table,
+ * not the full dossier. documentsCompletedAt/onboardingApprovedAt are
+ * reconciled against the live signed-status (see onboardingStatus.ts)
+ * before returning, rather than trusting the raw cached columns — those
+ * flags are set once and never revisited, so without this a student whose
+ * track changed or who's missing a newly-added document can sit forever
+ * showing as "awaiting approval" here even though the (live-recomputing)
+ * admin Approval screen has already correctly excluded them.
+ */
 async function listStudentsSummary(studentWhere: Record<string, unknown>) {
-  return prisma.student.findMany({
+  const students = await prisma.student.findMany({
     where: studentWhere,
     select: {
       id: true, firstName: true, lastName: true, studentCode: true, photo: true,
@@ -102,6 +111,7 @@ async function listStudentsSummary(studentWhere: Record<string, unknown>) {
     },
     orderBy: { joiningDate: 'desc' },
   });
+  return reconcileFlagsBatch(students);
 }
 
 export const salesController = {

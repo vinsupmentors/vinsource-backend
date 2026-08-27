@@ -4,7 +4,7 @@ import fs from 'fs';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { getOnboardingStatus } from '../utils/onboardingStatus';
+import { getOnboardingStatus, reconcileFlagsBatch } from '../utils/onboardingStatus';
 import { sendStudentWelcomeEmail } from './production.controller';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
@@ -112,7 +112,7 @@ export const studentOnboardingController = {
                 course: { select: { id: true, name: true } },
                 enrollments: {
                   include: {
-                    student: { select: { id: true, profileCompletedAt: true, documentsCompletedAt: true, onboardingApprovedAt: true } },
+                    student: { select: { id: true, track: true, profileCompletedAt: true, documentsCompletedAt: true, onboardingApprovedAt: true } },
                   },
                 },
               },
@@ -123,11 +123,27 @@ export const studentOnboardingController = {
         prisma.onboardingDocumentTemplate.count({ where: { isActive: true } }),
       ]);
 
+      // Reconcile every distinct student across every batch once (live
+      // signed-status vs. the cached flags — see onboardingStatus.ts) rather
+      // than trusting documentsCompletedAt/onboardingApprovedAt as-is, so
+      // these card counts never disagree with the live-recomputing Approval
+      // screen the way "Docs signed" once did.
+      const allStudentsById = new Map<string, { id: string; track: string; profileCompletedAt: Date | null; documentsCompletedAt: Date | null; onboardingApprovedAt: Date | null }>();
+      for (const batch of batches) {
+        for (const schedule of batch.schedules) {
+          for (const enrollment of schedule.enrollments) {
+            allStudentsById.set(enrollment.student.id, enrollment.student);
+          }
+        }
+      }
+      const corrected = await reconcileFlagsBatch(Array.from(allStudentsById.values()));
+      const correctedById = new Map(corrected.map((s) => [s.id, s]));
+
       const data = batches.map((batch) => {
         const studentMap = new Map<string, { profileCompletedAt: Date | null; documentsCompletedAt: Date | null; onboardingApprovedAt: Date | null }>();
         for (const schedule of batch.schedules) {
           for (const enrollment of schedule.enrollments) {
-            studentMap.set(enrollment.student.id, enrollment.student);
+            studentMap.set(enrollment.student.id, correctedById.get(enrollment.student.id) || enrollment.student);
           }
         }
         const students = Array.from(studentMap.values());
@@ -184,7 +200,22 @@ export const studentOnboardingController = {
         else byStudent.set(e.student.id, { student: e.student, courses: [e.schedule.course.name] });
       }
 
+      // Same reconciliation as batchSummary — don't trust the cached flags
+      // straight off the student row, since they only get corrected when
+      // something happens to call getOnboardingStatus() for that particular
+      // student.
+      const corrected = await reconcileFlagsBatch(
+        Array.from(byStudent.values()).map(({ student }) => ({
+          id: student.id,
+          track: student.track,
+          documentsCompletedAt: student.documentsCompletedAt,
+          onboardingApprovedAt: student.onboardingApprovedAt,
+        }))
+      );
+      const correctedById = new Map(corrected.map((s) => [s.id, s]));
+
       const students = Array.from(byStudent.values()).map(({ student, courses }) => {
+        const flags = correctedById.get(student.id)!;
         const signedByTemplate = new Map(student.documentSignatures.map((sig) => [sig.templateId, sig]));
         const documents = templates.map((t) => {
           const sig = signedByTemplate.get(t.id);
@@ -207,8 +238,8 @@ export const studentOnboardingController = {
           photo: student.photo,
           courses,
           profileCompletedAt: student.profileCompletedAt,
-          documentsCompletedAt: student.documentsCompletedAt,
-          onboardingApprovedAt: student.onboardingApprovedAt,
+          documentsCompletedAt: flags.documentsCompletedAt,
+          onboardingApprovedAt: flags.onboardingApprovedAt,
           dateOfBirth: student.dateOfBirth,
           gender: student.gender,
           address: student.address,
