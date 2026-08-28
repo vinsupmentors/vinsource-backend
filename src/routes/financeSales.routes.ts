@@ -9,6 +9,7 @@ router.use(requireModule('FINANCE_SALES', 'VIEW'));
 
 router.get('/stats', financeSalesController.stats);
 router.get('/dashboard', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.dashboard);
+router.get('/courses', financeSalesController.listCourses);
 router.get('/leads-search', financeSalesController.searchLeads);
 
 router.get('/plans', financeSalesController.listPlans);

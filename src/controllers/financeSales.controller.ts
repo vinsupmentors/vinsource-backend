@@ -222,6 +222,17 @@ export const financeSalesController = {
   // Production later does the real enrollment + assigns a proper studentCode
   // once the batch/course is confirmed, using the same Lead via leadId.
 
+  /** Distinct course/batch names across every fee declaration ever made —
+   * powers the course/batch filter dropdowns. Deliberately ignores whatever
+   * filters are currently applied so picking a batch never shrinks the list
+   * of batches to pick from. */
+  async listCourses(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const rows = await prisma.feePaymentPlan.findMany({ select: { courseName: true }, distinct: ['courseName'], orderBy: { courseName: 'asc' } });
+      res.json({ success: true, data: rows.map((r) => r.courseName) });
+    } catch (err) { next(err); }
+  },
+
   async searchLeads(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const q = String(req.query.q || '').trim();
@@ -273,7 +284,7 @@ export const financeSalesController = {
    * size here doesn't warrant raw SQL. */
   async dashboard(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { from, to } = req.query;
+      const { from, to, courseName, salesPersonId } = req.query;
       const where: Record<string, unknown> = {};
       if (from || to) {
         const range: Record<string, Date> = {};
@@ -281,6 +292,8 @@ export const financeSalesController = {
         if (to) { const end = new Date(String(to)); end.setHours(23, 59, 59, 999); range.lte = end; }
         where.createdAt = range;
       }
+      if (courseName) where.courseName = String(courseName);
+      if (salesPersonId) where.lead = { assignedToId: String(salesPersonId) };
 
       const plans = await prisma.feePaymentPlan.findMany({
         where,
