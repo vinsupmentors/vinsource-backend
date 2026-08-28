@@ -291,6 +291,7 @@ enum FeePlanStatus {
 
 enum FeeInstallmentStatus {
   PENDING
+  PENDING_APPROVAL
   PAID
   OVERDUE
   WAIVED
@@ -571,6 +572,7 @@ model Employee {
   feeCollections    FeeCollection[]     @relation("FeeCollector")
   feePlansCreated   FeePaymentPlan[]    @relation("FeePlanCreator")
   feeInstallmentsReceived FeeInstallment[] @relation("FeeInstallmentReceiver")
+  feeInstallmentsApproved FeeInstallment[] @relation("FeeInstallmentApprover")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
@@ -1545,11 +1547,13 @@ model FeePaymentPlan {
   installments FeeInstallment[]
 }
 
-/// One scheduled payment under a FeePaymentPlan. The first installment is
-/// created already PAID (the amount Sales just collected at intake); later
-/// ones start PENDING and flip to PAID as they're actually collected — each
-/// collection also creates a linked FeeCollection ledger row (so the existing
-/// Finance Sales totals/stats stay accurate) and triggers an emailed receipt.
+/// One scheduled payment under a FeePaymentPlan. The first installment (the
+/// advance collected at intake) and every later one flip to PENDING_APPROVAL
+/// the moment Sales collects it — money isn't treated as actually received
+/// until someone with FINANCE_SALES ADMIN access approves it, which is what
+/// creates the linked FeeCollection ledger row, flips status to PAID, and
+/// fires the receipt email. This keeps the ledger/stats reflecting confirmed
+/// money only, per how Sales asked collections to be verified.
 model FeeInstallment {
   id           String               @id @default(uuid())
   planId       String
@@ -1559,11 +1563,14 @@ model FeeInstallment {
   paidAt       DateTime?
   mode         PaymentMode?
   receivedById String?
+  approvedById String?
+  approvedAt   DateTime?
   collectionId String?              @unique
   createdAt    DateTime             @default(now())
 
   plan       FeePaymentPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
   receivedBy Employee?        @relation("FeeInstallmentReceiver", fields: [receivedById], references: [id])
+  approvedBy Employee?        @relation("FeeInstallmentApprover", fields: [approvedById], references: [id])
   collection FeeCollection?   @relation(fields: [collectionId], references: [id])
   reminders  FeeReminderLog[]
 

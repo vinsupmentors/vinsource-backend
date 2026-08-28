@@ -9,6 +9,10 @@ import { generateReceiptPdf, ReceiptTransaction } from '../utils/receiptPdf';
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 const leadSelect = { id: true, name: true, phone: true, email: true, city: true, assignedToId: true };
 
+// Always CC'd on every student bill/receipt email, alongside the sales
+// person mapped to that student (Lead.assignedTo).
+const OPS_CC_EMAIL = 'opsvinsup@gmail.com';
+
 const planInclude = {
   lead: { select: leadSelect },
   createdBy: { select: employeeSelect },
@@ -39,8 +43,19 @@ async function nextReceiptNo(date: Date): Promise<string> {
   return `VSA-${String(seq).padStart(6, '0')}/${mm}/${yyyy}-${Date.now()}`;
 }
 
-/** Build + email the cumulative receipt PDF for a plan after a payment lands. */
+/** Build + email the cumulative receipt PDF for a plan after a payment lands.
+ * Wrapped in try/catch end-to-end (not just around the send) — a throw
+ * anywhere in here (e.g. PDF generation) must never become a silent,
+ * unlogged unhandled rejection, since this is always called fire-and-forget. */
 async function emailReceipt(planId: string, paymentDate: Date) {
+  try {
+    await emailReceiptInner(planId, paymentDate);
+  } catch (err) {
+    console.error(`Fee receipt failed for plan ${planId}:`, err);
+  }
+}
+
+async function emailReceiptInner(planId: string, paymentDate: Date) {
   const plan = await prisma.feePaymentPlan.findUnique({
     where: { id: planId },
     include: {
@@ -72,9 +87,9 @@ async function emailReceipt(planId: string, paymentDate: Date) {
     transactions,
   });
 
-  const cc: string[] = [];
+  const cc: string[] = [OPS_CC_EMAIL];
   const advisorEmail = plan.lead.assignedTo?.email?.trim();
-  if (advisorEmail) cc.push(advisorEmail);
+  if (advisorEmail && advisorEmail.toLowerCase() !== OPS_CC_EMAIL.toLowerCase()) cc.push(advisorEmail);
 
   await emailService.send({
     to: email,
@@ -278,7 +293,13 @@ export const financeSalesController = {
         });
         leadId = lead.id;
       } else {
-        await prisma.lead.update({ where: { id: leadId }, data: { status: 'ENROLLED' } }).catch(() => {});
+        // Map this lead to whoever's adding the payment, but only if nobody
+        // already owns it — don't clobber an existing assignment.
+        const existing = await prisma.lead.findUnique({ where: { id: leadId }, select: { assignedToId: true } });
+        await prisma.lead.update({
+          where: { id: leadId },
+          data: { status: 'ENROLLED', assignedToId: existing?.assignedToId ?? (req.user?.employeeId || undefined) },
+        }).catch(() => {});
       }
 
       const paymentDate = firstPayment.collectedAt ? new Date(firstPayment.collectedAt) : new Date();
@@ -295,29 +316,18 @@ export const financeSalesController = {
           },
         });
 
-        const leadRow = await tx.lead.findUnique({ where: { id: leadId! }, select: { name: true } });
-        const collection = await tx.feeCollection.create({
-          data: {
-            leadId,
-            studentName: leadRow?.name || 'Student',
-            amount: firstAmount,
-            mode: firstPayment.mode || 'UPI',
-            receivedById,
-            collectedAt: paymentDate,
-            remarks: `Fee plan: ${courseName}`,
-          },
-        });
-
+        // The advance sits as PENDING_APPROVAL — no ledger row yet, no
+        // receipt yet. It only becomes real (FeeCollection created, status
+        // flips to PAID, receipt emailed) once Admin approves it.
         await tx.feeInstallment.create({
           data: {
             planId: created.id,
             dueDate: paymentDate,
             amount: firstAmount,
-            status: 'PAID',
+            status: 'PENDING_APPROVAL',
             paidAt: paymentDate,
             mode: firstPayment.mode || 'UPI',
             receivedById,
-            collectionId: collection.id,
           },
         });
 
@@ -331,21 +341,11 @@ export const financeSalesController = {
           }
         }
 
-        // A Full-payment plan has no installments array at all, so it's
-        // "done" the moment the first (only) payment covers the total.
-        // Part/EMI plans stay ACTIVE — completion for those is decided in
-        // collectInstallment once every scheduled installment is PAID.
-        if (type === 'FULL' && firstAmount >= total) {
-          await tx.feePaymentPlan.update({ where: { id: created.id }, data: { status: 'COMPLETED' } });
-        }
-
         return created;
       });
 
-      emailReceipt(plan.id, paymentDate);
-
       const full = await prisma.feePaymentPlan.findUnique({ where: { id: plan.id }, include: planInclude });
-      res.status(201).json({ success: true, data: full, message: 'Fee plan created. Receipt emailed.' });
+      res.status(201).json({ success: true, data: full, message: 'Student registered. Awaiting Admin approval of the advance before the receipt is emailed.' });
     } catch (err) { next(err); }
   },
 
@@ -412,47 +412,97 @@ export const financeSalesController = {
     try {
       const installment = await prisma.feeInstallment.findUnique({ where: { id: req.params.id } });
       if (!installment) throw new AppError('Installment not found', 404);
-      if (installment.status === 'PAID') throw new AppError('A collected installment cannot be deleted — cancel the plan instead if this was a mistake', 400);
+      if (installment.status === 'PAID' || installment.status === 'PENDING_APPROVAL') {
+        throw new AppError('A collected installment cannot be deleted — cancel the plan instead if this was a mistake', 400);
+      }
       await prisma.feeInstallment.delete({ where: { id: req.params.id } });
       res.json({ success: true, message: 'Installment removed' });
     } catch (err) { next(err); }
   },
 
-  /** Sales marks an installment collected — creates the linked FeeCollection
-   * ledger row, flips the installment to PAID, marks the plan COMPLETED once
-   * everything's in, and emails an updated cumulative receipt. */
+  /** Sales marks an installment collected — holds it at PENDING_APPROVAL with
+   * the amount/mode/collector recorded. No ledger row and no receipt yet;
+   * those only happen once Admin approves it via approveInstallment. */
   async collectInstallment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const installment = await prisma.feeInstallment.findUnique({
+        where: { id: req.params.id },
+        include: { plan: { include: { lead: { select: { id: true, assignedToId: true } } } } },
+      });
+      if (!installment) throw new AppError('Installment not found', 404);
+      if (installment.status === 'PAID' || installment.status === 'PENDING_APPROVAL') {
+        throw new AppError('This installment has already been collected', 400);
+      }
+
+      const { amount, mode, collectedAt } = req.body;
+      const paidAmount = amount !== undefined ? Number(amount) : installment.amount;
+      const paymentDate = collectedAt ? new Date(collectedAt) : new Date();
+      const receiver = req.user?.employeeId || undefined;
+
+      if (!installment.plan.lead.assignedToId && receiver) {
+        await prisma.lead.update({ where: { id: installment.plan.leadId }, data: { assignedToId: receiver } }).catch(() => {});
+      }
+
+      await prisma.feeInstallment.update({
+        where: { id: installment.id },
+        data: { status: 'PENDING_APPROVAL', paidAt: paymentDate, amount: paidAmount, mode: mode || 'UPI', receivedById: receiver },
+      });
+
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: installment.planId }, include: planInclude });
+      res.json({ success: true, data: plan, message: 'Payment recorded. Awaiting Admin approval before the receipt is emailed.' });
+    } catch (err) { next(err); }
+  },
+
+  /** Lists every installment collected by Sales but not yet confirmed by
+   * Admin — the approval queue. */
+  async listApprovals(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const installments = await prisma.feeInstallment.findMany({
+        where: { status: 'PENDING_APPROVAL' },
+        include: {
+          receivedBy: { select: employeeSelect },
+          plan: { select: { id: true, courseName: true, totalFee: true, planType: true, lead: { select: leadSelect } } },
+        },
+        orderBy: { paidAt: 'asc' },
+      });
+      res.json({ success: true, data: installments });
+    } catch (err) { next(err); }
+  },
+
+  /** Admin confirms money was actually received: creates the FeeCollection
+   * ledger row (so stats/ledger only ever reflect confirmed collections),
+   * flips the installment to PAID, marks the plan COMPLETED if nothing's
+   * left outstanding, and emails the receipt — CC'd to Ops + the sales
+   * person mapped to the student. */
+  async approveInstallment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const installment = await prisma.feeInstallment.findUnique({
         where: { id: req.params.id },
         include: { plan: { include: { lead: { select: { name: true } } } } },
       });
       if (!installment) throw new AppError('Installment not found', 404);
-      if (installment.status === 'PAID') throw new AppError('This installment is already marked as collected', 400);
+      if (installment.status !== 'PENDING_APPROVAL') throw new AppError('This installment is not awaiting approval', 400);
 
-      const { amount, mode, receivedById, collectedAt } = req.body;
-      const paidAmount = amount !== undefined ? Number(amount) : installment.amount;
-      const paymentDate = collectedAt ? new Date(collectedAt) : new Date();
-      const receiver = receivedById || req.user?.employeeId || undefined;
+      const paymentDate = installment.paidAt || new Date();
 
       await prisma.$transaction(async (tx) => {
         const collection = await tx.feeCollection.create({
           data: {
             leadId: installment.plan.leadId,
             studentName: installment.plan.lead.name,
-            amount: paidAmount,
-            mode: mode || 'UPI',
-            receivedById: receiver,
+            amount: installment.amount,
+            mode: installment.mode || 'UPI',
+            receivedById: installment.receivedById || undefined,
             collectedAt: paymentDate,
             remarks: `Fee plan: ${installment.plan.courseName}`,
           },
         });
         await tx.feeInstallment.update({
           where: { id: installment.id },
-          data: { status: 'PAID', paidAt: paymentDate, amount: paidAmount, mode: mode || 'UPI', receivedById: receiver, collectionId: collection.id },
+          data: { status: 'PAID', collectionId: collection.id, approvedById: req.user?.employeeId, approvedAt: new Date() },
         });
 
-        const remaining = await tx.feeInstallment.count({ where: { planId: installment.planId, status: { in: ['PENDING', 'OVERDUE'] } } });
+        const remaining = await tx.feeInstallment.count({ where: { planId: installment.planId, status: { in: ['PENDING', 'OVERDUE', 'PENDING_APPROVAL'] } } });
         if (remaining === 0) {
           await tx.feePaymentPlan.update({ where: { id: installment.planId }, data: { status: 'COMPLETED' } });
         }
@@ -461,7 +511,7 @@ export const financeSalesController = {
       emailReceipt(installment.planId, paymentDate);
 
       const plan = await prisma.feePaymentPlan.findUnique({ where: { id: installment.planId }, include: planInclude });
-      res.json({ success: true, data: plan, message: 'Payment recorded. Receipt emailed.' });
+      res.json({ success: true, data: plan, message: 'Payment approved. Receipt emailed.' });
     } catch (err) { next(err); }
   },
 };

@@ -40,7 +40,12 @@ function fmtDate(d: Date): string {
 }
 
 function fmtMoney(n: number): string {
-  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // NOTE: deliberately "Rs." not "₹" — pdf-lib's standard Helvetica font only
+  // supports WinAnsi encoding, which has no Rupee-sign glyph. Drawing "₹"
+  // with a standard font throws inside pdf-lib, which silently kills the
+  // whole receipt email (the throw happens before emailService.send is ever
+  // called, so nothing gets logged either).
+  return `Rs. ${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function drawWrapped(page: PDFPage, font: PDFFont, text: string, x: number, y: number, maxWidth: number, size: number, lineHeight: number, color = rgb(0, 0, 0)) {

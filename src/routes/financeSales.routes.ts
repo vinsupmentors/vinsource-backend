@@ -21,6 +21,11 @@ router.put('/installments/:id', requireModule('FINANCE_SALES', 'EDIT'), financeS
 router.delete('/installments/:id', requireModule('FINANCE_SALES', 'EDIT'), financeSalesController.removeInstallment);
 router.post('/installments/:id/collect', requireModule('FINANCE_SALES', 'EDIT'), financeSalesController.collectInstallment);
 
+// Admin approval queue — confirms money was actually received before it
+// hits the ledger and the receipt goes out.
+router.get('/approvals', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listApprovals);
+router.post('/installments/:id/approve', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.approveInstallment);
+
 router.get('/', financeSalesController.list);
 router.post('/', requireModule('FINANCE_SALES', 'EDIT'), financeSalesController.create);
 router.put('/:id', requireModule('FINANCE_SALES', 'EDIT'), financeSalesController.update);
