@@ -469,6 +469,23 @@ export const financeSalesController = {
     } catch (err) { next(err); }
   },
 
+  /** History of every installment an Admin has approved. */
+  async listApprovalHistory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const installments = await prisma.feeInstallment.findMany({
+        where: { approvedAt: { not: null } },
+        include: {
+          receivedBy: { select: employeeSelect },
+          approvedBy: { select: employeeSelect },
+          plan: { select: { id: true, courseName: true, totalFee: true, planType: true, lead: { select: leadSelect } } },
+        },
+        orderBy: { approvedAt: 'desc' },
+        take: 200,
+      });
+      res.json({ success: true, data: installments });
+    } catch (err) { next(err); }
+  },
+
   /** Admin confirms money was actually received: creates the FeeCollection
    * ledger row (so stats/ledger only ever reflect confirmed collections),
    * flips the installment to PAID, marks the plan COMPLETED if nothing's
@@ -577,6 +594,19 @@ export const financeSalesController = {
     } catch (err) { next(err); }
   },
 
+  /** History of every completed refund. */
+  async listRefundHistory(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plans = await prisma.feePaymentPlan.findMany({
+        where: { refundCompletedAt: { not: null } },
+        include: { ...planInclude, refundRequestedBy: { select: employeeSelect }, refundCompletedBy: { select: employeeSelect } },
+        orderBy: { refundCompletedAt: 'desc' },
+        take: 200,
+      });
+      res.json({ success: true, data: plans });
+    } catch (err) { next(err); }
+  },
+
   async rejectRefund(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
@@ -628,15 +658,57 @@ export const financeSalesController = {
 
   async approveDeletePlan(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      const plan = await prisma.feePaymentPlan.findUnique({
+        where: { id: req.params.id },
+        include: { lead: { select: { name: true, phone: true } }, installments: { where: { status: 'PAID' } } },
+      });
       if (!plan) throw new AppError('Fee plan not found', 404);
       if (!plan.deletionRequestedAt) throw new AppError('This plan has no pending deletion request.', 409);
-      // Cascades to FeeInstallment/FeeReminderLog. FeeCollection ledger rows
-      // are left in place (nothing references them from this side) so the
-      // Collections Ledger / stats history stays intact even after the plan
-      // itself is gone.
-      await prisma.feePaymentPlan.delete({ where: { id: req.params.id } });
+
+      const totalPaid = plan.installments.reduce((sum, i) => sum + i.amount, 0);
+
+      await prisma.$transaction([
+        // Snapshot first — the plan row (and the requester/approver info
+        // living on it) is about to be gone for good.
+        prisma.feePlanDeletionLog.create({
+          data: {
+            planId: plan.id,
+            leadName: plan.lead.name,
+            leadPhone: plan.lead.phone,
+            courseName: plan.courseName,
+            totalFee: plan.totalFee,
+            planType: plan.planType,
+            status: plan.status,
+            totalPaid,
+            deletionReason: plan.deletionReason,
+            requestedAt: plan.deletionRequestedAt,
+            requestedById: plan.deletionRequestedById,
+            approvedById: req.user?.employeeId,
+          },
+        }),
+        // Cascades to FeeInstallment/FeeReminderLog. FeeCollection ledger
+        // rows are left in place (nothing references them from this side)
+        // so the Collections Ledger / stats history stays intact even after
+        // the plan itself is gone.
+        prisma.feePaymentPlan.delete({ where: { id: req.params.id } }),
+      ]);
       res.json({ success: true, message: 'Fee plan deleted.' });
+    } catch (err) { next(err); }
+  },
+
+  /** Permanent audit trail of deleted fee declarations — the plan rows
+   * themselves are gone, this reads from the snapshot log instead. */
+  async listDeletionLog(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const logs = await prisma.feePlanDeletionLog.findMany({
+        include: {
+          requestedBy: { select: employeeSelect },
+          approvedBy: { select: employeeSelect },
+        },
+        orderBy: { approvedAt: 'desc' },
+        take: 200,
+      });
+      res.json({ success: true, data: logs });
     } catch (err) { next(err); }
   },
 

@@ -577,6 +577,8 @@ model Employee {
   feePlanRefundRequests   FeePaymentPlan[] @relation("FeePlanRefundRequester")
   feePlanRefundCompletions FeePaymentPlan[] @relation("FeePlanRefundCompleter")
   feePlanDeletionRequests FeePaymentPlan[] @relation("FeePlanDeletionRequester")
+  feePlanDeletionLogsRequested FeePlanDeletionLog[] @relation("FeePlanDeletionLogRequester")
+  feePlanDeletionLogsApproved  FeePlanDeletionLog[] @relation("FeePlanDeletionLogApprover")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
@@ -1602,6 +1604,32 @@ model FeeInstallment {
 
   @@index([planId])
   @@index([dueDate])
+}
+
+/// Permanent snapshot of a deleted FeePaymentPlan — the plan row itself is
+/// gone once approveDeletePlan runs, so this is the only place "who deleted
+/// what, and why" survives. Same pattern as StudentDeletionLog.
+model FeePlanDeletionLog {
+  id         String   @id @default(uuid())
+  planId     String // original FeePaymentPlan.id, kept for reference only (row no longer exists)
+  leadName   String
+  leadPhone  String
+  courseName String
+  totalFee   Float
+  planType   String
+  status     String
+  totalPaid  Float
+
+  deletionReason String?  @db.Text
+  requestedAt    DateTime
+  requestedById  String?
+  approvedAt     DateTime @default(now())
+  approvedById   String?
+
+  requestedBy Employee? @relation("FeePlanDeletionLogRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedBy  Employee? @relation("FeePlanDeletionLogApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([planId])
 }
 
 /// Dedupe log so the daily fee-reminder cron never sends the same T-5 / due

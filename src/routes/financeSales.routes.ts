@@ -24,17 +24,20 @@ router.post('/installments/:id/collect', requireModule('FINANCE_SALES', 'EDIT'),
 // Admin approval queue — confirms money was actually received before it
 // hits the ledger and the receipt goes out.
 router.get('/approvals', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listApprovals);
+router.get('/approval-history', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listApprovalHistory);
 router.post('/installments/:id/approve', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.approveInstallment);
 
 // Refund — Sales requests, Admin does the transfer and completes it.
 router.post('/plans/:id/refund', requireModule('FINANCE_SALES', 'EDIT'), financeSalesController.requestRefund);
 router.get('/refund-requests', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listRefundRequests);
+router.get('/refund-history', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listRefundHistory);
 router.post('/plans/:id/refund/complete', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.completeRefund);
 router.post('/plans/:id/refund/reject', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.rejectRefund);
 
 // Delete — Sales requests, only Admin-level access can approve the actual delete.
 router.post('/plans/:id/delete-request', requireModule('FINANCE_SALES', 'EDIT'), financeSalesController.requestDeletePlan);
 router.get('/deletion-requests', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listDeletionRequests);
+router.get('/deletion-log', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listDeletionLog);
 router.post('/plans/:id/delete-request/approve', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.approveDeletePlan);
 router.post('/plans/:id/delete-request/reject', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.rejectDeletePlan);
 
