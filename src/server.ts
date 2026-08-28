@@ -11,6 +11,7 @@ import { attendanceCronService } from './services/attendanceCron.service';
 import { passwordReminderService } from './services/passwordReminder.service';
 import { checkoutReminderService } from './services/checkoutReminder.service';
 import { salesCronService } from './services/salesCron.service';
+import { feeReminderService } from './services/feeReminder.service';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -140,6 +141,20 @@ const start = async () => {
         }
       } catch (err) {
         console.error('Sales pulse cron job failed:', err);
+      }
+    }, { timezone: 'Asia/Kolkata' });
+
+    // Fee payment reminders — runs every day at 9:15 AM India time. T-5 /
+    // due-date / overdue emails for every pending installment on an ACTIVE
+    // fee plan, CC'd to the lead's Skill Advisor, deduped via FeeReminderLog.
+    cron.schedule('15 9 * * *', async () => {
+      try {
+        const result = await feeReminderService.sendDueReminders();
+        if (result.sent > 0) {
+          console.log(`💰 Fee payment reminders sent: ${result.sent} (checked ${result.checked})`);
+        }
+      } catch (err) {
+        console.error('Fee reminder cron job failed:', err);
       }
     }, { timezone: 'Asia/Kolkata' });
   } catch (err) {

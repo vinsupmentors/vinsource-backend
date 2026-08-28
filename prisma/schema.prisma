@@ -277,6 +277,31 @@ enum ExpenseStatus {
   PAID
 }
 
+enum FeePlanType {
+  FULL
+  PART
+  EMI
+}
+
+enum FeePlanStatus {
+  ACTIVE
+  CANCELLED
+  COMPLETED
+}
+
+enum FeeInstallmentStatus {
+  PENDING
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+enum FeeReminderType {
+  T5
+  DUE
+  OVERDUE
+}
+
 enum BatchStatus {
   UPCOMING
   ONGOING
@@ -544,6 +569,8 @@ model Employee {
   salesTargets      SalesTarget[]       @relation("SalesTargetOwner")
   salesTargetsSet   SalesTarget[]       @relation("SalesTargetSetBy")
   feeCollections    FeeCollection[]     @relation("FeeCollector")
+  feePlansCreated   FeePaymentPlan[]    @relation("FeePlanCreator")
+  feeInstallmentsReceived FeeInstallment[] @relation("FeeInstallmentReceiver")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
@@ -1329,6 +1356,7 @@ model Lead {
   callLogs    LeadCallLog[]
   collections FeeCollection[]
   students    Student[]
+  feePaymentPlans FeePaymentPlan[]
 }
 
 /// One row per call a BDA logs against a lead — this is the permanent history
@@ -1487,6 +1515,75 @@ model FeeCollection {
 
   lead       Lead?     @relation(fields: [leadId], references: [id])
   receivedBy Employee? @relation("FeeCollector", fields: [receivedById], references: [id])
+  installment FeeInstallment?
+}
+
+/// A Lead's fee arrangement — Full / Part-payment / EMI — captured by Sales
+/// the moment a new student joins and the first payment is collected, before
+/// Production has done a formal enrollment. Deliberately lives on the Lead
+/// (not Student): a dropped admission, a refund, or a track "flip" never has
+/// to touch enrollment data, cancelling the plan here is enough. Once
+/// Production does enroll the person, the same Lead is linked from
+/// Student.leadId, so this history stays reachable from the real record too.
+model FeePaymentPlan {
+  id         String        @id @default(uuid())
+  leadId     String
+  courseName String
+  totalFee   Float
+  planType   FeePlanType   @default(FULL)
+  // EMI plans carry an interest amount, but it's filled in afterward by
+  // whoever handles EMI cases (not necessarily the BDA who took the first
+  // payment) — left null until then rather than guessed at creation time.
+  interestAmount Float?
+  status         FeePlanStatus @default(ACTIVE)
+  createdById    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  lead         Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy    Employee?        @relation("FeePlanCreator", fields: [createdById], references: [id])
+  installments FeeInstallment[]
+}
+
+/// One scheduled payment under a FeePaymentPlan. The first installment is
+/// created already PAID (the amount Sales just collected at intake); later
+/// ones start PENDING and flip to PAID as they're actually collected — each
+/// collection also creates a linked FeeCollection ledger row (so the existing
+/// Finance Sales totals/stats stay accurate) and triggers an emailed receipt.
+model FeeInstallment {
+  id           String               @id @default(uuid())
+  planId       String
+  dueDate      DateTime
+  amount       Float
+  status       FeeInstallmentStatus @default(PENDING)
+  paidAt       DateTime?
+  mode         PaymentMode?
+  receivedById String?
+  collectionId String?              @unique
+  createdAt    DateTime             @default(now())
+
+  plan       FeePaymentPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  receivedBy Employee?        @relation("FeeInstallmentReceiver", fields: [receivedById], references: [id])
+  collection FeeCollection?   @relation(fields: [collectionId], references: [id])
+  reminders  FeeReminderLog[]
+
+  @@index([planId])
+  @@index([dueDate])
+}
+
+/// Dedupe log so the daily fee-reminder cron never sends the same T-5 / due
+/// date / overdue email twice on the same day — same pattern as
+/// DeadlineReminderLog / AttendanceEscalationLog.
+model FeeReminderLog {
+  id            String          @id @default(uuid())
+  installmentId String
+  type          FeeReminderType
+  asOfDate      DateTime
+  sentAt        DateTime        @default(now())
+
+  installment FeeInstallment @relation(fields: [installmentId], references: [id], onDelete: Cascade)
+
+  @@unique([installmentId, type, asOfDate])
 }
 
 // ─── FINANCE (ADMIN) — internal expenses/budget ──────────────────────────────

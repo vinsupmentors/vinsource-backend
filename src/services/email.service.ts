@@ -713,6 +713,49 @@ export const emailService = {
         </div>
       </div>`,
 
+    feeReceipt: (data: { name: string; receiptNo: string; totalFee: number; totalPaid: number; amountDue: number; courseName: string }) => `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:#1e3a8a;padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">🧾 Payment Receipt — ${data.receiptNo}</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.name},</p>
+          <p>Thank you for your payment towards <strong>${data.courseName}</strong>. Your receipt is attached to this email as a PDF.</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Total Fee</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">₹${data.totalFee.toLocaleString('en-IN')}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f0fdf4;"><strong>Total Paid</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#f0fdf4;">₹${data.totalPaid.toLocaleString('en-IN')}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:${data.amountDue > 0 ? '#fef3c7' : '#f0fdf4'};"><strong>Amount Due</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:${data.amountDue > 0 ? '#fef3c7' : '#f0fdf4'};">₹${data.amountDue.toLocaleString('en-IN')}</td></tr>
+          </table>
+          <p style="color:#6b7280;font-size:12px;">Vinsup Skill Academy — Sales Finance</p>
+        </div>
+      </div>`,
+
+    feePaymentReminder: (data: { name: string; courseName: string; amount: number; dueDate: string; kind: 'T5' | 'DUE' | 'OVERDUE'; daysOverdue?: number }) => {
+      const heading = data.kind === 'T5'
+        ? `⏰ Payment due in 5 days`
+        : data.kind === 'DUE'
+        ? `⏰ Payment due today`
+        : `🚨 Payment overdue${data.daysOverdue ? ` — ${data.daysOverdue} day${data.daysOverdue === 1 ? '' : 's'}` : ''}`;
+      const color = data.kind === 'OVERDUE' ? '#dc2626' : '#d97706';
+      return `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <div style="background:${color};padding:24px;">
+          <h1 style="color:#fff;margin:0;font-size:22px;">${heading}</h1>
+        </div>
+        <div style="padding:24px;">
+          <p>Dear ${data.name},</p>
+          <p>This is a reminder about your pending installment for <strong>${data.courseName}</strong>:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Amount</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">₹${data.amount.toLocaleString('en-IN')}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Due Date</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.dueDate}</strong></td></tr>
+          </table>
+          <p style="background:#fef2f2;padding:12px;border-radius:6px;border-left:4px solid ${color};">
+            Please arrange the payment at the earliest to avoid any interruption to your training. Contact your Skill Advisor if you have any questions.
+          </p>
+        </div>
+      </div>`;
+    },
+
     attendanceEscalation: (data: {
       studentName: string;
       studentCode: string;
