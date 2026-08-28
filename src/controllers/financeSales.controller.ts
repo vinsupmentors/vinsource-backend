@@ -238,18 +238,138 @@ export const financeSalesController = {
 
   async listPlans(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { status, search } = req.query;
+      const { status, search, salesPersonId, courseName, planType, from, to } = req.query;
       const where: Record<string, unknown> = {};
       if (status) where.status = status;
-      if (search) {
-        where.lead = { OR: [{ name: { contains: String(search) } }, { phone: { contains: String(search) } }] };
+      if (planType) where.planType = planType;
+      if (courseName) where.courseName = String(courseName);
+      if (from || to) {
+        const range: Record<string, Date> = {};
+        if (from) range.gte = new Date(String(from));
+        if (to) { const end = new Date(String(to)); end.setHours(23, 59, 59, 999); range.lte = end; }
+        where.createdAt = range;
       }
+      const leadWhere: Record<string, unknown> = {};
+      if (salesPersonId) leadWhere.assignedToId = String(salesPersonId);
+      if (search) leadWhere.OR = [{ name: { contains: String(search) } }, { phone: { contains: String(search) } }];
+      if (Object.keys(leadWhere).length) where.lead = leadWhere;
+
       const plans = await prisma.feePaymentPlan.findMany({
         where,
         include: planInclude,
         orderBy: { createdAt: 'desc' },
       });
       res.json({ success: true, data: plans });
+    } catch (err) { next(err); }
+  },
+
+  /** Cross-cutting KPI dashboard: revenue collected/outstanding overall, by
+   * sales person, and by course (the closest thing to a "batch" fee
+   * declarations actually capture — courseName is free text entered at
+   * intake, there's no FK to the real Batch/enrollment tables from here),
+   * plus EMI default tracking. Deliberately aggregated in JS off one query
+   * rather than several groupBys — sales-person/course breakdowns need the
+   * Lead relation, which Prisma's groupBy can't traverse, and the dataset
+   * size here doesn't warrant raw SQL. */
+  async dashboard(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { from, to } = req.query;
+      const where: Record<string, unknown> = {};
+      if (from || to) {
+        const range: Record<string, Date> = {};
+        if (from) range.gte = new Date(String(from));
+        if (to) { const end = new Date(String(to)); end.setHours(23, 59, 59, 999); range.lte = end; }
+        where.createdAt = range;
+      }
+
+      const plans = await prisma.feePaymentPlan.findMany({
+        where,
+        include: {
+          lead: { select: { assignedToId: true, assignedTo: { select: employeeSelect }, name: true, phone: true } },
+          installments: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const overview = {
+        totalStudents: plans.length,
+        activeCount: 0, completedCount: 0, cancelledCount: 0, refundedCount: 0,
+        totalFeeValue: 0, totalCollected: 0, totalAwaitingApproval: 0, totalOutstanding: 0, totalRefunded: 0,
+        pendingApprovalsCount: 0, pendingRefundRequests: 0, pendingDeletionRequests: 0,
+      };
+
+      type Bucket = { key: string; label: string; sub?: string; studentCount: number; totalFeeValue: number; collected: number; awaitingApproval: number; outstanding: number };
+      const bySalesPerson = new Map<string, Bucket>();
+      const byCourse = new Map<string, Bucket>();
+
+      const overdueInstallments: Array<{ id: string; studentName: string; studentPhone: string; courseName: string; amount: number; dueDate: Date; assignedTo: { firstName: string; lastName: string } | null }> = [];
+      let emiTotalDueSoFar = 0, emiOverdue = 0, emiPlansCount = 0;
+
+      for (const plan of plans) {
+        if (plan.status === 'ACTIVE') overview.activeCount++;
+        else if (plan.status === 'COMPLETED') overview.completedCount++;
+        else if (plan.status === 'CANCELLED') overview.cancelledCount++;
+        else if (plan.status === 'REFUNDED') overview.refundedCount++;
+
+        const collected = plan.installments.filter((i) => i.status === 'PAID').reduce((s, i) => s + i.amount, 0);
+        const awaiting = plan.installments.filter((i) => i.status === 'PENDING_APPROVAL').reduce((s, i) => s + i.amount, 0);
+        const outstanding = plan.status === 'ACTIVE' ? Math.max(0, plan.totalFee - collected - awaiting) : 0;
+
+        overview.totalFeeValue += plan.totalFee;
+        overview.totalCollected += collected;
+        overview.totalAwaitingApproval += awaiting;
+        overview.totalOutstanding += outstanding;
+        if (plan.status === 'REFUNDED' && plan.refundAmount) overview.totalRefunded += plan.refundAmount;
+        overview.pendingApprovalsCount += plan.installments.filter((i) => i.status === 'PENDING_APPROVAL').length;
+        if (plan.refundRequestedAt && !plan.refundCompletedAt) overview.pendingRefundRequests++;
+        if (plan.deletionRequestedAt) overview.pendingDeletionRequests++;
+
+        const spId = plan.lead.assignedToId || '__unassigned__';
+        const spLabel = plan.lead.assignedTo ? `${plan.lead.assignedTo.firstName} ${plan.lead.assignedTo.lastName}` : 'Unassigned';
+        if (!bySalesPerson.has(spId)) bySalesPerson.set(spId, { key: spId, label: spLabel, sub: plan.lead.assignedTo?.employeeCode, studentCount: 0, totalFeeValue: 0, collected: 0, awaitingApproval: 0, outstanding: 0 });
+        const spBucket = bySalesPerson.get(spId)!;
+        spBucket.studentCount++; spBucket.totalFeeValue += plan.totalFee; spBucket.collected += collected; spBucket.awaitingApproval += awaiting; spBucket.outstanding += outstanding;
+
+        const courseKey = plan.courseName || 'Unspecified';
+        if (!byCourse.has(courseKey)) byCourse.set(courseKey, { key: courseKey, label: courseKey, studentCount: 0, totalFeeValue: 0, collected: 0, awaitingApproval: 0, outstanding: 0 });
+        const courseBucket = byCourse.get(courseKey)!;
+        courseBucket.studentCount++; courseBucket.totalFeeValue += plan.totalFee; courseBucket.collected += collected; courseBucket.awaitingApproval += awaiting; courseBucket.outstanding += outstanding;
+
+        if (plan.planType === 'EMI') {
+          emiPlansCount++;
+          const now = new Date();
+          for (const inst of plan.installments) {
+            const isDue = inst.dueDate <= now;
+            if (!isDue) continue;
+            if (inst.status === 'PAID') { emiTotalDueSoFar++; }
+            else if (inst.status === 'OVERDUE' || inst.status === 'PENDING') {
+              emiTotalDueSoFar++; emiOverdue++;
+              overdueInstallments.push({
+                id: inst.id, studentName: plan.lead.name, studentPhone: plan.lead.phone, courseName: plan.courseName,
+                amount: inst.amount, dueDate: inst.dueDate, assignedTo: plan.lead.assignedTo,
+              });
+            }
+          }
+        }
+      }
+
+      overdueInstallments.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+
+      res.json({
+        success: true,
+        data: {
+          overview,
+          bySalesPerson: Array.from(bySalesPerson.values()).sort((a, b) => b.outstanding - a.outstanding),
+          byCourse: Array.from(byCourse.values()).sort((a, b) => b.outstanding - a.outstanding),
+          emi: {
+            emiPlansCount,
+            totalDueSoFar: emiTotalDueSoFar,
+            overdueCount: emiOverdue,
+            defaultRatePct: emiTotalDueSoFar > 0 ? Math.round((emiOverdue / emiTotalDueSoFar) * 1000) / 10 : 0,
+            overdueInstallments: overdueInstallments.slice(0, 100),
+          },
+        },
+      });
     } catch (err) { next(err); }
   },
 
