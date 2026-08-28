@@ -514,4 +514,142 @@ export const financeSalesController = {
       res.json({ success: true, data: plan, message: 'Payment approved. Receipt emailed.' });
     } catch (err) { next(err); }
   },
+
+  // ── Refund: Sales requests it, Admin does the transfer outside the app
+  // and marks it completed. ────────────────────────────────────────────────
+
+  async requestRefund(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { amount, reason } = req.body;
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      if (plan.refundRequestedAt && !plan.refundCompletedAt) {
+        throw new AppError('A refund request for this plan is already pending admin approval.', 409);
+      }
+      const updated = await prisma.feePaymentPlan.update({
+        where: { id: req.params.id },
+        data: {
+          refundRequestedAt: new Date(),
+          refundRequestedById: req.user?.employeeId || null,
+          refundAmount: amount !== undefined && amount !== '' && amount !== null ? Number(amount) : null,
+          refundReason: (reason && String(reason).trim()) || null,
+          refundCompletedAt: null,
+          refundCompletedById: null,
+        },
+        include: planInclude,
+      });
+      res.json({ success: true, data: updated, message: 'Refund request submitted for admin approval.' });
+    } catch (err) { next(err); }
+  },
+
+  async listRefundRequests(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plans = await prisma.feePaymentPlan.findMany({
+        where: { refundRequestedAt: { not: null }, refundCompletedAt: null },
+        include: { ...planInclude, refundRequestedBy: { select: employeeSelect } },
+        orderBy: { refundRequestedAt: 'desc' },
+      });
+      res.json({ success: true, data: plans });
+    } catch (err) { next(err); }
+  },
+
+  /** Admin confirms the money's actually been transferred back — waives
+   * whatever was still scheduled and flips the plan to REFUNDED. */
+  async completeRefund(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      if (!plan.refundRequestedAt || plan.refundCompletedAt) {
+        throw new AppError('This plan has no pending refund request.', 409);
+      }
+      await prisma.$transaction([
+        prisma.feePaymentPlan.update({
+          where: { id: req.params.id },
+          data: { status: 'REFUNDED', refundCompletedAt: new Date(), refundCompletedById: req.user?.employeeId },
+        }),
+        prisma.feeInstallment.updateMany({
+          where: { planId: req.params.id, status: { in: ['PENDING', 'OVERDUE'] } },
+          data: { status: 'WAIVED' },
+        }),
+      ]);
+      const full = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id }, include: planInclude });
+      res.json({ success: true, data: full, message: 'Refund marked as completed.' });
+    } catch (err) { next(err); }
+  },
+
+  async rejectRefund(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      if (!plan.refundRequestedAt || plan.refundCompletedAt) {
+        throw new AppError('This plan has no pending refund request.', 409);
+      }
+      await prisma.feePaymentPlan.update({
+        where: { id: req.params.id },
+        data: { refundRequestedAt: null, refundRequestedById: null, refundAmount: null, refundReason: null },
+      });
+      res.json({ success: true, message: 'Refund request rejected.' });
+    } catch (err) { next(err); }
+  },
+
+  // ── Delete: Sales requests it, only Admin-level access can actually
+  // remove the plan — same pattern as Student deletion elsewhere. ──────────
+
+  async requestDeletePlan(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { reason } = req.body;
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      if (plan.deletionRequestedAt) {
+        throw new AppError('A deletion request for this plan is already pending admin approval.', 409);
+      }
+      await prisma.feePaymentPlan.update({
+        where: { id: req.params.id },
+        data: {
+          deletionRequestedAt: new Date(),
+          deletionRequestedById: req.user?.employeeId || null,
+          deletionReason: (reason && String(reason).trim()) || null,
+        },
+      });
+      res.json({ success: true, message: 'Deletion request submitted for admin approval.' });
+    } catch (err) { next(err); }
+  },
+
+  async listDeletionRequests(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plans = await prisma.feePaymentPlan.findMany({
+        where: { deletionRequestedAt: { not: null } },
+        include: { ...planInclude, deletionRequestedBy: { select: employeeSelect } },
+        orderBy: { deletionRequestedAt: 'desc' },
+      });
+      res.json({ success: true, data: plans });
+    } catch (err) { next(err); }
+  },
+
+  async approveDeletePlan(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      if (!plan.deletionRequestedAt) throw new AppError('This plan has no pending deletion request.', 409);
+      // Cascades to FeeInstallment/FeeReminderLog. FeeCollection ledger rows
+      // are left in place (nothing references them from this side) so the
+      // Collections Ledger / stats history stays intact even after the plan
+      // itself is gone.
+      await prisma.feePaymentPlan.delete({ where: { id: req.params.id } });
+      res.json({ success: true, message: 'Fee plan deleted.' });
+    } catch (err) { next(err); }
+  },
+
+  async rejectDeletePlan(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      if (!plan.deletionRequestedAt) throw new AppError('This plan has no pending deletion request.', 409);
+      await prisma.feePaymentPlan.update({
+        where: { id: req.params.id },
+        data: { deletionRequestedAt: null, deletionRequestedById: null, deletionReason: null },
+      });
+      res.json({ success: true, message: 'Deletion request rejected.' });
+    } catch (err) { next(err); }
+  },
 };

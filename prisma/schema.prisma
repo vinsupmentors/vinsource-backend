@@ -287,6 +287,7 @@ enum FeePlanStatus {
   ACTIVE
   CANCELLED
   COMPLETED
+  REFUNDED
 }
 
 enum FeeInstallmentStatus {
@@ -573,6 +574,9 @@ model Employee {
   feePlansCreated   FeePaymentPlan[]    @relation("FeePlanCreator")
   feeInstallmentsReceived FeeInstallment[] @relation("FeeInstallmentReceiver")
   feeInstallmentsApproved FeeInstallment[] @relation("FeeInstallmentApprover")
+  feePlanRefundRequests   FeePaymentPlan[] @relation("FeePlanRefundRequester")
+  feePlanRefundCompletions FeePaymentPlan[] @relation("FeePlanRefundCompleter")
+  feePlanDeletionRequests FeePaymentPlan[] @relation("FeePlanDeletionRequester")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
@@ -1542,8 +1546,30 @@ model FeePaymentPlan {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
+  // Refund: Sales initiates (records the amount/reason the student asked
+  // for), Admin does the actual money transfer outside the app and marks it
+  // completed — which also waives anything still scheduled and flips status
+  // to REFUNDED. Kept as separate request/complete fields (not just a status
+  // value) so there's a record of who asked and who paid it out.
+  refundRequestedAt    DateTime?
+  refundRequestedById  String?
+  refundAmount         Float?
+  refundReason         String?   @db.Text
+  refundCompletedAt    DateTime?
+  refundCompletedById  String?
+
+  // Delete: same two-step pattern used for Student deletion elsewhere in
+  // this app — anyone with edit access can request it, only Admin-level
+  // access can actually remove the record.
+  deletionRequestedAt   DateTime?
+  deletionRequestedById String?
+  deletionReason        String?   @db.Text
+
   lead         Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
   createdBy    Employee?        @relation("FeePlanCreator", fields: [createdById], references: [id])
+  refundRequestedBy   Employee? @relation("FeePlanRefundRequester", fields: [refundRequestedById], references: [id])
+  refundCompletedBy   Employee? @relation("FeePlanRefundCompleter", fields: [refundCompletedById], references: [id])
+  deletionRequestedBy Employee? @relation("FeePlanDeletionRequester", fields: [deletionRequestedById], references: [id])
   installments FeeInstallment[]
 }
 
