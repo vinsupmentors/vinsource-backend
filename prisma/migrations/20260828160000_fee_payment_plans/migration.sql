@@ -18,7 +18,7 @@ CREATE TABLE `FeePaymentPlan` (
     `updatedAt` DATETIME(3) NOT NULL,
 
     PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `FeeInstallment` (
@@ -37,7 +37,7 @@ CREATE TABLE `FeeInstallment` (
     INDEX `FeeInstallment_planId_idx`(`planId`),
     INDEX `FeeInstallment_dueDate_idx`(`dueDate`),
     PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `FeeReminderLog` (
@@ -49,7 +49,7 @@ CREATE TABLE `FeeReminderLog` (
 
     UNIQUE INDEX `FeeReminderLog_installmentId_type_asOfDate_key`(`installmentId`, `type`, `asOfDate`),
     PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4;
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- AddForeignKey
 ALTER TABLE `FeePaymentPlan` ADD CONSTRAINT `FeePaymentPlan_leadId_fkey` FOREIGN KEY (`leadId`) REFERENCES `Lead`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
