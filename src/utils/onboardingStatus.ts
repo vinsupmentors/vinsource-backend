@@ -94,25 +94,25 @@ export async function getOnboardingStatus(studentId: string) {
   // existing behaviour of not blocking a student on an empty checklist.
   const allSigned = items.length === 0 || signedCount === items.length;
 
-  // Self-heal: documentsCompletedAt/onboardingApprovedAt are write-once flags
-  // set at the moment everything happened to be signed — nothing revisits
-  // them later. If a new template is added (or an existing one is edited to
-  // newly cover this student's track, or their track itself changes), this
-  // function correctly detects allSigned=false on the very next call, but the
-  // cached flags above would otherwise keep claiming "done" forever,
-  // inflating batch-level counts (Reports, My Students) that read the raw
-  // flag instead of recomputing. Whichever page happens to call this next
-  // corrects it for everyone, rather than requiring a one-off script per drift.
-  let correctedStudent = student;
-  if (!allSigned && (student.documentsCompletedAt || student.onboardingApprovedAt)) {
-    correctedStudent = await prisma.student.update({
-      where: { id: studentId },
-      data: { documentsCompletedAt: null, onboardingApprovedAt: null, onboardingApprovedById: null },
-    });
-  }
-
+  // documentsCompletedAt/onboardingApprovedAt are write-once flags, set only
+  // at the moment a student actually finishes signing (studentPortal
+  // .controller.ts) or an admin actually approves them (studentOnboarding
+  // .controller.ts) — this function must NEVER write to them. It used to
+  // "self-heal" by nulling both out here whenever the live check disagreed
+  // with the cached flag, to keep batch counts (Reports, My Students)
+  // accurate. That silently and permanently signed already-completed
+  // students back out — and re-locked their entire portal, pending a fresh
+  // admin approval — the instant *anyone* merely viewed a list/report page
+  // after a new OnboardingDocumentTemplate was added or edited to cover more
+  // tracks, since that alone makes allSigned=false for every student who
+  // hasn't signed the new one. That's the incident from 2026-08 where every
+  // returning student was suddenly forced back through "sign documents
+  // again" on login. Callers that need up-to-date counts should use the
+  // live `allSigned`/`items` returned here directly, not mutate the DB to
+  // match them — see reconcileFlagsBatch below for the batched read-only
+  // equivalent.
   return {
-    student: correctedStudent,
+    student,
     items,
     requiredCount: items.length,
     signedCount,
@@ -170,31 +170,30 @@ export async function liveSignedStatusByStudent(
 
 /**
  * Given rows that already carry the cached documentsCompletedAt/
- * onboardingApprovedAt flags, corrects any that disagree with the live
- * signed-status computed above — both in the returned array (so the caller's
- * response is accurate immediately) and in the database (one batched
- * updateMany), so the correction sticks instead of drifting back on the next
- * read. Mirrors getOnboardingStatus()'s self-heal, just batched.
+ * onboardingApprovedAt flags, returns a copy where any that disagree with
+ * the live signed-status computed above read as unsigned — so the caller's
+ * response (a roster/report page) displays accurate counts immediately.
+ *
+ * Deliberately read-only: this used to also persist the correction via a
+ * batched updateMany, nulling those flags in the DB for every disagreeing
+ * student. That meant simply opening My Students or Reports after a new
+ * OnboardingDocumentTemplate started applying to a track would permanently
+ * wipe every already-completed student's flags on that page, locking them
+ * out of the portal and back to a fresh admin-approval queue — the root
+ * cause of the 2026-08 "every returning student is asked to sign documents
+ * again" incident. Display-only correction here; the DB stays write-once,
+ * only ever set by the actual sign/approve actions themselves.
  */
 export async function reconcileFlagsBatch<
   T extends { id: string; track: string; documentsCompletedAt: Date | null; onboardingApprovedAt: Date | null }
 >(students: T[]): Promise<T[]> {
   if (students.length === 0) return students;
   const liveSigned = await liveSignedStatusByStudent(students);
-  const staleIds: string[] = [];
-  const corrected = students.map((s) => {
+  return students.map((s) => {
     const signed = liveSigned.get(s.id) ?? true;
     if (!signed && (s.documentsCompletedAt || s.onboardingApprovedAt)) {
-      staleIds.push(s.id);
       return { ...s, documentsCompletedAt: null, onboardingApprovedAt: null };
     }
     return s;
   });
-  if (staleIds.length > 0) {
-    await prisma.student.updateMany({
-      where: { id: { in: staleIds } },
-      data: { documentsCompletedAt: null, onboardingApprovedAt: null, onboardingApprovedById: null },
-    });
-  }
-  return corrected;
 }
