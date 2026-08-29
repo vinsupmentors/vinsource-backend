@@ -267,10 +267,12 @@ export const studentOnboardingController = {
   async listApprovals(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const search = String(req.query.search || '').trim();
+      const batchId = String(req.query.batchId || '').trim();
       const candidates = await prisma.student.findMany({
         where: {
           profileCompletedAt: { not: null },
           onboardingApprovedAt: null,
+          ...(batchId ? { enrollments: { some: { schedule: { batchId } } } } : {}),
           ...(search
             ? {
                 OR: [
@@ -282,6 +284,9 @@ export const studentOnboardingController = {
               }
             : {}),
         },
+        include: {
+          enrollments: { include: { schedule: { include: { batch: { select: { id: true, code: true } } } } } },
+        },
         orderBy: { profileCompletedAt: 'asc' },
       });
 
@@ -289,6 +294,7 @@ export const studentOnboardingController = {
       for (const student of candidates) {
         const status = await getOnboardingStatus(student.id);
         if (status.allSigned) {
+          const batches = Array.from(new Set(student.enrollments.map((e) => e.schedule.batch.code)));
           results.push({
             id: student.id,
             studentCode: student.studentCode,
@@ -301,6 +307,7 @@ export const studentOnboardingController = {
             profileCompletedAt: student.profileCompletedAt,
             documentsCompletedAt: student.documentsCompletedAt,
             requiredCount: status.requiredCount,
+            batches,
           });
         }
       }
