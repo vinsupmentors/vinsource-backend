@@ -345,6 +345,16 @@ export const emailService = {
             </ol>
           </div>
 
+          <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 8px;font-weight:700;color:#5b21b6;">📁 Build Your Portfolio &amp; Unlock Your Certificates</p>
+            <p style="margin:0 0 8px;font-size:14px;color:#4c1d95;line-height:1.7;">
+              Your portal has a <strong>Portfolio</strong> section where you'll add your projects, skills, and experience as you go through the program — start filling it in early, since it doubles as your placement-ready profile.
+            </p>
+            <p style="margin:0;font-size:14px;color:#4c1d95;line-height:1.7;">
+              Once you're ready, both certificates become available for download from the <strong>Certificates</strong> section: your <strong>Course Completion Certificate</strong> unlocks when you're moved into the Placement Pool, and your <strong>Internship Certificate</strong> unlocks once your Portfolio has been reviewed and approved — so keeping it updated matters.
+            </p>
+          </div>
+
           <p style="text-align:center;margin:24px 0;">
             <a href="${data.loginUrl}" style="background:#1e3a8a;color:#fff;padding:13px 30px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;font-size:15px;">Log In to Student Portal →</a>
           </p>
