@@ -7,6 +7,9 @@ const router = Router();
 router.use(authenticate);
 router.use(requireModule('ADMISSION', 'VIEW'));
 
+// Courses (for the New Admission course/track picker)
+router.get('/courses', admissionController.listCourses);
+
 // Live fee calculator — used by every screen (New Admission, Edit, Payment,
 // EMI, Reports) so the number shown is always the same one the backend will
 // actually charge.

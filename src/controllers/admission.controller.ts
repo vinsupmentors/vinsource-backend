@@ -89,6 +89,19 @@ export const admissionController = {
     } catch (err) { next(err); }
   },
 
+  // ── Courses (for the New Admission course/track picker) ──────────────────
+
+  async listCourses(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const courses = await prisma.academyCourse.findMany({
+        where: { isActive: true },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      });
+      res.json({ success: true, data: courses });
+    } catch (err) { next(err); }
+  },
+
   // ── Upcoming Batches / seat availability ──────────────────────────────────
 
   async listUpcomingBatches(req: AuthRequest, res: Response, next: NextFunction) {
