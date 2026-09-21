@@ -220,6 +220,7 @@ enum ModuleName {
   DIGITAL_MARKETING
   CERTIFICATES
   STUDENT_ONBOARDING
+  ADMISSION
 }
 
 enum AccessLevel {
@@ -278,9 +279,50 @@ enum ExpenseStatus {
 }
 
 enum FeePlanType {
-  FULL
+  SPOT // full amount paid same day as admission — 8% discount
+  FULL // full amount paid any time before batch start — 5% discount
   PART
   EMI
+}
+
+/// What a single FeeInstallment row actually represents — lets the same
+/// table serve registration fees, EMI legs, orientation-day balances, etc.,
+/// each reportable/labelled distinctly (spec: "Payment types" list) without
+/// a separate table per payment type.
+enum InstallmentKind {
+  REGISTRATION_FEE
+  SPOT_PAYMENT
+  FULL_PAYMENT
+  DOWN_PAYMENT
+  EMI
+  ORIENTATION_BALANCE
+  FORECLOSURE
+}
+
+enum DiscountType {
+  FIXED
+  PERCENTAGE
+}
+
+enum CouponStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Admission lifecycle — separate from FeePlanStatus (which now also
+/// doubles as the admission's plan status) and from payment status, which
+/// is deliberately NOT stored (computed live from installments, same
+/// live-not-cached pattern used for onboarding status after the earlier
+/// self-heal incident — see onboardingStatus.ts).
+enum AdmissionStatus {
+  DRAFT // form started, not yet confirmed — consumes no seat
+  CONFIRMED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  TRANSFERRED
+  REFUND_REQUESTED
+  REFUNDED
 }
 
 enum FeePlanStatus {
@@ -320,10 +362,12 @@ enum DriveStatus {
 // ─── STUDENT ACADEMY ──────────────────────────────────────────────────────────
 
 enum StudentTrack {
+  JRP_RECORDED // JRP delivered as recorded classes — Admission-only track, max 3-month EMI
   JRP // Job Readiness Program — non-placement, course only
   IOP // Interview Opportunities — placement-driven
-  PAP // Placement Assurance Program — placement-driven
+  PAP // Placement Assurance Program — placement-driven (legacy — not offered as an Admission track)
   PT  // Placement Training — joins directly for placement, no course at all
+  ELITE // Admission-only premium track, max 6-month EMI
 }
 
 enum StudentStatus {
@@ -579,6 +623,11 @@ model Employee {
   feePlanDeletionRequests FeePaymentPlan[] @relation("FeePlanDeletionRequester")
   feePlanDeletionLogsRequested FeePlanDeletionLog[] @relation("FeePlanDeletionLogRequester")
   feePlanDeletionLogsApproved  FeePlanDeletionLog[] @relation("FeePlanDeletionLogApprover")
+  // Admission module
+  courseTrackFeesCreated CourseTrackFee[]     @relation("CourseTrackFeeCreator")
+  couponsCreated         Coupon[]             @relation("CouponCreator")
+  couponUsagesAsSalesperson CouponUsage[]     @relation("CouponUsageSalesperson")
+  admissionsForeclosed   FeePaymentPlan[]     @relation("AdmissionForecloser")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
   budgetsReceived   BudgetAllocation[]  @relation("BudgetReceiver")
@@ -1548,6 +1597,40 @@ model FeePaymentPlan {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
+  // ── Admission module ──────────────────────────────────────────────────
+  // FeePaymentPlan doubles as the Admission record (no parallel table —
+  // the Lead → FeePaymentPlan → FeeInstallment → Student pipeline already
+  // covered almost everything the Admission spec asked for). Every field
+  // below is nullable so every pre-Admission-module plan row keeps working
+  // unmodified; only plans created via the new admission flow set these.
+  admissionId      String?          @unique // human-readable ADM-2026-000124, assigned once at confirmation, never reassigned/reused
+  admissionStatus  AdmissionStatus?
+  courseId         String? // proper FK to AcademyCourse, alongside the legacy free-text courseName above
+  track            StudentTrack?
+  scheduleId       String? // BatchCourseSchedule — which sub-batch/seat this admission reserves
+  batchAllocatedAt DateTime? // set the moment seat-locking succeeds at confirmation
+
+  couponId           String?
+  couponDiscount      Float? // snapshot of the rupee amount the coupon actually knocked off, at the time it was applied
+  paymentDiscountAmount Float? // Spot 8% / Full 5% discount rupee amount, snapshotted separately from the coupon discount so receipts can show both lines
+
+  registrationFee Float? // amount actually charged as the Part-Payment/EMI registration fee (admin-configurable default, snapshotted per plan)
+  downPayment     Float? // EMI only — 20%-of-EMI-total amount actually charged
+  emiMonths       Int?   // EMI only — selected duration
+  interestRatePct Float? // EMI only — the % rate actually applied (interestAmount above stays as the rupee amount)
+
+  // Salesperson is locked once set — updatePlan must refuse to change
+  // createdById without ADMIN-level FINANCE_SALES/ADMISSION access.
+  salespersonLockedAt DateTime?
+
+  // Foreclosure — Case 1 (no EMI paid yet) vs Case 2 (first EMI already
+  // paid) is decided at foreclosure time by checking installments, per the
+  // configured AdmissionConfig policy; not stored as a separate flag here.
+  foreclosedAt      DateTime?
+  foreclosedById    String?
+  foreclosureAmount Float?
+  foreclosureReason String?          @db.Text
+
   // Refund: Sales initiates (records the amount/reason the student asked
   // for), Admin does the actual money transfer outside the app and marks it
   // completed — which also waives anything still scheduled and flips status
@@ -1573,6 +1656,16 @@ model FeePaymentPlan {
   refundCompletedBy   Employee? @relation("FeePlanRefundCompleter", fields: [refundCompletedById], references: [id])
   deletionRequestedBy Employee? @relation("FeePlanDeletionRequester", fields: [deletionRequestedById], references: [id])
   installments FeeInstallment[]
+
+  course       AcademyCourse?      @relation("AdmissionCourse", fields: [courseId], references: [id])
+  schedule     BatchCourseSchedule? @relation("AdmissionSchedule", fields: [scheduleId], references: [id])
+  coupon       Coupon?             @relation(fields: [couponId], references: [id])
+  foreclosedBy Employee?           @relation("AdmissionForecloser", fields: [foreclosedById], references: [id])
+  couponUsages CouponUsage[]
+
+  @@index([admissionId])
+  @@index([scheduleId])
+  @@index([courseId])
 }
 
 /// One scheduled payment under a FeePaymentPlan. The first installment (the
@@ -1595,6 +1688,13 @@ model FeeInstallment {
   approvedAt   DateTime?
   collectionId String?              @unique
   createdAt    DateTime             @default(now())
+
+  // Admission — what this installment actually represents. Nullable so
+  // every pre-existing FeeInstallment row (created before the Admission
+  // module) is left untouched; only rows created by the new admission flow
+  // set these.
+  kind           InstallmentKind?
+  emiMonthNumber Int? // 1-based position within the EMI schedule, EMI kind only
 
   plan       FeePaymentPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
   receivedBy Employee?        @relation("FeeInstallmentReceiver", fields: [receivedById], references: [id])
@@ -1645,6 +1745,112 @@ model FeeReminderLog {
   installment FeeInstallment @relation(fields: [installmentId], references: [id], onDelete: Cascade)
 
   @@unique([installmentId, type, asOfDate])
+}
+
+// ─── ADMISSION ────────────────────────────────────────────────────────────────
+// Course fee master, coupons, and the single tunable-rules row — everything
+// the Admission Fee Calculation Engine (admissionFeeEngine.ts) reads instead
+// of anything being hard-coded. AcademyCourse/Batch/BatchCourseSchedule/Lead/
+// Student/FeePaymentPlan/FeeInstallment are all reused as-is (see relations
+// added on those models) — nothing here duplicates existing master data.
+
+/// Base fee for one Course + Track combination. Multiple rows per
+/// course+track are allowed (fee changes over time) — effectiveDate picks
+/// which one applies; the engine always takes the latest row with
+/// effectiveDate <= today. Older rows are kept for historical admissions'
+/// audit trail, never edited in place.
+model CourseTrackFee {
+  id            String       @id @default(uuid())
+  courseId      String
+  track         StudentTrack
+  baseFee       Float
+  effectiveDate DateTime     @default(now())
+  isActive      Boolean      @default(true)
+  createdById   String?
+  createdAt     DateTime     @default(now())
+
+  course    AcademyCourse @relation(fields: [courseId], references: [id])
+  createdBy Employee?     @relation("CourseTrackFeeCreator", fields: [createdById], references: [id])
+
+  @@index([courseId, track])
+}
+
+model Coupon {
+  id     String       @id @default(uuid())
+  code   String       @unique
+  name   String
+  discountType  DiscountType
+  discountValue Float // rupees if FIXED, percentage points if PERCENTAGE
+
+  // Applicability — null on any of these means "no restriction on this axis"
+  courseId   String?
+  track      StudentTrack?
+  scheduleId String? // restrict to one specific batch/sub-batch
+
+  validFrom  DateTime
+  validUntil DateTime
+  maxUsage                 Int? // total redemptions across all salespeople, null = unlimited
+  perSalespersonUsageLimit Int? // null = unlimited
+  minimumFee               Float? // net fee must be at least this before the coupon can apply
+  maximumDiscount          Float? // caps a PERCENTAGE discount's rupee value; ignored for FIXED
+
+  status      CouponStatus @default(ACTIVE)
+  createdById String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  course    AcademyCourse?       @relation(fields: [courseId], references: [id])
+  schedule  BatchCourseSchedule? @relation(fields: [scheduleId], references: [id])
+  createdBy Employee?            @relation("CouponCreator", fields: [createdById], references: [id])
+  admissions FeePaymentPlan[]
+  usages     CouponUsage[]
+
+  @@index([code])
+}
+
+/// One row per coupon redemption — how maxUsage / perSalespersonUsageLimit
+/// are actually enforced (count rows here, not a mutable counter column, so
+/// concurrent redemptions can't race each other into over-counting).
+model CouponUsage {
+  id           String   @id @default(uuid())
+  couponId     String
+  admissionId  String // FeePaymentPlan.id
+  salespersonId String?
+  usedAt       DateTime @default(now())
+
+  coupon     Coupon         @relation(fields: [couponId], references: [id])
+  admission  FeePaymentPlan @relation(fields: [admissionId], references: [id], onDelete: Cascade)
+  salesperson Employee?     @relation("CouponUsageSalesperson", fields: [salespersonId], references: [id])
+
+  @@index([couponId])
+  @@index([salespersonId])
+}
+
+/// Single-row table (always id = "default") holding every tunable Admission
+/// business rule — spec section 47's "do not hard-code business rules"
+/// requirement. Admin edits these via a settings screen; the fee engine and
+/// the onboarding-approval gate both read from here instead of constants.
+model AdmissionConfig {
+  id                    String   @id @default("default")
+  spotDiscountPct       Float    @default(8)
+  fullDiscountPct       Float    @default(5)
+  registrationFee       Float    @default(3500)
+  emiInterest3To4MonthPct Float  @default(7)
+  emiInterest5PlusMonthPct Float @default(10)
+  downPaymentPct        Float    @default(20)
+  // Student portal/onboarding approval, for non-EMI admissions only, is
+  // blocked until at least this % of totalFee (net of discounts/coupon) has
+  // been paid. EMI admissions instead gate on the down payment having
+  // cleared — see studentOnboarding approval check.
+  portalApprovalMinPaidPct Float @default(60)
+  // { "JRP_RECORDED": 3, "JRP": 3, "IOP": 5, "ELITE": 6, "PT": 3 }
+  trackEmiMonthLimits   Json
+  // "NO_INTEREST" | "FULL_INTEREST" | "PRORATED" — how the two foreclosure
+  // cases (no EMI paid yet vs. first EMI already paid) treat the remaining
+  // interest. Read by the foreclosure calculation, never hard-coded.
+  foreclosureBeforeFirstEmiPolicy String @default("NO_INTEREST")
+  foreclosureAfterFirstEmiPolicy  String @default("FULL_INTEREST")
+  updatedAt             DateTime @updatedAt
 }
 
 // ─── FINANCE (ADMIN) — internal expenses/budget ──────────────────────────────
@@ -2035,6 +2241,11 @@ model AcademyCourse {
   materials        CourseMaterial[]
 
   certificateRequests StudentCertificateRequest[]
+
+  // Admission module
+  trackFees  CourseTrackFee[]
+  admissions FeePaymentPlan[] @relation("AdmissionCourse")
+  coupons    Coupon[]
 }
 
 enum MaterialType {
@@ -2131,6 +2342,12 @@ model BatchCourseSchedule {
   projectReleases      ProjectRelease[]
   feedbackFormReleases FeedbackFormRelease[]
   onlineTestReleases   OnlineTestRelease[]
+
+  // Admission module — capacity above is the seat cap for THIS schedule;
+  // "booked" is computed live as count(admissions where admissionStatus
+  // not in CANCELLED/REFUNDED/DRAFT), never stored, to avoid drift.
+  admissions FeePaymentPlan[] @relation("AdmissionSchedule")
+  coupons    Coupon[]
 
   // Multiple sub-batches of the same course+timing are allowed in a batch
   // (e.g. DA-Morning with Trainer A and DA-Morning with Trainer B in parallel).
