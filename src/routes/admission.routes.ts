@@ -10,6 +10,12 @@ router.use(requireModule('ADMISSION', 'VIEW'));
 // Courses (for the New Admission course/track picker)
 router.get('/courses', admissionController.listCourses);
 
+// Employees (for the employee-restricted coupon picker) — admin only, same as coupons
+router.get('/employees/search', requireModule('ADMISSION', 'ADMIN'), admissionController.searchEmployees);
+
+// Batch Plan — Course x (Offline/Online x timing-slot) seat matrix
+router.get('/batch-plan', admissionController.getBatchPlan);
+
 // Live fee calculator — used by every screen (New Admission, Edit, Payment,
 // EMI, Reports) so the number shown is always the same one the backend will
 // actually charge.
@@ -21,6 +27,16 @@ router.get('/batches/upcoming', admissionController.listUpcomingBatches);
 router.get('/batches/:scheduleId/seats', admissionController.seatAvailability);
 router.get('/batches/groups', requireModule('ADMISSION', 'ADMIN'), admissionController.listBatchGroups);
 router.post('/batches', requireModule('ADMISSION', 'ADMIN'), admissionController.createBatchSchedule);
+
+// Seat hold-back — admin withholds genuine seats from bookable inventory
+// (e.g. for an anticipated college enrollment); reps request release, admin
+// approves/rejects. The hold is enforced in the booking transaction itself,
+// not just shown differently.
+router.put('/batches/:scheduleId/hold', requireModule('ADMISSION', 'ADMIN'), admissionController.setHeldSeatsEndpoint);
+router.get('/seat-requests', admissionController.listSeatHoldRequests);
+router.post('/seat-requests', requireModule('ADMISSION', 'EDIT'), admissionController.createSeatHoldRequest);
+router.post('/seat-requests/:id/approve', requireModule('ADMISSION', 'ADMIN'), admissionController.approveSeatHoldRequestEndpoint);
+router.post('/seat-requests/:id/reject', requireModule('ADMISSION', 'ADMIN'), admissionController.rejectSeatHoldRequestEndpoint);
 
 // Coupons — admin only (both viewing and managing). Reps only ever see a
 // coupon's effect through /coupons/validate while building an admission,

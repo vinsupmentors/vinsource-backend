@@ -626,7 +626,10 @@ model Employee {
   // Admission module
   courseTrackFeesCreated CourseTrackFee[]     @relation("CourseTrackFeeCreator")
   couponsCreated         Coupon[]             @relation("CouponCreator")
+  couponsRestrictedToMe  Coupon[]             @relation("CouponRestrictedEmployee")
   couponUsagesAsSalesperson CouponUsage[]     @relation("CouponUsageSalesperson")
+  seatHoldRequestsMade     SeatHoldRequest[]  @relation("SeatHoldRequester")
+  seatHoldRequestsHandled  SeatHoldRequest[]  @relation("SeatHoldResponder")
   admissionsForeclosed   FeePaymentPlan[]     @relation("AdmissionForecloser")
   expensesRequested AdminExpense[]      @relation("ExpenseRequester")
   expensesApproved  AdminExpense[]      @relation("ExpenseApprover")
@@ -1791,6 +1794,11 @@ model Coupon {
   courseId   String?
   track      StudentTrack?
   scheduleId String? // restrict to one specific batch/sub-batch
+  // Locks this coupon to one specific salesperson — nobody else can apply
+  // it, regardless of maxUsage/perSalespersonUsageLimit. Used for the
+  // "flat ₹X off, only this rep can offer it" case (e.g. a manager-approved
+  // one-off discount tied to a particular employee).
+  restrictedToEmployeeId String?
 
   validFrom  DateTime
   validUntil DateTime
@@ -1807,6 +1815,7 @@ model Coupon {
   course    AcademyCourse?       @relation(fields: [courseId], references: [id])
   schedule  BatchCourseSchedule? @relation(fields: [scheduleId], references: [id])
   createdBy Employee?            @relation("CouponCreator", fields: [createdById], references: [id])
+  restrictedToEmployee Employee? @relation("CouponRestrictedEmployee", fields: [restrictedToEmployeeId], references: [id])
   admissions FeePaymentPlan[]
   usages     CouponUsage[]
 
@@ -1856,6 +1865,38 @@ model AdmissionConfig {
   foreclosureBeforeFirstEmiPolicy String @default("NO_INTEREST")
   foreclosureAfterFirstEmiPolicy  String @default("FULL_INTEREST")
   updatedAt             DateTime @updatedAt
+}
+
+/// A rep asking Admin to release N genuinely-held-back seats so they can book
+/// an admission right now. Approving a request lowers the schedule's
+/// heldSeats/heldOnlineSeats/heldOfflineSeats by seatsRequested — that's what
+/// actually makes the seat bookable; nothing about this is cosmetic.
+model SeatHoldRequest {
+  id             String                @id @default(uuid())
+  scheduleId     String
+  deliveryMode   DeliveryMode?         // ONLINE/OFFLINE — required only when the schedule is HYBRID
+  seatsRequested Int                   @default(1)
+  reason         String?               @db.Text
+  status         SeatHoldRequestStatus @default(PENDING)
+  requestedById  String?
+  respondedById  String?
+  respondedAt    DateTime?
+  responseNote   String?               @db.Text
+  createdAt      DateTime              @default(now())
+
+  schedule    BatchCourseSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  requestedBy Employee?           @relation("SeatHoldRequester", fields: [requestedById], references: [id])
+  respondedBy Employee?           @relation("SeatHoldResponder", fields: [respondedById], references: [id])
+
+  @@index([scheduleId])
+  @@index([requestedById])
+  @@index([status])
+}
+
+enum SeatHoldRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 // ─── FINANCE (ADMIN) — internal expenses/budget ──────────────────────────────
@@ -2342,6 +2383,15 @@ model BatchCourseSchedule {
   capacity        Int?
   onlineCapacity  Int?
   offlineCapacity Int?
+  // Real seats withheld from normal booking right now (e.g. reserved for an
+  // anticipated college/bulk enrollment) — genuinely subtracted from the
+  // bookable count everywhere (seat picker, Batch Plan, the booking
+  // transaction itself), never just a display trick. A rep who needs one
+  // submits a SeatHoldRequest; approving it lowers these numbers, which is
+  // what actually makes the seat bookable again.
+  heldSeats        Int? @default(0)
+  heldOnlineSeats  Int? @default(0)
+  heldOfflineSeats Int? @default(0)
   createdAt DateTime     @default(now())
   // Tracked independently of the parent Batch's status — a Batch can only be
   // marked COMPLETED once all of its (non-cancelled) sub-batches are, since
@@ -2368,6 +2418,7 @@ model BatchCourseSchedule {
   // not in CANCELLED/REFUNDED/DRAFT), never stored, to avoid drift.
   admissions FeePaymentPlan[] @relation("AdmissionSchedule")
   coupons    Coupon[]
+  seatHoldRequests SeatHoldRequest[]
 
   // Multiple sub-batches of the same course+timing are allowed in a batch
   // (e.g. DA-Morning with Trainer A and DA-Morning with Trainer B in parallel).

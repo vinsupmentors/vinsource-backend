@@ -11,6 +11,9 @@ import {
   getSeatAvailability,
   reserveSeat,
   validateAndPriceCoupon,
+  setHeldSeats,
+  approveSeatHoldRequest,
+  rejectSeatHoldRequest,
   type CalculateFeeInput,
 } from '../services/admissionFeeEngine';
 
@@ -77,6 +80,35 @@ function addMonths(date: Date, months: number): Date {
   return d;
 }
 
+/** "09:30" -> "9:30 AM" */
+function formatTime(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, '0')} ${period}`;
+}
+
+/** Exact slot label when recorded, else the coarse bucket — mirrors the frontend's timingLabel(). */
+function slotLabel(s: { timing: string; startTime: string | null; endTime: string | null }): string {
+  if (s.startTime && s.endTime) return `${formatTime(s.startTime)} – ${formatTime(s.endTime)}`;
+  return s.timing.charAt(0) + s.timing.slice(1).toLowerCase();
+}
+
+/**
+ * Schedules that can still take a new admission: UPCOMING status AND an
+ * actual start date that hasn't passed. `status` alone isn't trustworthy —
+ * see the comment in listUpcomingBatches — so both this function and that
+ * one apply the same live date check rather than one trusting a possibly
+ * stale field the other double-checks.
+ */
+function openScheduleWhere(courseId?: string): Record<string, unknown> {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const where: Record<string, unknown> = { status: 'UPCOMING', startDate: { gte: startOfToday } };
+  if (courseId) where.courseId = courseId;
+  return where;
+}
+
 export const admissionController = {
   // ── Fee Calculation Engine (live calculator) ─────────────────────────────
 
@@ -99,6 +131,27 @@ export const admissionController = {
     } catch (err) { next(err); }
   },
 
+  // ── Employees (for the employee-restricted coupon picker) ────────────────
+
+  async searchEmployees(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const q = String(req.query.q || '').trim();
+      if (!q) return res.json({ success: true, data: [] });
+      const employees = await prisma.employee.findMany({
+        where: {
+          OR: [
+            { firstName: { contains: q } },
+            { lastName: { contains: q } },
+            { employeeCode: { contains: q } },
+          ],
+        },
+        select: employeeSelect,
+        take: 10,
+      });
+      res.json({ success: true, data: employees });
+    } catch (err) { next(err); }
+  },
+
   // ── Courses (for the New Admission course/track picker) ──────────────────
 
   async listCourses(_req: AuthRequest, res: Response, next: NextFunction) {
@@ -117,22 +170,8 @@ export const admissionController = {
   async listUpcomingBatches(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { courseId, includeFull } = req.query;
-      // Ongoing/Completed batches don't belong in the admission picker — only
-      // batches that haven't started yet can still take new admissions.
-      // `status` alone isn't trustworthy here: it's a field Production sets
-      // by hand when editing a schedule, and nothing ever auto-flips it from
-      // UPCOMING to ONGOING once the start date arrives — so a batch that
-      // started weeks ago can still sit at status=UPCOMING forever if nobody
-      // remembered to update it. Gate on the actual start date too (computed
-      // fresh every request, never cached) so a stale status field can't
-      // leak a long-since-started batch back into this list.
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
-      const where: Record<string, unknown> = { status: 'UPCOMING', startDate: { gte: startOfToday } };
-      if (courseId) where.courseId = String(courseId);
-
       const schedules = await prisma.batchCourseSchedule.findMany({
-        where,
+        where: openScheduleWhere(courseId ? String(courseId) : undefined),
         include: {
           batch: { select: { id: true, code: true, startDate: true, status: true } },
           course: { select: { id: true, name: true } },
@@ -247,6 +286,182 @@ export const admissionController = {
       }
 
       res.status(201).json({ success: true, data: { ...schedule, seats: await getSeatAvailability(schedule.id) } });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Batch Plan — a Course x (Offline/Online x time-slot) matrix of live
+   * booked/capacity, e.g. "5/10" under DA -> Offline -> 9:30-11:30. Built
+   * entirely from real, live-computed seat counts (the same
+   * getSeatAvailability used everywhere else in Admission) — nothing here
+   * is approximated or padded to look fuller or emptier than it is.
+   */
+  async getBatchPlan(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const schedules = await prisma.batchCourseSchedule.findMany({
+        where: openScheduleWhere(),
+        include: { course: { select: { id: true, name: true } } },
+        orderBy: [{ courseId: 'asc' }, { startTime: 'asc' }, { timing: 'asc' }],
+      });
+
+      type Cell = { booked: number; total: number | null };
+      const courseOrder: string[] = [];
+      const courses: Record<string, { id: string; name: string }> = {};
+      const offlineSlotOrder: string[] = [];
+      const onlineSlotOrder: string[] = [];
+      const matrix: Record<string, { offline: Record<string, Cell>; online: Record<string, Cell> }> = {};
+
+      const addSlot = (list: string[], slot: string) => { if (!list.includes(slot)) list.push(slot); };
+      const addCell = (courseId: string, side: 'offline' | 'online', slot: string, booked: number, total: number | null) => {
+        if (!matrix[courseId]) matrix[courseId] = { offline: {}, online: {} };
+        const existing = matrix[courseId][side][slot];
+        if (existing) {
+          matrix[courseId][side][slot] = {
+            booked: existing.booked + booked,
+            total: existing.total == null || total == null ? null : existing.total + total,
+          };
+        } else {
+          matrix[courseId][side][slot] = { booked, total };
+        }
+      };
+
+      for (const s of schedules) {
+        if (!courses[s.courseId]) { courses[s.courseId] = s.course; courseOrder.push(s.courseId); }
+        const slot = slotLabel(s);
+        const seats = await getSeatAvailability(s.id); // eslint-disable-line no-await-in-loop
+
+        if (s.mode === 'HYBRID' && seats.online && seats.offline) {
+          addSlot(offlineSlotOrder, slot);
+          addCell(s.courseId, 'offline', slot, seats.offline.booked, seats.offline.total);
+          addSlot(onlineSlotOrder, slot);
+          addCell(s.courseId, 'online', slot, seats.online.booked, seats.online.total);
+        } else if (s.mode === 'OFFLINE') {
+          addSlot(offlineSlotOrder, slot);
+          addCell(s.courseId, 'offline', slot, seats.booked, seats.total);
+        } else {
+          addSlot(onlineSlotOrder, slot);
+          addCell(s.courseId, 'online', slot, seats.booked, seats.total);
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          courses: courseOrder.map((id) => courses[id]),
+          offlineSlots: offlineSlotOrder,
+          onlineSlots: onlineSlotOrder,
+          matrix,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  // ── Seat hold-back & release requests ─────────────────────────────────────
+  // Real, admin-controlled seat withholding (e.g. reserving offline seats
+  // for a pending college enrollment) with a rep request / admin release
+  // workflow — NOT a cosmetic "looks full" display. The hold is enforced
+  // inside reserveSeat()'s transaction, so a held seat genuinely cannot be
+  // booked until an admin approves its release.
+
+  /** Admin sets exactly how many seats are held back for a schedule. */
+  async setHeldSeatsEndpoint(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { heldSeats, heldOnlineSeats, heldOfflineSeats } = req.body;
+      const updated = await setHeldSeats(req.params.scheduleId, {
+        heldSeats: heldSeats != null ? Number(heldSeats) : undefined,
+        heldOnlineSeats: heldOnlineSeats != null ? Number(heldOnlineSeats) : undefined,
+        heldOfflineSeats: heldOfflineSeats != null ? Number(heldOfflineSeats) : undefined,
+      });
+
+      if (req.user?.userId) {
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user.userId,
+            action: 'EDIT',
+            module: 'ADMISSION',
+            entityId: req.params.scheduleId,
+            entityType: 'BatchCourseSchedule.held',
+            newData: { heldSeats, heldOnlineSeats, heldOfflineSeats },
+          },
+        });
+      }
+
+      res.json({ success: true, data: { schedule: updated, seats: await getSeatAvailability(req.params.scheduleId) } });
+    } catch (err) { next(err); }
+  },
+
+  /** A rep asks for N of the held-back seats to be released so they can book. */
+  async createSeatHoldRequest(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { scheduleId, deliveryMode, seatsRequested, reason } = req.body;
+      if (!scheduleId) throw new AppError('scheduleId is required.', 400);
+      const schedule = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId } });
+      if (!schedule) throw new AppError('Batch/schedule not found.', 404);
+      if (schedule.mode === 'HYBRID' && deliveryMode !== 'ONLINE' && deliveryMode !== 'OFFLINE') {
+        throw new AppError('This is a Hybrid batch — please specify Online or Offline.', 400);
+      }
+
+      const request = await prisma.seatHoldRequest.create({
+        data: {
+          scheduleId,
+          deliveryMode: schedule.mode === 'HYBRID' ? deliveryMode : undefined,
+          seatsRequested: seatsRequested != null ? Number(seatsRequested) : 1,
+          reason: reason || undefined,
+          requestedById: req.user?.employeeId,
+        },
+        include: {
+          schedule: { select: { id: true, code: true, mode: true, course: { select: { id: true, name: true } } } },
+          requestedBy: { select: employeeSelect },
+        },
+      });
+      res.status(201).json({ success: true, data: request });
+    } catch (err) { next(err); }
+  },
+
+  /** Admin sees all requests (optionally filtered by status); a rep sees only their own, enforced server-side. */
+  async listSeatHoldRequests(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { status, scheduleId } = req.query;
+      const where: Record<string, unknown> = {};
+      const admin = await isAdmissionAdmin(req);
+      if (!admin) where.requestedById = req.user?.employeeId;
+      if (status) where.status = String(status);
+      if (scheduleId) where.scheduleId = String(scheduleId);
+
+      const requests = await prisma.seatHoldRequest.findMany({
+        where,
+        include: {
+          schedule: { select: { id: true, code: true, mode: true, timing: true, startTime: true, endTime: true, course: { select: { id: true, name: true } } } },
+          requestedBy: { select: employeeSelect },
+          respondedBy: { select: employeeSelect },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      res.json({ success: true, data: requests });
+    } catch (err) { next(err); }
+  },
+
+  async approveSeatHoldRequestEndpoint(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const updated = await approveSeatHoldRequest(req.params.id, req.user?.employeeId, req.body?.responseNote);
+      if (req.user?.userId) {
+        await prisma.auditLog.create({
+          data: { userId: req.user.userId, action: 'EDIT', module: 'ADMISSION', entityId: req.params.id, entityType: 'SeatHoldRequest', newData: { status: 'APPROVED' } },
+        });
+      }
+      res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  async rejectSeatHoldRequestEndpoint(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const updated = await rejectSeatHoldRequest(req.params.id, req.user?.employeeId, req.body?.responseNote);
+      if (req.user?.userId) {
+        await prisma.auditLog.create({
+          data: { userId: req.user.userId, action: 'EDIT', module: 'ADMISSION', entityId: req.params.id, entityType: 'SeatHoldRequest', newData: { status: 'REJECTED' } },
+        });
+      }
+      res.json({ success: true, data: updated });
     } catch (err) { next(err); }
   },
 
@@ -580,6 +795,7 @@ export const admissionController = {
           course: { select: { id: true, name: true } },
           schedule: { select: { id: true, code: true } },
           createdBy: { select: employeeSelect },
+          restrictedToEmployee: { select: employeeSelect },
           _count: { select: { usages: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -593,6 +809,7 @@ export const admissionController = {
       const {
         code, name, discountType, discountValue, courseId, track, scheduleId,
         validFrom, validUntil, maxUsage, perSalespersonUsageLimit, minimumFee, maximumDiscount,
+        restrictedToEmployeeId,
       } = req.body;
       if (!code || !name || !discountType || discountValue == null || !validFrom || !validUntil) {
         throw new AppError('code, name, discountType, discountValue, validFrom, and validUntil are required', 400);
@@ -606,6 +823,7 @@ export const admissionController = {
           courseId: courseId || undefined,
           track: track || undefined,
           scheduleId: scheduleId || undefined,
+          restrictedToEmployeeId: restrictedToEmployeeId || undefined,
           validFrom: new Date(validFrom),
           validUntil: new Date(validUntil),
           maxUsage: maxUsage != null ? Number(maxUsage) : undefined,
@@ -621,7 +839,7 @@ export const admissionController = {
 
   async updateCoupon(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { name, discountValue, validFrom, validUntil, maxUsage, perSalespersonUsageLimit, minimumFee, maximumDiscount, status } = req.body;
+      const { name, discountValue, validFrom, validUntil, maxUsage, perSalespersonUsageLimit, minimumFee, maximumDiscount, status, restrictedToEmployeeId } = req.body;
       const coupon = await prisma.coupon.update({
         where: { id: req.params.id },
         data: {
@@ -634,6 +852,7 @@ export const admissionController = {
           minimumFee: minimumFee != null ? Number(minimumFee) : undefined,
           maximumDiscount: maximumDiscount != null ? Number(maximumDiscount) : undefined,
           status,
+          restrictedToEmployeeId: restrictedToEmployeeId === '' ? null : restrictedToEmployeeId,
         },
       });
       res.json({ success: true, data: coupon });

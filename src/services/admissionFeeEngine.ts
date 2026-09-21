@@ -149,6 +149,9 @@ export async function validateAndPriceCoupon(opts: {
   if (coupon.scheduleId && opts.scheduleId && coupon.scheduleId !== opts.scheduleId) {
     throw new AppError('This coupon does not apply to the selected batch.', 400);
   }
+  if (coupon.restrictedToEmployeeId && coupon.restrictedToEmployeeId !== opts.salespersonId) {
+    throw new AppError('This coupon is restricted to a specific salesperson and cannot be applied by you.', 400);
+  }
 
   if (coupon.minimumFee != null && opts.netFeeBeforeCoupon < coupon.minimumFee) {
     throw new AppError(`This coupon requires a minimum fee of ₹${coupon.minimumFee}.`, 400);
@@ -278,11 +281,13 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
 export type SeatStatus = 'OPEN' | 'LIMITED' | 'ALMOST_FULL' | 'FULL';
 
 export interface SeatBand {
-  total: number | null;
+  rawTotal: number | null; // real physical/online room capacity, unadjusted
+  held: number; // seats genuinely withheld from booking right now (e.g. reserved for a pending college enrollment)
+  total: number | null; // bookable total = rawTotal - held — what "available" and the booking lock are computed against
   booked: number;
   available: number | null;
   status: SeatStatus;
-  /** Real-count-based urgency copy — "Only 1 seat left!", "12 seats available", etc. Never a fabricated "N enquired" figure — only what's actually booked. */
+  /** Real-count-based urgency copy — "Only 1 seat left!", "12 seats available", etc. Reflects genuinely bookable seats only — never a fabricated number, and a hold is a real, admin-set withholding, not a display trick. */
   label: string;
 }
 
@@ -294,17 +299,18 @@ export interface SeatAvailability extends SeatBand {
   offline?: SeatBand;
 }
 
-function computeBand(total: number | null, booked: number): SeatBand {
-  if (total == null) {
-    return { total: null, booked, available: null, status: 'OPEN', label: 'Unlimited seats' };
+function computeBand(rawTotal: number | null, held: number, booked: number): SeatBand {
+  if (rawTotal == null) {
+    return { rawTotal: null, held, total: null, booked, available: null, status: 'OPEN', label: 'Unlimited seats' };
   }
+  const total = Math.max(0, rawTotal - held);
   const available = Math.max(0, total - booked);
   const pctBooked = total === 0 ? 1 : booked / total;
   let status: SeatStatus;
   let label: string;
   if (available <= 0) {
     status = 'FULL';
-    label = 'Sold out';
+    label = held > 0 ? 'Sold out (some seats held back)' : 'Sold out';
   } else if (available === 1) {
     status = 'ALMOST_FULL';
     label = 'Only 1 seat left!';
@@ -318,7 +324,7 @@ function computeBand(total: number | null, booked: number): SeatBand {
     status = 'OPEN';
     label = `${available} seats available`;
   }
-  return { total, booked, available, status, label };
+  return { rawTotal, held, total, booked, available, status, label };
 }
 
 /**
@@ -346,9 +352,14 @@ export async function reserveSeat(
   deliveryMode?: 'ONLINE' | 'OFFLINE' | 'HYBRID'
 ): Promise<void> {
   const locked = await tx.$queryRaw<
-    Array<{ id: string; mode: string; capacity: number | null; onlineCapacity: number | null; offlineCapacity: number | null }>
+    Array<{
+      id: string; mode: string;
+      capacity: number | null; onlineCapacity: number | null; offlineCapacity: number | null;
+      heldSeats: number | null; heldOnlineSeats: number | null; heldOfflineSeats: number | null;
+    }>
   >`
-    SELECT id, mode, capacity, onlineCapacity, offlineCapacity FROM BatchCourseSchedule WHERE id = ${scheduleId} FOR UPDATE
+    SELECT id, mode, capacity, onlineCapacity, offlineCapacity, heldSeats, heldOnlineSeats, heldOfflineSeats
+    FROM BatchCourseSchedule WHERE id = ${scheduleId} FOR UPDATE
   `;
   const schedule = locked[0];
   if (!schedule) throw new AppError('Batch/schedule not found.', 404);
@@ -357,8 +368,10 @@ export async function reserveSeat(
     if (deliveryMode !== 'ONLINE' && deliveryMode !== 'OFFLINE') {
       throw new AppError('This is a Hybrid batch — please choose Online or Offline for this admission.', 400);
     }
-    const cap = deliveryMode === 'ONLINE' ? schedule.onlineCapacity : schedule.offlineCapacity;
-    if (cap == null) return; // no cap configured for this pool — unlimited
+    const rawCap = deliveryMode === 'ONLINE' ? schedule.onlineCapacity : schedule.offlineCapacity;
+    if (rawCap == null) return; // no cap configured for this pool — unlimited
+    const held = (deliveryMode === 'ONLINE' ? schedule.heldOnlineSeats : schedule.heldOfflineSeats) ?? 0;
+    const cap = Math.max(0, rawCap - held);
     const booked = await tx.feePaymentPlan.count({
       where: { scheduleId, deliveryMode, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } },
     });
@@ -369,10 +382,11 @@ export async function reserveSeat(
   }
 
   if (schedule.capacity == null) return; // no cap configured — unlimited seats
+  const cap = Math.max(0, schedule.capacity - (schedule.heldSeats ?? 0));
   const booked = await tx.feePaymentPlan.count({
     where: { scheduleId, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } },
   });
-  if (booked >= schedule.capacity) {
+  if (booked >= cap) {
     throw new AppError('This batch is now full. Please select another batch.', 409);
   }
 }
@@ -387,20 +401,127 @@ export async function getSeatAvailability(scheduleId: string): Promise<SeatAvail
       prisma.feePaymentPlan.count({ where: { scheduleId, deliveryMode: 'ONLINE', admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } }),
       prisma.feePaymentPlan.count({ where: { scheduleId, deliveryMode: 'OFFLINE', admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } }),
     ]);
-    const online = computeBand(schedule.onlineCapacity, onlineBooked);
-    const offline = computeBand(schedule.offlineCapacity, offlineBooked);
-    const combinedTotal = schedule.onlineCapacity == null && schedule.offlineCapacity == null
+    const heldOnline = schedule.heldOnlineSeats ?? 0;
+    const heldOffline = schedule.heldOfflineSeats ?? 0;
+    const online = computeBand(schedule.onlineCapacity, heldOnline, onlineBooked);
+    const offline = computeBand(schedule.offlineCapacity, heldOffline, offlineBooked);
+    const combinedRawTotal = schedule.onlineCapacity == null && schedule.offlineCapacity == null
       ? null
       : (schedule.onlineCapacity ?? 0) + (schedule.offlineCapacity ?? 0);
-    const combined = computeBand(combinedTotal, onlineBooked + offlineBooked);
+    const combined = computeBand(combinedRawTotal, heldOnline + heldOffline, onlineBooked + offlineBooked);
     return { scheduleId, mode: 'HYBRID', ...combined, online, offline };
   }
 
   const booked = await prisma.feePaymentPlan.count({
     where: { scheduleId, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } },
   });
-  const band = computeBand(schedule.capacity, booked);
+  const band = computeBand(schedule.capacity, schedule.heldSeats ?? 0, booked);
   return { scheduleId, mode: schedule.mode as 'ONLINE' | 'OFFLINE', ...band };
+}
+
+/**
+ * Approves a SeatHoldRequest: verifies enough seats are actually still held
+ * back for the requested pool, then lowers that hold by seatsRequested —
+ * the release is real (the booking lock in reserveSeat reads the same
+ * columns), not a display change.
+ */
+export async function approveSeatHoldRequest(requestId: string, respondedById?: string, responseNote?: string) {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const request = await tx.seatHoldRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new AppError('Seat request not found.', 404);
+    if (request.status !== 'PENDING') throw new AppError('This request has already been responded to.', 400);
+
+    const locked = await tx.$queryRaw<Array<{ id: string; mode: string; heldSeats: number | null; heldOnlineSeats: number | null; heldOfflineSeats: number | null }>>`
+      SELECT id, mode, heldSeats, heldOnlineSeats, heldOfflineSeats FROM BatchCourseSchedule WHERE id = ${request.scheduleId} FOR UPDATE
+    `;
+    const schedule = locked[0];
+    if (!schedule) throw new AppError('Batch/schedule not found.', 404);
+
+    if (schedule.mode === 'HYBRID') {
+      const field = request.deliveryMode === 'ONLINE' ? 'heldOnlineSeats' : 'heldOfflineSeats';
+      const current = (request.deliveryMode === 'ONLINE' ? schedule.heldOnlineSeats : schedule.heldOfflineSeats) ?? 0;
+      if (current < request.seatsRequested) {
+        throw new AppError(`Only ${current} seat(s) are currently held back for this pool — cannot release ${request.seatsRequested}.`, 400);
+      }
+      await tx.batchCourseSchedule.update({ where: { id: schedule.id }, data: { [field]: current - request.seatsRequested } });
+    } else {
+      const current = schedule.heldSeats ?? 0;
+      if (current < request.seatsRequested) {
+        throw new AppError(`Only ${current} seat(s) are currently held back — cannot release ${request.seatsRequested}.`, 400);
+      }
+      await tx.batchCourseSchedule.update({ where: { id: schedule.id }, data: { heldSeats: current - request.seatsRequested } });
+    }
+
+    return tx.seatHoldRequest.update({
+      where: { id: requestId },
+      data: { status: 'APPROVED', respondedById, respondedAt: new Date(), responseNote },
+    });
+  });
+}
+
+/** Rejects a pending SeatHoldRequest — no seats move, held count is untouched. */
+export async function rejectSeatHoldRequest(requestId: string, respondedById?: string, responseNote?: string) {
+  const request = await prisma.seatHoldRequest.findUnique({ where: { id: requestId } });
+  if (!request) throw new AppError('Seat request not found.', 404);
+  if (request.status !== 'PENDING') throw new AppError('This request has already been responded to.', 400);
+  return prisma.seatHoldRequest.update({
+    where: { id: requestId },
+    data: { status: 'REJECTED', respondedById, respondedAt: new Date(), responseNote },
+  });
+}
+
+/**
+ * Admin sets exactly how many seats are held back for a schedule (direct
+ * set, not a delta) — e.g. "hold 4 of the 15 offline seats for a pending
+ * college enrollment." Validated against the schedule's real raw capacity
+ * so an admin can never hold back more seats than physically exist, and
+ * against seats already booked so an existing admission can never be
+ * silently squeezed out by a hold applied after the fact.
+ */
+export async function setHeldSeats(
+  scheduleId: string,
+  updates: { heldSeats?: number; heldOnlineSeats?: number; heldOfflineSeats?: number }
+) {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const locked = await tx.$queryRaw<
+      Array<{ id: string; mode: string; capacity: number | null; onlineCapacity: number | null; offlineCapacity: number | null }>
+    >`
+      SELECT id, mode, capacity, onlineCapacity, offlineCapacity FROM BatchCourseSchedule WHERE id = ${scheduleId} FOR UPDATE
+    `;
+    const schedule = locked[0];
+    if (!schedule) throw new AppError('Batch/schedule not found.', 404);
+
+    const data: Record<string, number> = {};
+
+    if (schedule.mode === 'HYBRID') {
+      if (updates.heldOnlineSeats != null) {
+        if (schedule.onlineCapacity == null) throw new AppError('This batch has no configured Online seat capacity to hold seats against.', 400);
+        const onlineBooked = await tx.feePaymentPlan.count({ where: { scheduleId, deliveryMode: 'ONLINE', admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } });
+        if (updates.heldOnlineSeats < 0 || schedule.onlineCapacity - updates.heldOnlineSeats < onlineBooked) {
+          throw new AppError(`Cannot hold ${updates.heldOnlineSeats} Online seats — only ${schedule.onlineCapacity - onlineBooked} of ${schedule.onlineCapacity} are unbooked.`, 400);
+        }
+        data.heldOnlineSeats = updates.heldOnlineSeats;
+      }
+      if (updates.heldOfflineSeats != null) {
+        if (schedule.offlineCapacity == null) throw new AppError('This batch has no configured Offline seat capacity to hold seats against.', 400);
+        const offlineBooked = await tx.feePaymentPlan.count({ where: { scheduleId, deliveryMode: 'OFFLINE', admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } });
+        if (updates.heldOfflineSeats < 0 || schedule.offlineCapacity - updates.heldOfflineSeats < offlineBooked) {
+          throw new AppError(`Cannot hold ${updates.heldOfflineSeats} Offline seats — only ${schedule.offlineCapacity - offlineBooked} of ${schedule.offlineCapacity} are unbooked.`, 400);
+        }
+        data.heldOfflineSeats = updates.heldOfflineSeats;
+      }
+    } else if (updates.heldSeats != null) {
+      if (schedule.capacity == null) throw new AppError('This batch has no configured seat capacity to hold seats against.', 400);
+      const booked = await tx.feePaymentPlan.count({ where: { scheduleId, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } });
+      if (updates.heldSeats < 0 || schedule.capacity - updates.heldSeats < booked) {
+        throw new AppError(`Cannot hold ${updates.heldSeats} seats — only ${schedule.capacity - booked} of ${schedule.capacity} are unbooked.`, 400);
+      }
+      data.heldSeats = updates.heldSeats;
+    }
+
+    if (Object.keys(data).length === 0) return schedule;
+    return tx.batchCourseSchedule.update({ where: { id: scheduleId }, data });
+  });
 }
 
 // ─── Foreclosure ──────────────────────────────────────────────────────────
