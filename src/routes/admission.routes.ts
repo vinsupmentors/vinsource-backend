@@ -15,26 +15,33 @@ router.get('/courses', admissionController.listCourses);
 // actually charge.
 router.post('/calculate-fee', admissionController.calculateFeeEndpoint);
 
-// Upcoming batches / seat availability
+// Upcoming batches / seat availability — visible to anyone with Admission
+// access (Sales reps need this to pick a batch); creating a batch is admin-only.
 router.get('/batches/upcoming', admissionController.listUpcomingBatches);
 router.get('/batches/:scheduleId/seats', admissionController.seatAvailability);
+router.get('/batches/groups', requireModule('ADMISSION', 'ADMIN'), admissionController.listBatchGroups);
+router.post('/batches', requireModule('ADMISSION', 'ADMIN'), admissionController.createBatchSchedule);
 
-// Coupons
-router.get('/coupons', admissionController.listCoupons);
+// Coupons — admin only (both viewing and managing). Reps only ever see a
+// coupon's effect through /coupons/validate while building an admission,
+// never the underlying list.
+router.get('/coupons', requireModule('ADMISSION', 'ADMIN'), admissionController.listCoupons);
 router.get('/coupons/validate', admissionController.validateCouponEndpoint);
-router.post('/coupons', requireModule('ADMISSION', 'EDIT'), admissionController.createCoupon);
-router.put('/coupons/:id', requireModule('ADMISSION', 'EDIT'), admissionController.updateCoupon);
+router.post('/coupons', requireModule('ADMISSION', 'ADMIN'), admissionController.createCoupon);
+router.put('/coupons/:id', requireModule('ADMISSION', 'ADMIN'), admissionController.updateCoupon);
 
-// Course fee configuration
-router.get('/course-fees', admissionController.listCourseFees);
+// Course fee configuration — admin only
+router.get('/course-fees', requireModule('ADMISSION', 'ADMIN'), admissionController.listCourseFees);
 router.post('/course-fees', requireModule('ADMISSION', 'ADMIN'), admissionController.createCourseFee);
 router.delete('/course-fees/:id', requireModule('ADMISSION', 'ADMIN'), admissionController.deactivateCourseFee);
 
-// Admission config (rates, discounts, EMI limits, foreclosure policy)
-router.get('/config', admissionController.getConfig);
+// Admission config (rates, discounts, EMI limits, foreclosure policy) — admin only
+router.get('/config', requireModule('ADMISSION', 'ADMIN'), admissionController.getConfig);
 router.put('/config', requireModule('ADMISSION', 'ADMIN'), admissionController.updateConfig);
 
-// Admissions
+// Admissions — list/detail are open to any Admission access, but the
+// controller itself pins non-admin callers to only their own records
+// (defense in depth, not just a UI filter).
 router.get('/', admissionController.listAdmissions);
 router.post('/', requireModule('ADMISSION', 'EDIT'), admissionController.createAdmission);
 router.get('/:id', admissionController.getAdmission);

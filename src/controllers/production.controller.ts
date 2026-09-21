@@ -185,7 +185,7 @@ export async function buildStudentUserCreate(studentCode: string, email?: string
  * Generates a readable, unique sub-batch code: <BATCH>-<COURSE INITIALS>-<TIMING>,
  * e.g. "B14-DA-EVE". Numeric suffix on collision (B14-DA-EVE-2).
  */
-async function generateSubBatchCode(db: typeof prisma, batchId: string, courseId: string, timing: string): Promise<string> {
+export async function generateSubBatchCode(db: typeof prisma, batchId: string, courseId: string, timing: string): Promise<string> {
   const [batch, course] = await Promise.all([
     db.batch.findUnique({ where: { id: batchId }, select: { code: true } }),
     db.academyCourse.findUnique({ where: { id: courseId }, select: { name: true } }),

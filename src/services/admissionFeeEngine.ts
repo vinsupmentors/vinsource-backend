@@ -275,6 +275,52 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
 
 // ─── Seat locking ─────────────────────────────────────────────────────────
 
+export type SeatStatus = 'OPEN' | 'LIMITED' | 'ALMOST_FULL' | 'FULL';
+
+export interface SeatBand {
+  total: number | null;
+  booked: number;
+  available: number | null;
+  status: SeatStatus;
+  /** Real-count-based urgency copy — "Only 1 seat left!", "12 seats available", etc. Never a fabricated "N enquired" figure — only what's actually booked. */
+  label: string;
+}
+
+export interface SeatAvailability extends SeatBand {
+  scheduleId: string;
+  mode: 'ONLINE' | 'OFFLINE' | 'HYBRID';
+  /** Present only when mode === 'HYBRID' — the same numbers broken out per delivery mode. */
+  online?: SeatBand;
+  offline?: SeatBand;
+}
+
+function computeBand(total: number | null, booked: number): SeatBand {
+  if (total == null) {
+    return { total: null, booked, available: null, status: 'OPEN', label: 'Unlimited seats' };
+  }
+  const available = Math.max(0, total - booked);
+  const pctBooked = total === 0 ? 1 : booked / total;
+  let status: SeatStatus;
+  let label: string;
+  if (available <= 0) {
+    status = 'FULL';
+    label = 'Sold out';
+  } else if (available === 1) {
+    status = 'ALMOST_FULL';
+    label = 'Only 1 seat left!';
+  } else if (available <= 3) {
+    status = 'ALMOST_FULL';
+    label = `Only ${available} seats left`;
+  } else if (pctBooked >= 0.75) {
+    status = 'LIMITED';
+    label = `Filling fast — ${available} seats left`;
+  } else {
+    status = 'OPEN';
+    label = `${available} seats available`;
+  }
+  return { total, booked, available, status, label };
+}
+
 /**
  * Locks the BatchCourseSchedule row for the duration of the transaction
  * (`SELECT ... FOR UPDATE`) so two salespeople confirming an admission into
@@ -284,49 +330,77 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
  * called from inside a `prisma.$transaction(async (tx) => { ... })` block,
  * and the caller must pass that same `tx` in.
  *
+ * `deliveryMode` is required when the schedule is HYBRID (the admission must
+ * say which seat pool — Online or Offline — it's booking into) and ignored
+ * otherwise, since an ONLINE-only/OFFLINE-only schedule's mode already says
+ * which one it is.
+ *
  * "Booked" is always counted live (admissionStatus not in
  * CANCELLED/REFUNDED/DRAFT), never a cached counter column, for the same
  * reason the onboarding-status fix earlier removed a cached/self-healing
  * flag: a stored count can drift from reality, a live count cannot.
  */
-export async function reserveSeat(tx: Prisma.TransactionClient, scheduleId: string): Promise<void> {
-  const locked = await tx.$queryRaw<Array<{ id: string; capacity: number | null }>>`
-    SELECT id, capacity FROM BatchCourseSchedule WHERE id = ${scheduleId} FOR UPDATE
+export async function reserveSeat(
+  tx: Prisma.TransactionClient,
+  scheduleId: string,
+  deliveryMode?: 'ONLINE' | 'OFFLINE' | 'HYBRID'
+): Promise<void> {
+  const locked = await tx.$queryRaw<
+    Array<{ id: string; mode: string; capacity: number | null; onlineCapacity: number | null; offlineCapacity: number | null }>
+  >`
+    SELECT id, mode, capacity, onlineCapacity, offlineCapacity FROM BatchCourseSchedule WHERE id = ${scheduleId} FOR UPDATE
   `;
   const schedule = locked[0];
   if (!schedule) throw new AppError('Batch/schedule not found.', 404);
+
+  if (schedule.mode === 'HYBRID') {
+    if (deliveryMode !== 'ONLINE' && deliveryMode !== 'OFFLINE') {
+      throw new AppError('This is a Hybrid batch — please choose Online or Offline for this admission.', 400);
+    }
+    const cap = deliveryMode === 'ONLINE' ? schedule.onlineCapacity : schedule.offlineCapacity;
+    if (cap == null) return; // no cap configured for this pool — unlimited
+    const booked = await tx.feePaymentPlan.count({
+      where: { scheduleId, deliveryMode, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } },
+    });
+    if (booked >= cap) {
+      throw new AppError(`This batch's ${deliveryMode === 'ONLINE' ? 'Online' : 'Offline'} seats are now full. Please select another batch or mode.`, 409);
+    }
+    return;
+  }
+
   if (schedule.capacity == null) return; // no cap configured — unlimited seats
-
   const booked = await tx.feePaymentPlan.count({
-    where: {
-      scheduleId,
-      admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] },
-    },
+    where: { scheduleId, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } },
   });
-
   if (booked >= schedule.capacity) {
     throw new AppError('This batch is now full. Please select another batch.', 409);
   }
 }
 
-/** Live seat-availability for one schedule — used by the Upcoming Batches screen. */
-export async function getSeatAvailability(scheduleId: string) {
+/** Live seat-availability for one schedule — used by the Upcoming Batches screen and the New Admission batch picker. */
+export async function getSeatAvailability(scheduleId: string): Promise<SeatAvailability> {
   const schedule = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId } });
   if (!schedule) throw new AppError('Batch/schedule not found.', 404);
+
+  if (schedule.mode === 'HYBRID') {
+    const [onlineBooked, offlineBooked] = await Promise.all([
+      prisma.feePaymentPlan.count({ where: { scheduleId, deliveryMode: 'ONLINE', admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } }),
+      prisma.feePaymentPlan.count({ where: { scheduleId, deliveryMode: 'OFFLINE', admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } } }),
+    ]);
+    const online = computeBand(schedule.onlineCapacity, onlineBooked);
+    const offline = computeBand(schedule.offlineCapacity, offlineBooked);
+    const combinedTotal = schedule.onlineCapacity == null && schedule.offlineCapacity == null
+      ? null
+      : (schedule.onlineCapacity ?? 0) + (schedule.offlineCapacity ?? 0);
+    const combined = computeBand(combinedTotal, onlineBooked + offlineBooked);
+    return { scheduleId, mode: 'HYBRID', ...combined, online, offline };
+  }
+
   const booked = await prisma.feePaymentPlan.count({
     where: { scheduleId, admissionStatus: { notIn: ['CANCELLED', 'REFUNDED', 'DRAFT'] } },
   });
-  const total = schedule.capacity ?? null;
-  let available: number | null = null;
-  let status: 'OPEN' | 'LIMITED' | 'ALMOST_FULL' | 'FULL' = 'OPEN';
-  if (total != null) {
-    available = Math.max(0, total - booked);
-    const pctBooked = total === 0 ? 1 : booked / total;
-    if (available <= 0) status = 'FULL';
-    else if (pctBooked >= 0.9) status = 'ALMOST_FULL';
-    else if (pctBooked >= 0.75) status = 'LIMITED';
-  }
-  return { scheduleId, total, booked, available, status };
+  const band = computeBand(schedule.capacity, booked);
+  return { scheduleId, mode: schedule.mode as 'ONLINE' | 'OFFLINE', ...band };
 }
 
 // ─── Foreclosure ──────────────────────────────────────────────────────────

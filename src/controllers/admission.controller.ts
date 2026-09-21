@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { getEffectiveAccess } from '../utils/moduleAccess';
+import { generateSubBatchCode } from './production.controller';
 import {
   calculateFee,
   getAdmissionConfig,
@@ -11,6 +13,14 @@ import {
   validateAndPriceCoupon,
   type CalculateFeeInput,
 } from '../services/admissionFeeEngine';
+
+/** True if this caller has ADMIN-level ADMISSION access (coupons/course fees/config/all-admissions are admin-only). */
+async function isAdmissionAdmin(req: AuthRequest): Promise<boolean> {
+  if (!req.user) return false;
+  if (req.user.role === 'SUPER_ADMIN') return true;
+  const access = await getEffectiveAccess(req.user.userId);
+  return access.ADMISSION === 'ADMIN';
+}
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 const leadSelect = { id: true, name: true, phone: true, email: true, city: true, assignedToId: true };
@@ -107,7 +117,9 @@ export const admissionController = {
   async listUpcomingBatches(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { courseId, includeFull } = req.query;
-      const where: Record<string, unknown> = { status: { in: ['UPCOMING', 'ONGOING'] } };
+      // Ongoing/Completed batches don't belong in the admission picker — only
+      // batches that haven't started yet can still take new admissions.
+      const where: Record<string, unknown> = { status: 'UPCOMING' };
       if (courseId) where.courseId = String(courseId);
 
       const schedules = await prisma.batchCourseSchedule.findMany({
@@ -141,6 +153,83 @@ export const admissionController = {
     } catch (err) { next(err); }
   },
 
+  /** Existing (non-completed/cancelled) Batches, for the "add to an existing batch" picker in Create Batch. Admin only. */
+  async listBatchGroups(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const batches = await prisma.batch.findMany({
+        where: { status: { in: ['UPCOMING', 'ONGOING'] } },
+        select: { id: true, code: true, status: true, startDate: true },
+        orderBy: { startDate: 'desc' },
+      });
+      res.json({ success: true, data: batches });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * A deliberately lightweight batch/schedule creator scoped to what
+   * Admission actually needs (course, timing, day pattern, mode, seats,
+   * start date) — not the fuller Production batch-builder (trainers,
+   * feedback forms, etc.), so a Sales-side admin without Production access
+   * isn't blocked from opening a new intake batch. Either attaches a new
+   * BatchCourseSchedule to an existing Batch (batchId) or creates a brand
+   * new Batch on the fly (newBatchCode). Admin only.
+   */
+  async createBatchSchedule(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const {
+        batchId, newBatchCode, courseId, timing, dayPattern, mode,
+        startDate, capacity, onlineCapacity, offlineCapacity,
+      } = req.body;
+
+      if (!courseId || !timing || !mode || !startDate) {
+        throw new AppError('Course, timing, mode, and start date are required.', 400);
+      }
+      if (!batchId && !newBatchCode) {
+        throw new AppError('Choose an existing batch or provide a name for a new one.', 400);
+      }
+      if (mode === 'HYBRID' && onlineCapacity == null && offlineCapacity == null) {
+        throw new AppError('Enter seat counts for at least one of Online / Offline for a Hybrid batch.', 400);
+      }
+
+      const resolvedBatchId = batchId || (await prisma.batch.create({
+        data: { code: newBatchCode, startDate: new Date(startDate), createdById: req.user?.employeeId },
+      })).id;
+
+      const code = await generateSubBatchCode(prisma, resolvedBatchId, courseId, timing);
+
+      const schedule = await prisma.batchCourseSchedule.create({
+        data: {
+          code,
+          batchId: resolvedBatchId,
+          courseId,
+          timing,
+          dayPattern: dayPattern || 'MON_SAT',
+          mode,
+          startDate: new Date(startDate),
+          capacity: mode === 'HYBRID' ? undefined : (capacity != null ? Number(capacity) : undefined),
+          onlineCapacity: mode === 'HYBRID' && onlineCapacity != null ? Number(onlineCapacity) : undefined,
+          offlineCapacity: mode === 'HYBRID' && offlineCapacity != null ? Number(offlineCapacity) : undefined,
+        },
+        include: { batch: { select: { id: true, code: true } }, course: { select: { id: true, name: true } } },
+      });
+
+      if (req.user?.userId) {
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user.userId,
+            action: 'CREATE',
+            module: 'ADMISSION',
+            entityId: schedule.id,
+            entityType: 'BatchCourseSchedule',
+            newData: schedule as object,
+          },
+        });
+      }
+
+      res.status(201).json({ success: true, data: { ...schedule, seats: await getSeatAvailability(schedule.id) } });
+    } catch (err) { next(err); }
+  },
+
   // ── Admissions ─────────────────────────────────────────────────────────
 
   async createAdmission(req: AuthRequest, res: Response, next: NextFunction) {
@@ -154,6 +243,7 @@ export const admissionController = {
         couponCode,
         paymentMethod,
         emiMonths,
+        deliveryMode, // 'ONLINE' | 'OFFLINE' — required only when the chosen schedule is HYBRID
         payment, // { amount, mode, collectedAt } — the amount actually collected right now (spot/full/registration/down payment)
       } = req.body;
 
@@ -201,6 +291,9 @@ export const admissionController = {
 
       const schedule = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId } });
       if (!schedule) throw new AppError('Selected batch not found.', 404);
+      if (schedule.mode === 'HYBRID' && deliveryMode !== 'ONLINE' && deliveryMode !== 'OFFLINE') {
+        throw new AppError('This is a Hybrid batch — please choose Online or Offline for this admission.', 400);
+      }
 
       const admissionId = await nextAdmissionId();
       const now = payment?.collectedAt ? new Date(payment.collectedAt) : new Date();
@@ -211,7 +304,7 @@ export const admissionController = {
         // Lock the schedule row + re-check seats INSIDE the transaction —
         // the count above (if any) was only for display; this is the real,
         // race-safe check.
-        await reserveSeat(tx, scheduleId);
+        await reserveSeat(tx, scheduleId, schedule.mode === 'HYBRID' ? deliveryMode : undefined);
 
         const plan = await tx.feePaymentPlan.create({
           data: {
@@ -220,6 +313,7 @@ export const admissionController = {
             courseId,
             track: track as any,
             scheduleId,
+            deliveryMode: schedule.mode === 'HYBRID' ? deliveryMode : undefined,
             totalFee: breakdown.baseFee,
             planType: paymentMethod,
             couponId: breakdown.couponCode
@@ -354,12 +448,23 @@ export const admissionController = {
       const { salespersonId, courseId, track, scheduleId, paymentMethod, admissionStatus, couponCode, search, from, to } = req.query;
       const where: Record<string, unknown> = { admissionId: { not: null } }; // only rows created via this module
 
+      // Non-admin (EDIT-level) callers only ever see their own admissions —
+      // enforced here, not just hidden in the UI, so this holds even if
+      // someone calls the API directly. Admins can optionally filter by
+      // salesperson; everyone else is pinned to themselves regardless of
+      // what they pass.
+      const admin = await isAdmissionAdmin(req);
+      if (!admin) {
+        where.createdById = req.user?.employeeId;
+      } else if (salespersonId) {
+        where.createdById = String(salespersonId);
+      }
+
       if (courseId) where.courseId = String(courseId);
       if (track) where.track = String(track);
       if (scheduleId) where.scheduleId = String(scheduleId);
       if (paymentMethod) where.planType = String(paymentMethod);
       if (admissionStatus) where.admissionStatus = String(admissionStatus);
-      if (salespersonId) where.createdById = String(salespersonId);
       if (couponCode) where.coupon = { code: String(couponCode).toUpperCase() };
       if (from || to) {
         const range: Record<string, Date> = {};
@@ -392,6 +497,9 @@ export const admissionController = {
     try {
       const plan = await prisma.feePaymentPlan.findUnique({ where: { id: req.params.id }, include: admissionInclude });
       if (!plan || !plan.admissionId) throw new AppError('Admission not found.', 404);
+      if (!(await isAdmissionAdmin(req)) && plan.createdById !== req.user?.employeeId) {
+        throw new AppError('Admission not found.', 404); // same message as not-found — don't leak that it belongs to someone else
+      }
       res.json({
         success: true,
         data: {

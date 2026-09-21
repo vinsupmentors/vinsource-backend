@@ -1608,6 +1608,11 @@ model FeePaymentPlan {
   courseId         String? // proper FK to AcademyCourse, alongside the legacy free-text courseName above
   track            StudentTrack?
   scheduleId       String? // BatchCourseSchedule — which sub-batch/seat this admission reserves
+  // Only meaningful (and required) when the chosen schedule is HYBRID — which
+  // seat pool (Online vs Offline) this admission counts against. Null for
+  // ONLINE-only/OFFLINE-only schedules, since the schedule's own `mode`
+  // already says which one it is.
+  deliveryMode     DeliveryMode?
   batchAllocatedAt DateTime? // set the moment seat-locking succeeds at confirmation
 
   couponId           String?
@@ -2321,7 +2326,14 @@ model BatchCourseSchedule {
   mode      DeliveryMode
   startDate DateTime
   endDate   DateTime?
-  capacity  Int?
+  // For ONLINE-only or OFFLINE-only schedules, `capacity` alone is the seat
+  // cap. For HYBRID schedules, seats are tracked separately per delivery
+  // mode instead (an admission for a Hybrid batch must pick Online or
+  // Offline, and is counted against that specific pool) — `capacity` stays
+  // null on Hybrid rows; onlineCapacity/offlineCapacity are used instead.
+  capacity        Int?
+  onlineCapacity  Int?
+  offlineCapacity Int?
   createdAt DateTime     @default(now())
   // Tracked independently of the parent Batch's status — a Batch can only be
   // marked COMPLETED once all of its (non-cancelled) sub-batches are, since
