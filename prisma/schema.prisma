@@ -2322,6 +2322,14 @@ model BatchCourseSchedule {
   batchId   String
   courseId  String
   timing    BatchTiming
+  // Exact clock time for this slot, e.g. "09:30"/"11:30" — Morning now
+  // covers more than one real time slot (9:30-11:30 and 12:00-2:00 both
+  // count as "Morning" for the coarse `timing` bucket other modules already
+  // rely on), so Admission's batch creator captures and displays the exact
+  // range instead of just the bucket. Optional/nullable so every schedule
+  // created before this existed keeps working unchanged.
+  startTime String?
+  endTime   String?
   dayPattern DayPattern
   mode      DeliveryMode
   startDate DateTime

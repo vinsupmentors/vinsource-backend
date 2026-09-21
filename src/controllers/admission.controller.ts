@@ -29,7 +29,7 @@ const admissionInclude = {
   lead: { select: leadSelect },
   createdBy: { select: employeeSelect },
   course: { select: { id: true, name: true } },
-  schedule: { select: { id: true, code: true, timing: true, startDate: true, batch: { select: { id: true, code: true } } } },
+  schedule: { select: { id: true, code: true, timing: true, startTime: true, endTime: true, startDate: true, batch: { select: { id: true, code: true } } } },
   coupon: { select: { id: true, code: true, name: true } },
   installments: {
     orderBy: { dueDate: 'asc' as const },
@@ -186,12 +186,12 @@ export const admissionController = {
   async createBatchSchedule(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const {
-        batchId, newBatchCode, courseId, timing, dayPattern, mode,
+        batchId, newBatchCode, courseId, startTime, endTime, dayPattern, mode,
         startDate, capacity, onlineCapacity, offlineCapacity,
       } = req.body;
 
-      if (!courseId || !timing || !mode || !startDate) {
-        throw new AppError('Course, timing, mode, and start date are required.', 400);
+      if (!courseId || !startTime || !endTime || !mode || !startDate) {
+        throw new AppError('Course, start/end time, mode, and start date are required.', 400);
       }
       if (!batchId && !newBatchCode) {
         throw new AppError('Choose an existing batch or provide a name for a new one.', 400);
@@ -199,6 +199,16 @@ export const admissionController = {
       if (mode === 'HYBRID' && onlineCapacity == null && offlineCapacity == null) {
         throw new AppError('Enter seat counts for at least one of Online / Offline for a Hybrid batch.', 400);
       }
+
+      // "Morning" now covers more than one real slot (e.g. 9:30-11:30 and
+      // 12:00-2:00 are both run as separate Morning batches), so the coarse
+      // BatchTiming bucket other modules key off is derived from the exact
+      // start time rather than asked for directly — Admission always
+      // records the real range, and the bucket is just what Production's
+      // sub-batch-code convention and existing filters need underneath.
+      const startHour = Number(String(startTime).split(':')[0]);
+      const timing: 'MORNING' | 'AFTERNOON' | 'EVENING' =
+        startHour < 12 ? 'MORNING' : startHour < 17 ? 'AFTERNOON' : 'EVENING';
 
       const resolvedBatchId = batchId || (await prisma.batch.create({
         data: { code: newBatchCode, startDate: new Date(startDate), createdById: req.user?.employeeId },
@@ -212,6 +222,7 @@ export const admissionController = {
           batchId: resolvedBatchId,
           courseId,
           timing,
+          startTime, endTime,
           dayPattern: dayPattern || 'MON_SAT',
           mode,
           startDate: new Date(startDate),
