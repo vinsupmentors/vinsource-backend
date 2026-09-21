@@ -119,7 +119,16 @@ export const admissionController = {
       const { courseId, includeFull } = req.query;
       // Ongoing/Completed batches don't belong in the admission picker — only
       // batches that haven't started yet can still take new admissions.
-      const where: Record<string, unknown> = { status: 'UPCOMING' };
+      // `status` alone isn't trustworthy here: it's a field Production sets
+      // by hand when editing a schedule, and nothing ever auto-flips it from
+      // UPCOMING to ONGOING once the start date arrives — so a batch that
+      // started weeks ago can still sit at status=UPCOMING forever if nobody
+      // remembered to update it. Gate on the actual start date too (computed
+      // fresh every request, never cached) so a stale status field can't
+      // leak a long-since-started batch back into this list.
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const where: Record<string, unknown> = { status: 'UPCOMING', startDate: { gte: startOfToday } };
       if (courseId) where.courseId = String(courseId);
 
       const schedules = await prisma.batchCourseSchedule.findMany({
