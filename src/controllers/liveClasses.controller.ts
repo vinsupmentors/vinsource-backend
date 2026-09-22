@@ -686,7 +686,7 @@ export const liveClassesController = {
   async webhook(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const rawBody = (req.body as Buffer).toString('utf8');
-      const event = verifyWebhook(rawBody, req.get('Authorization'));
+      const event = await verifyWebhook(rawBody, req.get('Authorization'));
 
       if (event.event === 'egress_ended' && event.egressInfo) {
         const info = event.egressInfo;

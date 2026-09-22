@@ -226,8 +226,8 @@ export async function stopEgress(egressId: string): Promise<void> {
 }
 
 let _webhookReceiver: WebhookReceiver | null = null;
-/** Verifies + parses an inbound LiveKit webhook (egress_ended, etc.) — the RAW request body is required for signature verification, so the route registering this must NOT run express.json() first (see app.ts). */
-export function verifyWebhook(rawBody: string, authHeader: string | undefined) {
+/** Verifies + parses an inbound LiveKit webhook (egress_ended, etc.) — the RAW request body is required for signature verification, so the route registering this must NOT run express.json() first (see app.ts). receive() resolves asynchronously (it validates the signature before parsing), so this must be awaited by callers. */
+export async function verifyWebhook(rawBody: string, authHeader: string | undefined) {
   assertConfigured();
   if (!_webhookReceiver) {
     _webhookReceiver = new WebhookReceiver(config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET);
