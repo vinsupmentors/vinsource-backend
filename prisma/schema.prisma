@@ -2130,6 +2130,7 @@ model Student {
   feeDeclarations    StudentFeeDeclaration[]
   enrollments      StudentBatchEnrollment[]
   attendances      StudentAttendance[]
+  liveClassAttendances LiveClassAttendance[]
   moduleMarks      ModuleMark[]
   moduleFeedbacks  ModuleFeedback[]
   trainerFeedbacks TrainerFeedback[]
@@ -3749,6 +3750,8 @@ model LiveClass {
   createdBy    Employee?               @relation("LiveClassCreator", fields: [createdById], references: [id], onDelete: SetNull)
   participants LiveClassParticipant[]
   chatMessages LiveClassChatMessage[]
+  attendance   LiveClassAttendance[]
+  recordings   LiveClassRecording[]
 
   @@index([scheduleId])
   @@index([status])
@@ -3798,4 +3801,75 @@ model LiveClassChatMessage {
   user      User      @relation(fields: [userId], references: [id])
 
   @@index([liveClassId])
+}
+
+/// Computed once, when the host ends the class (see liveClasses.controller.ts
+/// `end`) — sums every join/leave session a student had in this class
+/// (LiveClassParticipant rows can be more than one per student, on rejoin),
+/// divides by the class's actual duration, and buckets against the
+/// LIVE_CLASS_ATTENDANCE_*_PCT thresholds. One row per (class, student),
+/// including students who never joined at all (ABSENT, 0 minutes) — that's
+/// deliberate, so a completed class's attendance roster is always the full
+/// enrolled list, not just whoever happened to show up.
+///
+/// Deliberately its own table rather than reusing StudentAttendance: that
+/// table has no percentage/duration concept and no PARTIAL status, and is
+/// driven by a trainer's own manual daily marking (trainerPortal.controller.ts
+/// `markAttendance`) which this must not silently overwrite. A trainer can
+/// instead explicitly push a computed row into StudentAttendance via
+/// POST /:id/attendance/sync — opt-in, not automatic.
+model LiveClassAttendance {
+  id              String                     @id @default(uuid())
+  liveClassId     String
+  studentId       String
+  status          LiveClassAttendanceStatus
+  attendedMinutes Int // summed across every join/leave session
+  classMinutes    Int // actualEndAt - actualStartAt, in minutes
+  percentAttended Int // 0-100, rounded
+  computedAt      DateTime                   @default(now())
+
+  liveClass LiveClass @relation(fields: [liveClassId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id])
+
+  @@unique([liveClassId, studentId])
+  @@index([studentId])
+}
+
+enum LiveClassAttendanceStatus {
+  PRESENT
+  PARTIAL
+  ABSENT
+}
+
+/// Phase 2: auto-recording via self-hosted LiveKit Egress, uploaded straight
+/// to a PRIVATE Cloudflare R2 bucket (separate from the public `vinsource-docs`
+/// bucket already used elsewhere in this app — see storage.service.ts).
+/// Deliberately never stores or exposes a public/direct URL: `storageKey` is
+/// an R2 object key only, and playback always goes through a short-lived
+/// presigned URL minted on request (liveClasses.controller.ts `playRecording`)
+/// — this is the "recording and live-streaming are architecturally separate,
+/// and recordings are never a raw exposed URL" requirement from the original
+/// spec. `egressId` is LiveKit's own identifier for the recording job, used
+/// to match the async `egress_ended` webhook back to this row.
+model LiveClassRecording {
+  id            String                    @id @default(uuid())
+  liveClassId   String
+  egressId      String                    @unique
+  status        LiveClassRecordingStatus  @default(RECORDING)
+  storageKey    String? // R2 object key — set once the egress_ended webhook confirms upload
+  durationSec   Int?
+  fileSizeBytes BigInt?
+  failReason    String?                   @db.Text
+  startedAt     DateTime                  @default(now())
+  endedAt       DateTime?
+
+  liveClass LiveClass @relation(fields: [liveClassId], references: [id], onDelete: Cascade)
+
+  @@index([liveClassId])
+}
+
+enum LiveClassRecordingStatus {
+  RECORDING
+  READY
+  FAILED
 }

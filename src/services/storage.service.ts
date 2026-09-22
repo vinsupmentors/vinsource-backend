@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../config/env';
 import crypto from 'crypto';
 import path from 'path';
@@ -62,5 +63,16 @@ export const storageService = {
     } catch (err) {
       console.error('[storage] delete failed for key:', key, err);
     }
+  },
+
+  /**
+   * Short-lived signed GET URL for a PRIVATE bucket — used for Live Classes
+   * recordings (a separate, non-public bucket from R2_BUCKET above), so
+   * playback never routes through a permanent/guessable public link. Takes
+   * an explicit `bucket` param (rather than always using R2_BUCKET) since
+   * this is the one caller in the app reading from a different bucket.
+   */
+  async getPresignedUrl(bucket: string, key: string, expiresInSeconds = 3600): Promise<string> {
+    return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: expiresInSeconds });
   },
 };

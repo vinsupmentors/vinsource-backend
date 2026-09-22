@@ -13,7 +13,11 @@ import {
   removeParticipant as liveKitRemoveParticipant,
   isLiveKitConfigured,
   getLiveKitUrl,
+  startEgress,
+  stopEgress,
+  verifyWebhook,
 } from '../services/liveKit.service';
+import { storageService } from '../services/storage.service';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true } as const;
 const studentSelect = { id: true, firstName: true, lastName: true, studentCode: true, photo: true } as const;
@@ -101,6 +105,52 @@ function dayRange(d: Date) {
   return { gte: start, lt: end };
 }
 
+/** Attendance-from-video — computed once when a class ends. Sums every
+ * join/leave session a student had in this class (LiveClassParticipant can
+ * have more than one row per student, on rejoin) against the class's actual
+ * duration, then buckets against the LIVE_CLASS_ATTENDANCE_*_PCT thresholds.
+ * Writes one row per actively-enrolled student, including students who never
+ * joined at all (ABSENT, 0 minutes) — a completed class's attendance roster
+ * is always the full enrolled list, not just whoever happened to show up.
+ * Best-effort: called from `end()` and swallowed on failure there, since a
+ * bug here should never block a trainer from actually ending a class. */
+async function computeAttendance(liveClassId: string, scheduleId: string, actualStartAt: Date, actualEndAt: Date): Promise<void> {
+  const classMinutes = Math.max(1, Math.round((actualEndAt.getTime() - actualStartAt.getTime()) / 60000));
+
+  const [enrollments, sessions] = await Promise.all([
+    prisma.studentBatchEnrollment.findMany({ where: { scheduleId, status: 'ACTIVE' }, select: { studentId: true } }),
+    prisma.liveClassParticipant.findMany({
+      where: { liveClassId, role: 'STUDENT' },
+      select: { joinedAt: true, leftAt: true, user: { select: { student: { select: { id: true } } } } },
+    }),
+  ]);
+
+  const minutesByStudent = new Map<string, number>();
+  for (const s of sessions) {
+    const studentId = s.user.student?.id;
+    if (!studentId) continue; // shouldn't happen (STUDENT-role rows always have a linked Student), but don't crash on it
+    const joined = s.joinedAt < actualStartAt ? actualStartAt : s.joinedAt;
+    const left = s.leftAt && s.leftAt < actualEndAt ? s.leftAt : actualEndAt; // clamp anyone still "open" at class end
+    const mins = Math.max(0, (left.getTime() - joined.getTime()) / 60000);
+    minutesByStudent.set(studentId, (minutesByStudent.get(studentId) || 0) + mins);
+  }
+
+  const presentPct = config.LIVE_CLASS_ATTENDANCE_PRESENT_PCT;
+  const partialPct = config.LIVE_CLASS_ATTENDANCE_PARTIAL_PCT;
+
+  await Promise.all(enrollments.map((e: (typeof enrollments)[number]) => {
+    const attendedMinutes = Math.round(minutesByStudent.get(e.studentId) || 0);
+    const percentAttended = Math.min(100, Math.round((attendedMinutes / classMinutes) * 100));
+    const status: 'PRESENT' | 'PARTIAL' | 'ABSENT' =
+      percentAttended >= presentPct ? 'PRESENT' : percentAttended >= partialPct ? 'PARTIAL' : 'ABSENT';
+    return prisma.liveClassAttendance.upsert({
+      where: { liveClassId_studentId: { liveClassId, studentId: e.studentId } },
+      update: { status, attendedMinutes, classMinutes, percentAttended, computedAt: new Date() },
+      create: { liveClassId, studentId: e.studentId, status, attendedMinutes, classMinutes, percentAttended },
+    });
+  }));
+}
+
 /** Builds the self-scoping `schedule` where-clause for non-admin callers; returns null (meaning "show nothing") if the caller has no way into any class at all. */
 function selfScopeWhere(req: AuthRequest): Record<string, unknown> | null {
   if (req.user?.role === 'STUDENT' && req.user.studentId) {
@@ -113,6 +163,104 @@ function selfScopeWhere(req: AuthRequest): Record<string, unknown> | null {
 }
 
 export const liveClassesController = {
+  // ── Analytics ────────────────────────────────────────────────────────────────
+  /** Rollups over completed/cancelled classes: summary counts, per-trainer and
+   * per-batch attendance/volume, and a per-class attendance trend. Attributed
+   * to the class's creator (createdBy), not every co-trainer who happened to
+   * join — matches how classes are grouped everywhere else in this module.
+   * Self-scopes the same way `list`/`dashboard` do: non-admins only see
+   * classes on schedules they're assigned to train. */
+  async analytics(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const admin = await isLiveClassesAdmin(req);
+      const { from, to, batchId, scheduleId } = req.query;
+
+      const empty = { summary: { totalClasses: 0, completedClasses: 0, cancelledClasses: 0, avgAttendancePercent: 0, totalChatMessages: 0, avgChatMessagesPerClass: 0 }, byTrainer: [], byBatch: [], trend: [] };
+
+      const where: Record<string, unknown> = { status: { in: ['COMPLETED', 'CANCELLED'] } };
+      const scheduleWhere: Record<string, unknown> = {};
+      if (!admin) {
+        const scope = selfScopeWhere(req);
+        if (!scope) return res.json({ success: true, data: empty });
+        Object.assign(scheduleWhere, scope);
+      }
+      if (batchId) scheduleWhere.batchId = String(batchId);
+      if (Object.keys(scheduleWhere).length) where.schedule = scheduleWhere;
+      if (scheduleId) where.scheduleId = String(scheduleId);
+      if (from || to) {
+        const range: Record<string, Date> = {};
+        if (from) range.gte = new Date(String(from));
+        if (to) range.lte = new Date(String(to));
+        where.scheduledDate = range;
+      }
+
+      const classes = await prisma.liveClass.findMany({
+        where,
+        select: {
+          id: true, status: true, scheduledDate: true, createdById: true,
+          createdBy: { select: { id: true, firstName: true, lastName: true } },
+          schedule: { select: { batchId: true, batch: { select: { code: true } } } },
+          _count: { select: { chatMessages: true } },
+          attendance: { select: { status: true, percentAttended: true } },
+        },
+        orderBy: { scheduledDate: 'asc' },
+      });
+
+      type ClassRow = (typeof classes)[number];
+      const completed = classes.filter((c: ClassRow) => c.status === 'COMPLETED');
+      const cancelled = classes.filter((c: ClassRow) => c.status === 'CANCELLED');
+
+      const allAttendanceRows = completed.flatMap((c: ClassRow) => c.attendance);
+      const avgAttendancePercent = allAttendanceRows.length
+        ? Math.round(allAttendanceRows.reduce((sum: number, r: (typeof allAttendanceRows)[number]) => sum + r.percentAttended, 0) / allAttendanceRows.length)
+        : 0;
+      const totalChatMessages = classes.reduce((sum: number, c: ClassRow) => sum + c._count.chatMessages, 0);
+      const avgChatMessagesPerClass = completed.length ? Math.round((totalChatMessages / completed.length) * 10) / 10 : 0;
+
+      const trainerMap = new Map<string, { trainerId: string; name: string; classesHosted: number; attendanceSum: number; attendanceCount: number }>();
+      for (const c of completed) {
+        if (!c.createdById || !c.createdBy) continue;
+        const entry = trainerMap.get(c.createdById) || { trainerId: c.createdById, name: `${c.createdBy.firstName} ${c.createdBy.lastName}`, classesHosted: 0, attendanceSum: 0, attendanceCount: 0 };
+        entry.classesHosted += 1;
+        for (const a of c.attendance) { entry.attendanceSum += a.percentAttended; entry.attendanceCount += 1; }
+        trainerMap.set(c.createdById, entry);
+      }
+      const byTrainer = Array.from(trainerMap.values())
+        .map((t) => ({ trainerId: t.trainerId, name: t.name, classesHosted: t.classesHosted, avgAttendancePercent: t.attendanceCount ? Math.round(t.attendanceSum / t.attendanceCount) : 0 }))
+        .sort((a, b) => b.classesHosted - a.classesHosted);
+
+      const batchMap = new Map<string, { batchId: string; code: string; classesCount: number; attendanceSum: number; attendanceCount: number }>();
+      for (const c of completed) {
+        const bId = c.schedule.batchId;
+        const entry = batchMap.get(bId) || { batchId: bId, code: c.schedule.batch.code, classesCount: 0, attendanceSum: 0, attendanceCount: 0 };
+        entry.classesCount += 1;
+        for (const a of c.attendance) { entry.attendanceSum += a.percentAttended; entry.attendanceCount += 1; }
+        batchMap.set(bId, entry);
+      }
+      const byBatch = Array.from(batchMap.values())
+        .map((b) => ({ batchId: b.batchId, code: b.code, classesCount: b.classesCount, avgAttendancePercent: b.attendanceCount ? Math.round(b.attendanceSum / b.attendanceCount) : 0 }))
+        .sort((a, b) => b.classesCount - a.classesCount);
+
+      const trend = completed.map((c: ClassRow) => {
+        const present = c.attendance.filter((a: (typeof c.attendance)[number]) => a.status === 'PRESENT').length;
+        const partial = c.attendance.filter((a: (typeof c.attendance)[number]) => a.status === 'PARTIAL').length;
+        const absent = c.attendance.filter((a: (typeof c.attendance)[number]) => a.status === 'ABSENT').length;
+        const avg = c.attendance.length ? Math.round(c.attendance.reduce((s: number, a: (typeof c.attendance)[number]) => s + a.percentAttended, 0) / c.attendance.length) : 0;
+        return { classId: c.id, date: c.scheduledDate, avgAttendancePercent: avg, present, partial, absent };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          summary: { totalClasses: classes.length, completedClasses: completed.length, cancelledClasses: cancelled.length, avgAttendancePercent, totalChatMessages, avgChatMessagesPerClass },
+          byTrainer,
+          byBatch,
+          trend,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
   // ── Schedule picker (for Create Class) ────────────────────────────────────
   async listSchedules(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -357,16 +505,37 @@ export const liveClassesController = {
 
       await ensureRoom(existing.roomName);
 
-      const liveClass = existing.status === 'LIVE'
-        ? existing
-        : await prisma.liveClass.update({ where: { id: existing.id }, data: { status: 'LIVE', actualStartAt: new Date() }, include: liveClassInclude });
+      let liveClass = existing;
+      if (existing.status !== 'LIVE') {
+        liveClass = await prisma.liveClass.update({ where: { id: existing.id }, data: { status: 'LIVE', actualStartAt: new Date() }, include: liveClassInclude });
+        // Auto-record — only on the actual transition to LIVE, not on every
+        // subsequent co-trainer /start call. Best-effort: a recording
+        // failure (Egress/Redis not set up, R2 misconfigured, etc.) never
+        // blocks the class itself from starting.
+        try {
+          const egress = await startEgress(existing.roomName, existing.id);
+          if (egress) await prisma.liveClassRecording.create({ data: { liveClassId: existing.id, egressId: egress.egressId } });
+        } catch (err) {
+          console.error('[liveClasses] failed to start recording for', existing.id, err);
+        }
+      }
 
-      const alreadyHost = await prisma.liveClassParticipant.findFirst({ where: { liveClassId: existing.id, role: 'HOST' } });
+      // Whoever is filling the host slot right now — an active (leftAt null)
+      // HOST row — determines whether this caller becomes HOST or CO_TRAINER,
+      // not "whoever historically started it first". This lets the class
+      // continue seamlessly if the original host's session ended (e.g. a
+      // disconnect that called /leave) and a co-trainer or the original host
+      // reconnecting steps back into the host slot.
+      const activeHost = await prisma.liveClassParticipant.findFirst({ where: { liveClassId: existing.id, role: 'HOST', leftAt: null } });
+      const role: 'HOST' | 'CO_TRAINER' = activeHost ? 'CO_TRAINER' : 'HOST';
       await prisma.liveClassParticipant.create({
-        data: { liveClassId: existing.id, userId: req.user!.userId, role: alreadyHost ? 'CO_TRAINER' : 'HOST' },
+        data: { liveClassId: existing.id, userId: req.user!.userId, role },
       });
 
-      const token = await mintAccessToken({ roomName: existing.roomName, identity: req.user!.userId, name: await resolveDisplayName(req) });
+      const token = await mintAccessToken({
+        roomName: existing.roomName, identity: req.user!.userId, name: await resolveDisplayName(req),
+        metadata: JSON.stringify({ role }),
+      });
 
       res.json({ success: true, data: { liveClass, token, url: getLiveKitUrl(), roomName: existing.roomName } });
     } catch (err) { next(err); }
@@ -379,23 +548,165 @@ export const liveClassesController = {
       if (!(await canManageSchedule(req, existing.scheduleId))) throw new AppError('You cannot end this class.', 403);
       if (existing.status !== 'LIVE') throw new AppError('This class is not currently live.', 400);
 
+      const actualEndAt = new Date();
+
+      // Stop recording BEFORE closing the room, so Egress gets a clean
+      // signal to finish encoding/uploading rather than the room simply
+      // vanishing out from under it. The actual READY/FAILED status + final
+      // file details arrive asynchronously via the egress_ended webhook —
+      // this just tells LiveKit to wrap up.
+      const activeRecording = await prisma.liveClassRecording.findFirst({ where: { liveClassId: existing.id, status: 'RECORDING' } });
+      if (activeRecording) await stopEgress(activeRecording.egressId);
+
       const updated = await prisma.liveClass.update({
         where: { id: existing.id },
-        data: { status: 'COMPLETED', actualEndAt: new Date() },
+        data: { status: 'COMPLETED', actualEndAt },
         include: liveClassInclude,
       });
       await closeRoom(existing.roomName);
-      // Anyone still marked as "in the room" gets their session closed out.
+      // Anyone still marked as "in the room" gets their session closed out —
+      // clamped to the same actualEndAt computeAttendance below will use.
       await prisma.liveClassParticipant.updateMany({
         where: { liveClassId: existing.id, leftAt: null },
-        data: { leftAt: new Date() },
+        data: { leftAt: actualEndAt },
       });
+
+      if (existing.actualStartAt) {
+        await computeAttendance(existing.id, existing.scheduleId, existing.actualStartAt, actualEndAt).catch(() => {});
+      }
 
       await prisma.auditLog.create({
         data: { userId: req.user!.userId, action: 'EDIT', module: 'LIVE_CLASSES', entityId: updated.id, entityType: 'LiveClass', newData: { status: 'COMPLETED' } },
       }).catch(() => {});
 
       res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  // ── Attendance-from-video ────────────────────────────────────────────────────
+  /** Staff/admin see the full roster; a student sees only their own row. Records
+   * only exist once the class has actually ended (computeAttendance runs from `end`). */
+  async attendance(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      const { canHost } = await assertCanJoin(req, liveClass);
+
+      const rows = await prisma.liveClassAttendance.findMany({
+        where: { liveClassId: liveClass.id },
+        include: { student: { select: studentSelect } },
+        orderBy: { percentAttended: 'desc' },
+      });
+
+      if (canHost) {
+        return res.json({ success: true, data: { forEveryone: true, computed: liveClass.status === 'COMPLETED', records: rows } });
+      }
+      if (!req.user?.studentId) throw new AppError('You do not have access to this class.', 403);
+      const own = rows.filter((r: (typeof rows)[number]) => r.studentId === req.user!.studentId);
+      res.json({ success: true, data: { forEveryone: false, computed: liveClass.status === 'COMPLETED', records: own } });
+    } catch (err) { next(err); }
+  },
+
+  /** Opt-in only — a trainer explicitly pushes the computed roster into the
+   * existing daily StudentAttendance table (PARTIAL maps to LATE, that table's
+   * closest equivalent). Never automatic: StudentAttendance is otherwise owned
+   * entirely by a trainer's own manual marking (trainerPortal `markAttendance`),
+   * and this must not silently overwrite that on a date they haven't reviewed. */
+  async syncAttendance(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      if (!(await canManageSchedule(req, liveClass.scheduleId))) throw new AppError('Only a trainer on this batch can do that.', 403);
+      if (liveClass.status !== 'COMPLETED') throw new AppError('Attendance can only be synced once the class has ended.', 400);
+
+      const rows = await prisma.liveClassAttendance.findMany({ where: { liveClassId: liveClass.id } });
+      if (!rows.length) throw new AppError('No computed attendance to sync for this class.', 400);
+
+      const dayStart = new Date(liveClass.scheduledDate);
+      dayStart.setHours(0, 0, 0, 0);
+      const statusMap: Record<string, 'PRESENT' | 'ABSENT' | 'LATE'> = { PRESENT: 'PRESENT', PARTIAL: 'LATE', ABSENT: 'ABSENT' };
+
+      await Promise.all(rows.map((r: (typeof rows)[number]) =>
+        prisma.studentAttendance.upsert({
+          where: { studentId_scheduleId_date: { studentId: r.studentId, scheduleId: liveClass.scheduleId, date: dayStart } },
+          update: { status: statusMap[r.status], markedById: req.user?.employeeId || undefined },
+          create: { studentId: r.studentId, scheduleId: liveClass.scheduleId, date: dayStart, status: statusMap[r.status], markedById: req.user?.employeeId || undefined },
+        })
+      ));
+
+      res.json({ success: true, data: { synced: rows.length } });
+    } catch (err) { next(err); }
+  },
+
+  // ── Recording ────────────────────────────────────────────────────────────────
+  /** Metadata only — never a direct/storage URL. Staff see every recording on
+   * the class; a student sees them too (same access as joining live), but
+   * only once READY — a still-RECORDING or FAILED row isn't playable yet. */
+  async recordings(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      await assertCanJoin(req, liveClass);
+
+      const rows = await prisma.liveClassRecording.findMany({
+        where: { liveClassId: liveClass.id },
+        select: { id: true, status: true, durationSec: true, startedAt: true, endedAt: true },
+        orderBy: { startedAt: 'desc' },
+      });
+      res.json({ success: true, data: rows });
+    } catch (err) { next(err); }
+  },
+
+  /** Mints a short-lived (1h) presigned R2 URL on request — never stored,
+   * never cached, re-generated every time this is called. This is the ONLY
+   * place a recording's actual storage location is ever touched. */
+  async playRecording(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      await assertCanJoin(req, liveClass);
+
+      const recording = await prisma.liveClassRecording.findFirst({ where: { id: req.params.recordingId, liveClassId: liveClass.id } });
+      if (!recording) throw new AppError('Recording not found.', 404);
+      if (recording.status !== 'READY' || !recording.storageKey) throw new AppError('This recording is not ready to play yet.', 400);
+
+      const url = await storageService.getPresignedUrl(config.R2_RECORDINGS_BUCKET, recording.storageKey, 3600);
+      res.json({ success: true, data: { url, expiresInSeconds: 3600 } });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * LiveKit's Egress webhook (egress_ended) — NOT behind `authenticate`
+   * (see liveClasses.routes.ts / app.ts): LiveKit signs the request with the
+   * same API key/secret instead, verified here via verifyWebhook. Only
+   * egress_ended is handled; every other event type (room_started,
+   * participant_joined, etc. — LiveKit sends all of them to every configured
+   * webhook URL) is acknowledged and ignored.
+   */
+  async webhook(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const rawBody = (req.body as Buffer).toString('utf8');
+      const event = verifyWebhook(rawBody, req.get('Authorization'));
+
+      if (event.event === 'egress_ended' && event.egressInfo) {
+        const info = event.egressInfo;
+        const fileResult = info.fileResults?.[0];
+        const succeeded = info.status === 'EGRESS_COMPLETE' && !!fileResult;
+        await prisma.liveClassRecording.updateMany({
+          where: { egressId: info.egressId },
+          data: succeeded
+            ? {
+                status: 'READY',
+                storageKey: fileResult.filename,
+                durationSec: fileResult.duration ? Math.round(Number(fileResult.duration) / 1_000_000_000) : undefined, // ns -> s
+                fileSizeBytes: fileResult.size ? BigInt(fileResult.size) : undefined,
+                endedAt: new Date(),
+              }
+            : { status: 'FAILED', failReason: info.error || 'Recording did not complete successfully.', endedAt: new Date() },
+        }).catch(() => {});
+      }
+
+      res.json({ success: true });
     } catch (err) { next(err); }
   },
 
@@ -424,11 +735,25 @@ export const liveClassesController = {
         return res.json({ success: true, data: { waitingForHost: true, canHost: false } });
       }
 
-      // LIVE — mint the real token.
+      // LIVE — mint the real token. A canHost caller becomes HOST only if no
+      // one is currently filling that slot (leftAt null) — e.g. the original
+      // host disconnected and this is them reconnecting, or a co-trainer
+      // stepping in. Otherwise they join as CO_TRAINER alongside the active
+      // host. Either way they get full host-control permissions —
+      // canManageSchedule gates those on TrainerAssignment, not this role —
+      // the role here is purely for the "who's hosting" display in the UI.
+      let role: 'HOST' | 'CO_TRAINER' | 'STUDENT' = 'STUDENT';
+      if (canHost) {
+        const activeHost = await prisma.liveClassParticipant.findFirst({ where: { liveClassId: liveClass.id, role: 'HOST', leftAt: null } });
+        role = activeHost ? 'CO_TRAINER' : 'HOST';
+      }
       await prisma.liveClassParticipant.create({
-        data: { liveClassId: liveClass.id, userId: req.user!.userId, role: canHost ? 'CO_TRAINER' : 'STUDENT' },
+        data: { liveClassId: liveClass.id, userId: req.user!.userId, role },
       });
-      const token = await mintAccessToken({ roomName: liveClass.roomName, identity: req.user!.userId, name: await resolveDisplayName(req) });
+      const token = await mintAccessToken({
+        roomName: liveClass.roomName, identity: req.user!.userId, name: await resolveDisplayName(req),
+        metadata: JSON.stringify({ role }),
+      });
       res.json({ success: true, data: { waitingForHost: false, canHost, token, url: getLiveKitUrl(), roomName: liveClass.roomName } });
     } catch (err) { next(err); }
   },

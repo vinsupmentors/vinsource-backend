@@ -14,7 +14,10 @@
  * LiveKit Room Service API using this service's credentials. The frontend
  * never gets admin-level LiveKit power directly — see spec section 47.
  */
-import { AccessToken, RoomServiceClient, type VideoGrant } from 'livekit-server-sdk';
+import {
+  AccessToken, RoomServiceClient, EgressClient, WebhookReceiver,
+  EncodedFileType, type VideoGrant,
+} from 'livekit-server-sdk';
 import { config } from '../config/env';
 import { AppError } from '../middleware/errorHandler';
 
@@ -63,11 +66,12 @@ export function getLiveKitUrl(): string {
  * the right person, and so a disconnect/reconnect resolves to the same
  * LiveClassParticipant bookkeeping.
  */
-export async function mintAccessToken(opts: { roomName: string; identity: string; name: string }): Promise<string> {
+export async function mintAccessToken(opts: { roomName: string; identity: string; name: string; metadata?: string }): Promise<string> {
   assertConfigured();
   const at = new AccessToken(config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET, {
     identity: opts.identity,
     name: opts.name,
+    metadata: opts.metadata,
     ttl: '4h',
   });
   const grant: VideoGrant = {
@@ -155,4 +159,78 @@ export async function removeParticipant(roomName: string, identity: string): Pro
   await svc.removeParticipant(roomName, identity).catch(() => {
     // Already left on their own — fine.
   });
+}
+
+// ── Recording (Phase 2) — self-hosted LiveKit Egress → private R2 bucket ───────
+// Requires a Redis instance shared between the LiveKit server and its Egress
+// worker (see ../../../livekit/README.md "Recording setup") — without it,
+// Egress simply never picks up the request and startEgress below will throw,
+// which callers treat as best-effort (a recording failure never blocks a
+// class from starting/ending).
+
+function isRecordingConfigured(): boolean {
+  return isConfigured() && !!(config.R2_ACCOUNT_ID && config.R2_ACCESS_KEY_ID && config.R2_SECRET_ACCESS_KEY && config.R2_ENDPOINT && config.R2_RECORDINGS_BUCKET);
+}
+
+export function isLiveKitRecordingConfigured(): boolean {
+  return isRecordingConfigured();
+}
+
+let _egressClient: EgressClient | null = null;
+function egressClient(): EgressClient {
+  assertConfigured();
+  if (!_egressClient) {
+    _egressClient = new EgressClient(httpUrl(), config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET);
+  }
+  return _egressClient;
+}
+
+/**
+ * Starts a room-composite (grid layout) recording, uploaded directly by the
+ * Egress worker to the private recordings bucket — this server never touches
+ * the video bytes themselves, only the resulting object key. Returns null
+ * (rather than throwing) when recording isn't configured, so callers can
+ * treat "no recording" as a normal, expected outcome rather than an error.
+ */
+export async function startEgress(roomName: string, liveClassId: string): Promise<{ egressId: string } | null> {
+  if (!isRecordingConfigured()) return null;
+  const filepath = `recordings/${liveClassId}/${Date.now()}.mp4`;
+  const info = await egressClient().startRoomCompositeEgress(
+    roomName,
+    {
+      file: {
+        fileType: EncodedFileType.MP4,
+        filepath,
+        output: {
+          case: 's3',
+          value: {
+            accessKey: config.R2_ACCESS_KEY_ID,
+            secret: config.R2_SECRET_ACCESS_KEY,
+            bucket: config.R2_RECORDINGS_BUCKET,
+            endpoint: config.R2_ENDPOINT,
+            region: 'auto',
+            forcePathStyle: true,
+          },
+        },
+      },
+    } as any, // EncodedFileOutput's exact protobuf-ts shape can drift by SDK minor version — see note in package README
+    { layout: 'grid' }
+  );
+  return { egressId: info.egressId };
+}
+
+/** Best-effort — a recording that fails to stop cleanly still gets picked up by the `egress_ended` webhook once LiveKit notices the room closed. */
+export async function stopEgress(egressId: string): Promise<void> {
+  if (!isConfigured()) return;
+  await egressClient().stopEgress(egressId).catch(() => {});
+}
+
+let _webhookReceiver: WebhookReceiver | null = null;
+/** Verifies + parses an inbound LiveKit webhook (egress_ended, etc.) — the RAW request body is required for signature verification, so the route registering this must NOT run express.json() first (see app.ts). */
+export function verifyWebhook(rawBody: string, authHeader: string | undefined) {
+  assertConfigured();
+  if (!_webhookReceiver) {
+    _webhookReceiver = new WebhookReceiver(config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET);
+  }
+  return _webhookReceiver.receive(rawBody, authHeader);
 }

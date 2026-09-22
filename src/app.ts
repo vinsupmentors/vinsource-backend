@@ -44,6 +44,7 @@ import appointmentLetterRoutes from './routes/appointmentLetter.routes';
 import callTrackingRoutes from './routes/callTracking.routes';
 import admissionRoutes from './routes/admission.routes';
 import liveClassesRoutes from './routes/liveClasses.routes';
+import liveClassWebhookRoutes from './routes/liveClassWebhook.routes';
 
 const app = express();
 
@@ -107,6 +108,12 @@ app.use(rateLimit({
   max: isDev ? 5000 : 3000, // raised from 1000 → 3000: shared-NAT mobile cohorts (many students, one carrier IP) can legitimately burst well past 1000/15min
   skip: () => isDev,
 }));
+
+// LiveKit's Egress webhook — MUST be registered before express.json() below.
+// Signature verification (see liveKit.service.ts verifyWebhook) needs the
+// exact raw request body, which express.json() would otherwise consume and
+// replace with a parsed object.
+app.use('/api/live-classes/webhooks/livekit', express.raw({ type: '*/*' }), liveClassWebhookRoutes);
 
 // Parsing & logging
 app.use(compression());

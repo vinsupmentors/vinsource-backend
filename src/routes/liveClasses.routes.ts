@@ -15,12 +15,14 @@ router.use(authenticate);
 // endpoints below do NOT sit behind requireModule: they do their own
 // enrollment/trainer-assignment check per class instead, so both a
 // student and a trainer can reach the same endpoint safely.
+router.get('/analytics', requireModule('LIVE_CLASSES', 'VIEW'), liveClassesController.analytics);
 router.get('/schedules', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.listSchedules);
 router.post('/', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.create);
 router.put('/:id', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.update);
 router.post('/:id/cancel', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.cancel);
 router.post('/:id/start', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.start);
 router.post('/:id/end', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.end);
+router.post('/:id/attendance/sync', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.syncAttendance);
 router.post('/:id/host-actions/mute', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.muteParticipant);
 router.post('/:id/host-actions/remove', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.removeParticipant);
 
@@ -37,5 +39,8 @@ router.post('/:id/leave', liveClassesController.leave);
 router.get('/:id/participants', liveClassesController.participants);
 router.get('/:id/chat', liveClassesController.listChat);
 router.post('/:id/chat', liveClassesController.postChat);
+router.get('/:id/attendance', liveClassesController.attendance);
+router.get('/:id/recordings', liveClassesController.recordings);
+router.get('/:id/recordings/:recordingId/play', liveClassesController.playRecording);
 
 export default router;

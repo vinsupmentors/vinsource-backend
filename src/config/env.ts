@@ -53,6 +53,22 @@ export const config = {
   // waiting room. Not yet in AdmissionConfig-style admin UI (Phase 3) —
   // change here and redeploy until then.
   LIVE_CLASS_EARLY_JOIN_MINUTES: parseInt(process.env.LIVE_CLASS_EARLY_JOIN_MINUTES || '10', 10),
+  // Attendance-from-video thresholds — % of the class's actual duration a
+  // student was connected for. >= PRESENT_PCT => PRESENT, >= PARTIAL_PCT but
+  // below PRESENT_PCT => PARTIAL, below PARTIAL_PCT (including never joined)
+  // => ABSENT. Same "env var until there's an admin UI for it" pattern as
+  // LIVE_CLASS_EARLY_JOIN_MINUTES above.
+  LIVE_CLASS_ATTENDANCE_PRESENT_PCT: parseInt(process.env.LIVE_CLASS_ATTENDANCE_PRESENT_PCT || '80', 10),
+  LIVE_CLASS_ATTENDANCE_PARTIAL_PCT: parseInt(process.env.LIVE_CLASS_ATTENDANCE_PARTIAL_PCT || '40', 10),
+  // Recording (Phase 2) — a SEPARATE, private R2 bucket from R2_BUCKET above
+  // (which is public, used for employee documents). Reuses the same
+  // R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_ENDPOINT — the
+  // existing R2 API token is account-wide, so no separate credentials are
+  // needed, just a distinct bucket name with public access left off. Blank
+  // bucket = recording is silently skipped (class still starts normally).
+  R2_RECORDINGS_BUCKET: process.env.R2_RECORDINGS_BUCKET || '',
+  // Same LIVEKIT_API_KEY/SECRET sign the Egress webhook LiveKit posts back to
+  // this server — no separate webhook secret to configure.
 
   // GPS Geofencing for WFH detection (blank LAT/LNG = disabled)
   OFFICE_LAT: process.env.OFFICE_LAT ? parseFloat(process.env.OFFICE_LAT) : null,
