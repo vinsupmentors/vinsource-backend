@@ -105,7 +105,6 @@ export interface LiveParticipantInfo {
   identity: string;
   name: string;
   joinedAt: number;
-  isSpeaking: boolean;
   audioMuted: boolean;
   videoMuted: boolean;
 }
@@ -126,7 +125,6 @@ export async function listLiveParticipants(roomName: string): Promise<LivePartic
         identity: p.identity,
         name: p.name || p.identity,
         joinedAt: Number(p.joinedAt) || 0,
-        isSpeaking: !!p.isSpeaking,
         audioMuted: audioTrack ? !!audioTrack.muted : true,
         videoMuted: videoTrack ? !!videoTrack.muted : true,
       };
