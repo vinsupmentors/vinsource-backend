@@ -221,6 +221,7 @@ enum ModuleName {
   CERTIFICATES
   STUDENT_ONBOARDING
   ADMISSION
+  LIVE_CLASSES
 }
 
 enum AccessLevel {
@@ -527,6 +528,8 @@ model User {
   student               Student?
   appointmentLettersCreated  AppointmentLetter[] @relation("AppointmentLetterCreator")
   appointmentLettersApproved AppointmentLetter[] @relation("AppointmentLetterApprover")
+  liveClassParticipations LiveClassParticipant[]
+  liveClassChatMessages   LiveClassChatMessage[]
 }
 
 model UserSession {
@@ -669,6 +672,7 @@ model Employee {
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
   studentFeedbacksGiven TrainerFeedback[]   @relation("FeedbackTrainer")
   moduleFeedbacksGiven  ModuleFeedback[]    @relation("ModuleFeedbackTrainer")
+  liveClassesCreated    LiveClass[]         @relation("LiveClassCreator")
 
   // Projects / Feedback Forms / Online Tests
   projectsCreated        Project[]             @relation("ProjectCreator")
@@ -2419,6 +2423,7 @@ model BatchCourseSchedule {
   admissions FeePaymentPlan[] @relation("AdmissionSchedule")
   coupons    Coupon[]
   seatHoldRequests SeatHoldRequest[]
+  liveClasses LiveClass[]
 
   // Multiple sub-batches of the same course+timing are allowed in a batch
   // (e.g. DA-Morning with Trainer A and DA-Morning with Trainer B in parallel).
@@ -3695,4 +3700,102 @@ enum AppointmentLetterStatus {
   APPROVED
   REJECTED
   SENT
+}
+
+// ─── LIVE CLASSES (Phase 1: core classroom — WebRTC via self-hosted LiveKit) ─
+// Recording/storage, attendance-percentage rollups, materials, notes, and
+// assignments are deliberately NOT modeled yet (Phase 2/3 per the rollout
+// plan) — only what Phase 1 needs: scheduling, batch-based access, live
+// participants, and in-class chat. A class is always scoped to one
+// BatchCourseSchedule (course + batch + track), the same "sub-batch"
+// container Production/Attendance/Admission already key off — this gives
+// Live Classes automatic batch-based student access (via that schedule's
+// StudentBatchEnrollment rows) and trainer-based host access (via that
+// schedule's TrainerAssignment rows) for free, with no separate ACL to
+// maintain and no risk of it drifting from the real roster.
+model LiveClass {
+  id          String   @id @default(uuid())
+  classCode   String   @unique // e.g. DA-B14-PYTHON-PANDAS-2026-09-22, auto-generated at creation
+  roomName    String   @unique // LiveKit room name — never exposed as a public/guessable meeting link
+  title       String
+  scheduleId  String
+  topic       String?
+  description String?  @db.Text
+
+  scheduledDate DateTime // calendar date the class is planned for
+  startTime     String   // "10:00" — same HH:mm string convention as BatchCourseSchedule.startTime
+  endTime       String
+
+  actualStartAt DateTime? // set when a host actually calls /start
+  actualEndAt   DateTime? // set when the host calls /end
+
+  status       LiveClassStatus @default(SCHEDULED)
+  cancelledAt  DateTime?
+  cancelReason String?         @db.Text
+
+  // Reschedule history — spec asks the original schedule to be preserved,
+  // not silently overwritten, whenever a class is moved.
+  rescheduledFrom   DateTime?
+  rescheduledReason String?   @db.Text
+
+  // Nullable + SetNull — a SUPER_ADMIN account (which may have no linked
+  // Employee row at all) can still create a class; same pattern as
+  // Batch.createdById elsewhere in this schema.
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  schedule     BatchCourseSchedule     @relation(fields: [scheduleId], references: [id])
+  createdBy    Employee?               @relation("LiveClassCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  participants LiveClassParticipant[]
+  chatMessages LiveClassChatMessage[]
+
+  @@index([scheduleId])
+  @@index([status])
+  @@index([scheduledDate])
+}
+
+enum LiveClassStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+/// One row per join — not per person. A student who disconnects and
+/// rejoins gets a second row (leftAt null again), which is exactly the
+/// "Session 1 / Session 2" join history the attendance feature (Phase 3)
+/// will sum durations from, instead of overwriting a single join/leave pair.
+model LiveClassParticipant {
+  id          String                    @id @default(uuid())
+  liveClassId String
+  userId      String
+  role        LiveClassParticipantRole
+  joinedAt    DateTime                  @default(now())
+  leftAt      DateTime?
+
+  liveClass LiveClass @relation(fields: [liveClassId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([liveClassId])
+  @@index([userId])
+}
+
+enum LiveClassParticipantRole {
+  HOST // the trainer who started the class
+  CO_TRAINER // any other trainer assigned to the same schedule who joins
+  STUDENT
+}
+
+model LiveClassChatMessage {
+  id          String   @id @default(uuid())
+  liveClassId String
+  userId      String
+  message     String   @db.Text
+  createdAt   DateTime @default(now())
+
+  liveClass LiveClass @relation(fields: [liveClassId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([liveClassId])
 }

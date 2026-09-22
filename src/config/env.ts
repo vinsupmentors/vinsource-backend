@@ -41,6 +41,19 @@ export const config = {
   // Frontend
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
 
+  // Live Classes — self-hosted LiveKit (WebRTC SFU). LIVEKIT_URL is the
+  // public wss:// URL the *browser* connects to; the backend derives the
+  // https:// server-API URL from it. Left blank = Live Classes' start/join
+  // endpoints respond with a clear 503 instead of crashing, so the rest of
+  // the app keeps working before this is provisioned on the VPS.
+  LIVEKIT_URL:        process.env.LIVEKIT_URL        || '',
+  LIVEKIT_API_KEY:    process.env.LIVEKIT_API_KEY     || '',
+  LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET  || '',
+  // Minutes before the scheduled start time a student/trainer may join the
+  // waiting room. Not yet in AdmissionConfig-style admin UI (Phase 3) —
+  // change here and redeploy until then.
+  LIVE_CLASS_EARLY_JOIN_MINUTES: parseInt(process.env.LIVE_CLASS_EARLY_JOIN_MINUTES || '10', 10),
+
   // GPS Geofencing for WFH detection (blank LAT/LNG = disabled)
   OFFICE_LAT: process.env.OFFICE_LAT ? parseFloat(process.env.OFFICE_LAT) : null,
   OFFICE_LNG: process.env.OFFICE_LNG ? parseFloat(process.env.OFFICE_LNG) : null,
