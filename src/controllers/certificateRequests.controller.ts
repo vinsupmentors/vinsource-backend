@@ -87,12 +87,34 @@ async function maybeFinalize(id: string, approvedById: string) {
 }
 
 export const certificateRequestsController = {
-  /** Staff list — every certificate request, newest first. */
+  /** Staff list — every certificate request, newest first. Supports filtering by type, batch, and a name/code/phone search. */
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { type } = req.query;
+      const { type, batchId, search } = req.query;
+      const where: Record<string, unknown> = {};
+      if (type) where.type = String(type) as 'COURSE_COMPLETION' | 'INTERNSHIP';
+
+      // Batch isn't a field on the request itself (INTERNSHIP requests don't
+      // even carry a courseId snapshot) — go through the student's most
+      // recent enrollment -> schedule -> batch, the same join
+      // lookupBatchCode uses to resolve the batch shown on the certificate.
+      const studentWhere: Record<string, unknown> = {};
+      if (search) {
+        const term = String(search);
+        studentWhere.OR = [
+          { firstName: { contains: term } },
+          { lastName: { contains: term } },
+          { studentCode: { contains: term } },
+          { phone: { contains: term } },
+        ];
+      }
+      if (batchId) {
+        studentWhere.enrollments = { some: { schedule: { batchId: String(batchId) } } };
+      }
+      if (Object.keys(studentWhere).length > 0) where.student = studentWhere;
+
       const rows = await prisma.studentCertificateRequest.findMany({
-        where: type ? { type: String(type) as 'COURSE_COMPLETION' | 'INTERNSHIP' } : undefined,
+        where,
         include: {
           student: { select: studentListSelect },
           course: { select: { id: true, name: true } },
@@ -102,6 +124,14 @@ export const certificateRequestsController = {
         orderBy: { createdAt: 'desc' },
       });
       res.json({ success: true, data: rows });
+    } catch (err) { next(err); }
+  },
+
+  /** Batch dropdown options for the filter bar — lightweight, CERTIFICATES-gated (Certificate Approvals staff may not have Production access). */
+  async listBatchOptions(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const batches = await prisma.batch.findMany({ select: { id: true, code: true }, orderBy: { code: 'asc' } });
+      res.json({ success: true, data: batches });
     } catch (err) { next(err); }
   },
 

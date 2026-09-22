@@ -8,6 +8,7 @@ router.use(authenticate);
 router.use(requireModule('CERTIFICATES', 'VIEW'));
 
 router.get('/', certificateRequestsController.list);
+router.get('/batches', certificateRequestsController.listBatchOptions);
 router.get('/:id', certificateRequestsController.get);
 router.get('/:id/render-data', certificateRequestsController.renderData);
 

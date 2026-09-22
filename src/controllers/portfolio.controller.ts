@@ -8,10 +8,20 @@ import { ensureInternshipCertRequest } from '../utils/certificateRequests';
 
 const studentSelect = {
   id: true, firstName: true, lastName: true, studentCode: true, track: true, photo: true, email: true, phone: true,
-  // Used to group portfolios by course on the Production Portfolio Approvals
-  // screen. PT (direct-placement) students have no enrollment at all — the
-  // frontend buckets those under a "PT — Direct Placement" card instead.
-  enrollments: { select: { schedule: { select: { course: { select: { id: true, name: true } } } } } },
+  // Used to group portfolios by Batch, then Course, on the Production
+  // Portfolio Approvals screen. PT (direct-placement) students have no
+  // enrollment at all — the frontend buckets those under a
+  // "PT — Direct Placement" card instead.
+  enrollments: {
+    select: {
+      schedule: {
+        select: {
+          course: { select: { id: true, name: true } },
+          batch: { select: { id: true, code: true } },
+        },
+      },
+    },
+  },
 };
 
 /** Fallback slug generator — only used if a student somehow has no studentCode. */
