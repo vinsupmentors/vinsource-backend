@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { EgressStatus } from 'livekit-server-sdk';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
@@ -691,7 +692,7 @@ export const liveClassesController = {
       if (event.event === 'egress_ended' && event.egressInfo) {
         const info = event.egressInfo;
         const fileResult = info.fileResults?.[0];
-        const succeeded = info.status === 'EGRESS_COMPLETE' && !!fileResult;
+        const succeeded = info.status === EgressStatus.EGRESS_COMPLETE && !!fileResult;
         await prisma.liveClassRecording.updateMany({
           where: { egressId: info.egressId },
           data: succeeded
