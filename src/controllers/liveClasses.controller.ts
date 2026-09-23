@@ -518,6 +518,22 @@ export const liveClassesController = {
           if (egress) await prisma.liveClassRecording.create({ data: { liveClassId: existing.id, egressId: egress.egressId } });
         } catch (err) {
           console.error('[liveClasses] failed to start recording for', existing.id, err);
+          // Surface the failure in the portal instead of leaving no recording
+          // row at all — previously a capacity rejection (Egress busy with
+          // other concurrent classes) or an outage looked identical to
+          // "recording was never attempted," so staff had no way to tell a
+          // genuine gap from a class that simply wasn't recorded. egressId
+          // is a synthetic placeholder here (no real LiveKit egress was ever
+          // created) — it only exists to satisfy the required unique column.
+          await prisma.liveClassRecording.create({
+            data: {
+              liveClassId: existing.id,
+              egressId: `failed-${existing.id}-${Date.now()}`,
+              status: 'FAILED',
+              failReason: err instanceof Error ? err.message.slice(0, 500) : 'Recording could not be started.',
+              endedAt: new Date(),
+            },
+          }).catch(() => {});
         }
       }
 
