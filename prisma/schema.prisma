@@ -392,6 +392,13 @@ enum DayPattern {
   MON_SAT
   SAT_SUN
   SUNDAY_ONLY
+  // Any combination of weekdays (e.g. Mon/Wed/Fri only) that doesn't fit the
+  // three coarse patterns above — added for the Calendar module's "create
+  // event" flow, which offers a Google-Calendar-style weekday picker. The
+  // actual selection lives in BatchCourseSchedule.customWeekdays below;
+  // this value is just the flag that says "go read that field instead of
+  // inferring days from one of the fixed patterns."
+  CUSTOM
 }
 
 enum DeliveryMode {
@@ -2377,6 +2384,12 @@ model BatchCourseSchedule {
   startTime String?
   endTime   String?
   dayPattern DayPattern
+  // Only meaningful when dayPattern is CUSTOM — bitmask of which weekdays
+  // this schedule runs on (bit 0 = Sunday ... bit 6 = Saturday, so e.g.
+  // Mon+Wed+Fri = bits 1,3,5 = 0b0101010 = 42). Null for every schedule
+  // using one of the three fixed patterns, which is still every schedule
+  // created before this field existed.
+  customWeekdays Int?
   mode      DeliveryMode
   startDate DateTime
   endDate   DateTime?

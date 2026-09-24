@@ -1,9 +1,10 @@
-import { Response, NextFunction } from 'express';
+import { Response, NextFunction, Request } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { computeRankCard } from '../utils/rankCard';
-import { lookupBatchCode } from '../utils/certificateRequests';
+import { lookupBatchCode, lookupCourseName } from '../utils/certificateRequests';
+import { config } from '../config/env';
 
 const employeeNameSelect = { firstName: true, lastName: true } as const;
 
@@ -227,16 +228,70 @@ export async function buildRenderData(id: string) {
     throw new AppError('This certificate is still awaiting approval', 400);
   }
 
-  const batch = await lookupBatchCode(request.studentId);
+  // INTERNSHIP requests never carry a courseId (see ensureInternshipCertRequest
+  // / lookupCourseName's own comment) — request.course is always null for
+  // that type, so fall back to the student's actual enrollment instead of
+  // leaving the certificate's "Course" field blank. Skipped entirely for
+  // COURSE_COMPLETION, which already has its own courseId snapshot.
+  const [batch, fallbackCourse] = await Promise.all([
+    lookupBatchCode(request.studentId),
+    request.course ? Promise.resolve(null) : lookupCourseName(request.studentId),
+  ]);
 
   return {
     type: request.type,
     studentName: `${request.student.firstName} ${request.student.lastName}`,
     studentId: request.student.studentCode,
-    course: request.course?.name || null,
+    course: request.course?.name || fallbackCourse,
     batch,
     issueDate: request.generatedAt,
     photoUrl: request.student.photo,
     certificateNo: request.certificateNo,
+    // Scanned from the certificate's QR box — a real, working verification
+    // page (see publicVerifyCertificate below), not just a QR-shaped image.
+    verifyUrl: `${config.FRONTEND_URL}/verify?cert=${encodeURIComponent(request.certificateNo)}`,
   };
+}
+
+/**
+ * Public certificate verification — what the QR code on an issued
+ * certificate actually points to. No auth (same posture as
+ * portfolio.controller.ts's publicGet, mounted the same way under
+ * public.routes.ts): returns only what's safe to show a stranger who
+ * scanned the code (name, program, batch, issue date), never contact info,
+ * fees, or anything else from the student's profile.
+ */
+export async function publicVerifyCertificate(req: Request, res: Response, next: NextFunction) {
+  try {
+    const certNo = String(req.query.cert || '').trim();
+    if (!certNo) throw new AppError('Missing certificate number', 400);
+
+    const request = await prisma.studentCertificateRequest.findFirst({
+      where: { certificateNo: certNo },
+      select: {
+        type: true, certificateNo: true, generatedAt: true, studentId: true,
+        student: { select: { firstName: true, lastName: true, studentCode: true } },
+        course: { select: { name: true } },
+      },
+    });
+    if (!request) throw new AppError('No certificate found with this number', 404);
+
+    const [batch, fallbackCourse] = await Promise.all([
+      lookupBatchCode(request.studentId),
+      request.course ? Promise.resolve(null) : lookupCourseName(request.studentId),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        type: request.type,
+        certificateNo: request.certificateNo,
+        studentName: `${request.student.firstName} ${request.student.lastName}`,
+        studentCode: request.student.studentCode,
+        course: request.course?.name || fallbackCourse,
+        batch,
+        issueDate: request.generatedAt,
+      },
+    });
+  } catch (err) { next(err); }
 }

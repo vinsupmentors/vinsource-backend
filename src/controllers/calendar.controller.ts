@@ -46,12 +46,16 @@ function addDays(d: Date, n: number): Date {
   return copy;
 }
 
-/** MON_SAT/SAT_SUN/SUNDAY_ONLY -> does this calendar day match? (UTC weekday, 0=Sun) */
-function dayMatchesPattern(date: Date, pattern: string): boolean {
+/** MON_SAT/SAT_SUN/SUNDAY_ONLY/CUSTOM -> does this calendar day match?
+ * (UTC weekday, 0=Sun). For CUSTOM, `customWeekdays` is the bitmask picked
+ * in the Calendar module's create/edit UI (bit 0 = Sunday ... bit 6 =
+ * Saturday) — see the field's comment in schema.prisma. */
+function dayMatchesPattern(date: Date, pattern: string, customWeekdays: number | null): boolean {
   const dow = date.getUTCDay();
   if (pattern === 'MON_SAT') return dow !== 0;
   if (pattern === 'SAT_SUN') return dow === 0 || dow === 6;
   if (pattern === 'SUNDAY_ONLY') return dow === 0;
+  if (pattern === 'CUSTOM') return !!customWeekdays && (customWeekdays & (1 << dow)) !== 0;
   return false;
 }
 
@@ -115,7 +119,8 @@ export const calendarController = {
         },
         select: {
           id: true, code: true, timing: true, startTime: true, endTime: true,
-          dayPattern: true, mode: true, startDate: true, endDate: true,
+          dayPattern: true, customWeekdays: true, mode: true, startDate: true, endDate: true,
+          capacity: true, batchId: true, courseId: true,
           batch: { select: { code: true } },
           course: { select: { name: true } },
         },
@@ -124,7 +129,7 @@ export const calendarController = {
         const rangeStart = s.startDate > from ? s.startDate : from;
         const rangeEnd = s.endDate && s.endDate < to ? s.endDate : to;
         for (let d = rangeStart; d <= rangeEnd; d = addDays(d, 1)) {
-          if (!dayMatchesPattern(d, s.dayPattern)) continue;
+          if (!dayMatchesPattern(d, s.dayPattern, s.customWeekdays)) continue;
           events.push({
             id: `batch-${s.id}-${toDateOnlyStr(d)}`,
             type: 'BATCH_SCHEDULE',
@@ -135,7 +140,17 @@ export const calendarController = {
             endTime: s.endTime,
             allDay: !s.startTime || !s.endTime,
             status: null,
-            meta: { scheduleId: s.id, scheduleCode: s.code, timing: s.timing, mode: s.mode },
+            meta: {
+              // Everything the Calendar's quick-edit panel needs to prefill
+              // without a second round-trip. Harmless to include for every
+              // viewer (nothing sensitive) — only the edit UI itself is
+              // gated to PRODUCTION_TRAINING EDIT on the frontend.
+              scheduleId: s.id, scheduleCode: s.code, timing: s.timing, mode: s.mode,
+              dayPattern: s.dayPattern, customWeekdays: s.customWeekdays,
+              startDate: toDateOnlyStr(s.startDate), endDate: s.endDate ? toDateOnlyStr(s.endDate) : null,
+              startTime: s.startTime, endTime: s.endTime, capacity: s.capacity,
+              batchId: s.batchId, courseId: s.courseId,
+            },
           });
         }
       }

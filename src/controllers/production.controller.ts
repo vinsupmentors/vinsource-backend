@@ -434,10 +434,18 @@ export const productionController = {
       const { batchId } = req.params;
       const {
         courseId, timing, dayPattern, mode, startDate, endDate, capacity,
+        // startTime/endTime: exact clock range (see the field's own comment
+        // in schema.prisma). customWeekdays: only meaningful when
+        // dayPattern === 'CUSTOM' — bitmask from the Calendar module's
+        // weekday-picker create flow (bit 0 = Sunday ... bit 6 = Saturday).
+        startTime, endTime, customWeekdays,
         trainerIds, studentIds,
       } = req.body;
       if (!courseId || !timing || !dayPattern || !mode) {
         throw new AppError('courseId, timing, dayPattern, and mode are required', 400);
+      }
+      if (dayPattern === 'CUSTOM' && !customWeekdays) {
+        throw new AppError('Select at least one weekday for a custom recurrence.', 400);
       }
 
       const subBatchCode = await generateSubBatchCode(prisma, batchId, courseId, timing);
@@ -447,6 +455,9 @@ export const productionController = {
           data: {
             code: subBatchCode,
             batchId, courseId, timing, dayPattern, mode,
+            startTime: startTime || undefined,
+            endTime: endTime || undefined,
+            customWeekdays: dayPattern === 'CUSTOM' ? Number(customWeekdays) : undefined,
             startDate: startDate ? new Date(startDate) : new Date(),
             endDate: endDate ? new Date(endDate) : undefined,
             capacity: capacity ? Number(capacity) : undefined,
@@ -507,12 +518,29 @@ export const productionController = {
   async updateSchedule(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { scheduleId } = req.params;
-      const { timing, dayPattern, mode, startDate, endDate, capacity, status } = req.body;
+      const {
+        timing, dayPattern, mode, startDate, endDate, capacity, status,
+        // Same quick-edit fields the Calendar module's edit panel sends —
+        // see addSchedule's comment above for what each means. All optional
+        // so every pre-existing caller (Production's own edit form, which
+        // never sends these) is untouched: `undefined` fields are no-ops to
+        // Prisma's update().
+        startTime, endTime, customWeekdays,
+      } = req.body;
+      if (dayPattern === 'CUSTOM' && customWeekdays === undefined) {
+        throw new AppError('Select at least one weekday for a custom recurrence.', 400);
+      }
 
       const schedule = await prisma.batchCourseSchedule.update({
         where: { id: scheduleId },
         data: {
           timing, dayPattern, mode, status,
+          startTime: startTime === '' ? null : startTime,
+          endTime: endTime === '' ? null : endTime,
+          // Only overwrite customWeekdays when the caller actually sent a
+          // dayPattern this time — otherwise a plain status-only PATCH-style
+          // update (dayPattern omitted) would wipe the field for no reason.
+          customWeekdays: dayPattern === undefined ? undefined : dayPattern === 'CUSTOM' ? Number(customWeekdays) : null,
           startDate: startDate ? new Date(startDate) : undefined,
           endDate: endDate === '' ? null : endDate ? new Date(endDate) : undefined,
           capacity: capacity === '' ? null : capacity !== undefined ? Number(capacity) : undefined,

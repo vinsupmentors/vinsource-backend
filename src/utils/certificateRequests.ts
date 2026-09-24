@@ -72,3 +72,23 @@ export async function lookupBatchCode(studentId: string): Promise<string | null>
   });
   return enrollment?.schedule.batch.code || null;
 }
+
+/**
+ * Course name fallback for INTERNSHIP certificates. Unlike COURSE_COMPLETION
+ * requests, an INTERNSHIP request is created via ensureInternshipCertRequest
+ * with no courseId at all (an internship certifies the program broadly, not
+ * one course) — so request.course is always null for that type, and the
+ * certificate's "Course" field rendered blank. Students still expect to see
+ * the course they actually studied on it, so buildRenderData falls back to
+ * this — the same "most recent enrollment" lookup lookupBatchCode already
+ * uses for the Batch field. Returns null for PT students (no enrollment at
+ * all); the template already renders "—" when this is missing.
+ */
+export async function lookupCourseName(studentId: string): Promise<string | null> {
+  const enrollment = await prisma.studentBatchEnrollment.findFirst({
+    where: { studentId },
+    include: { schedule: { include: { course: { select: { name: true } } } } },
+    orderBy: { enrolledAt: 'desc' },
+  });
+  return enrollment?.schedule.course.name || null;
+}
