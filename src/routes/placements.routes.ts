@@ -24,6 +24,7 @@ router.post('/partners', requireModule('PLACEMENTS', 'EDIT'), placementsControll
 router.get('/drives', placementsController.listDrives);
 router.post('/drives', requireModule('PLACEMENTS', 'EDIT'), placementsController.createDrive);
 router.put('/drives/:id', requireModule('PLACEMENTS', 'EDIT'), placementsController.updateDrive);
+router.delete('/drives/:id', requireModule('PLACEMENTS', 'EDIT'), placementsController.deleteDrive);
 
 router.get('/results', placementsController.listResults);
 router.post('/results', requireModule('PLACEMENTS', 'EDIT'), uploadOfferLetter, placementsController.createResult);

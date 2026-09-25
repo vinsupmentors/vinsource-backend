@@ -231,10 +231,11 @@ export const placementsController = {
 
   async updateDrive(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { role, driveDate, venue, jobDescription, status, organizedById, notes } = req.body;
+      const { partnerId, role, driveDate, venue, jobDescription, status, organizedById, notes } = req.body;
       const drive = await prisma.placementDrive.update({
         where: { id: req.params.id },
         data: {
+          partnerId: partnerId || undefined,
           role, status, organizedById, notes,
           venue: venue === '' ? null : venue,
           jobDescription: jobDescription === '' ? null : jobDescription,
@@ -242,6 +243,29 @@ export const placementsController = {
         },
       });
       res.json({ success: true, data: drive });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Only allowed once the drive has nothing recorded against it (no
+   * results, interviews, or shortlisted candidates) — deleting a drive
+   * with real history would silently orphan/erase that data. A drive with
+   * history should be Cancelled instead (keeps the record, just marks it
+   * dead), which is already one click via the status dropdown.
+   */
+  async deleteDrive(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const [resultCount, interviewCount, candidateCount] = await Promise.all([
+        prisma.placementResult.count({ where: { driveId: id } }),
+        prisma.placementInterview.count({ where: { driveId: id } }),
+        prisma.placementDriveCandidate.count({ where: { driveId: id } }),
+      ]);
+      if (resultCount + interviewCount + candidateCount > 0) {
+        throw new AppError('This drive has results, interviews, or shortlisted candidates recorded against it — cancel it instead of deleting, to keep that history.', 400);
+      }
+      await prisma.placementDrive.delete({ where: { id } });
+      res.json({ success: true });
     } catch (err) { next(err); }
   },
 
