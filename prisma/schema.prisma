@@ -1860,8 +1860,12 @@ model AdmissionConfig {
   spotDiscountPct       Float    @default(8)
   fullDiscountPct       Float    @default(5)
   registrationFee       Float    @default(3500)
-  emiInterest3To4MonthPct Float  @default(7)
-  emiInterest5PlusMonthPct Float @default(10)
+  // Interest rate by exact EMI tenure in months, e.g.
+  // { "2": 3, "3": 5, "4": 7, "5": 10, "6": 10 }. Interest is charged only
+  // on the FINANCED balance (course fee minus the down payment) — never on
+  // the full course fee. See admissionFeeEngine.getEmiInterestRate and the
+  // EMI branch of calculateFee.
+  emiInterestByMonth Json
   downPaymentPct        Float    @default(20)
   // Student portal/onboarding approval, for non-EMI admissions only, is
   // blocked until at least this % of totalFee (net of discounts/coupon) has

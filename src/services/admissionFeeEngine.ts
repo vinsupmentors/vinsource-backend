@@ -124,6 +124,26 @@ export function resolveEmiLimit(
   return getTrackEmiLimit(config, track);
 }
 
+/**
+ * Interest % for an exact EMI tenure, from the admin-configured
+ * emiInterestByMonth table (e.g. { "2": 3, "3": 5, "4": 7, "5": 10, "6": 10 }).
+ * Falls back to the highest configured tenure at or below the requested one
+ * if there's no exact entry — defensive only; in normal operation the
+ * requested tenure is already capped by getTrackEmiLimit/resolveEmiLimit to
+ * something the admin configured a rate for.
+ */
+export function getEmiInterestRate(config: { emiInterestByMonth: unknown }, months: number): number {
+  const table = (config.emiInterestByMonth as Record<string, number>) || {};
+  const direct = table[String(months)];
+  if (typeof direct === 'number') return direct;
+  const lowerTenures = Object.keys(table)
+    .map(Number)
+    .filter((m) => !Number.isNaN(m) && m <= months)
+    .sort((a, b) => b - a);
+  if (lowerTenures.length) return table[String(lowerTenures[0])];
+  throw new AppError(`No EMI interest rate is configured for a ${months}-month tenure.`, 400);
+}
+
 /** The latest active CourseTrackFee row for a course+track, as of today. */
 export async function getBaseFee(courseId: string, track: string): Promise<number> {
   const row = await prisma.courseTrackFee.findFirst({
@@ -276,11 +296,18 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
         }
       }
 
-      const interestPct = months <= 4 ? config.emiInterest3To4MonthPct : config.emiInterest5PlusMonthPct;
-      const interestAmount = roundMoney(netCourseFee * (interestPct / 100));
+      // Down payment is a flat % of the course fee itself — interest is
+      // then charged only on what's left to finance (the remaining
+      // balance), never on the full fee. (This used to compute interest
+      // on the full fee first and take the down payment as a % of
+      // fee-plus-interest — fixed per Gaurav's Sept 2026 interest slab.)
+      const downPayment = roundMoney(netCourseFee * (config.downPaymentPct / 100));
+      const financedAmount = roundMoney(netCourseFee - downPayment);
+
+      const interestPct = getEmiInterestRate(config, months);
+      const interestAmount = roundMoney(financedAmount * (interestPct / 100));
       const emiTotal = roundMoney(netCourseFee + interestAmount);
-      const downPayment = roundMoney(emiTotal * (config.downPaymentPct / 100));
-      const emiBalance = roundMoney(emiTotal - downPayment);
+      const emiBalance = roundMoney(emiTotal - downPayment); // = financedAmount + interestAmount — the part actually split into monthly installments
 
       breakdown.interestRatePct = interestPct;
       breakdown.interestAmount = interestAmount;

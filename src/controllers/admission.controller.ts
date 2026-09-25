@@ -902,7 +902,7 @@ export const admissionController = {
   async updateConfig(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const {
-        spotDiscountPct, fullDiscountPct, registrationFee, emiInterest3To4MonthPct, emiInterest5PlusMonthPct,
+        spotDiscountPct, fullDiscountPct, registrationFee, emiInterestByMonth,
         downPaymentPct, portalApprovalMinPaidPct, trackEmiMonthLimits,
         foreclosureBeforeFirstEmiPolicy, foreclosureAfterFirstEmiPolicy,
       } = req.body;
@@ -914,8 +914,7 @@ export const admissionController = {
           spotDiscountPct: spotDiscountPct != null ? Number(spotDiscountPct) : undefined,
           fullDiscountPct: fullDiscountPct != null ? Number(fullDiscountPct) : undefined,
           registrationFee: registrationFee != null ? Number(registrationFee) : undefined,
-          emiInterest3To4MonthPct: emiInterest3To4MonthPct != null ? Number(emiInterest3To4MonthPct) : undefined,
-          emiInterest5PlusMonthPct: emiInterest5PlusMonthPct != null ? Number(emiInterest5PlusMonthPct) : undefined,
+          emiInterestByMonth: emiInterestByMonth ?? undefined,
           downPaymentPct: downPaymentPct != null ? Number(downPaymentPct) : undefined,
           portalApprovalMinPaidPct: portalApprovalMinPaidPct != null ? Number(portalApprovalMinPaidPct) : undefined,
           trackEmiMonthLimits: trackEmiMonthLimits ?? undefined,
