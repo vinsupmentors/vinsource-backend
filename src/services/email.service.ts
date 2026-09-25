@@ -654,7 +654,7 @@ export const emailService = {
         </div>
       </div>`,
 
-    placementShortlisted: (data: { studentName: string; companyName: string; role: string; driveDate: string }) => `
+    placementShortlisted: (data: { studentName: string; companyName: string; role: string; driveDate: string; venue?: string | null }) => `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#1e40af;padding:24px;">
           <h1 style="color:#fff;margin:0;font-size:22px;">🎯 You've Been Shortlisted!</h1>
@@ -665,7 +665,8 @@ export const emailService = {
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Company</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.companyName}</td></tr>
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Role</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.role}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Drive Date</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.driveDate}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Drive Date &amp; Time</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.driveDate}</strong></td></tr>
+            ${data.venue ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Venue</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.venue}</td></tr>` : ''}
           </table>
           <p>The placement team will be in touch with further details. All the best!</p>
         </div>

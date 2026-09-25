@@ -13,6 +13,13 @@ const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode
 // placeholder ".local" addresses rather than let a real send attempt fail.
 const hasRealEmail = (email?: string | null): email is string => !!email && !email.trim().endsWith('.local');
 
+// Every placement-related student email gets CC'd to the placement team's
+// shared oversight addresses, so nothing that goes out to a student happens
+// without the team seeing it too. Applied uniformly to every send in this
+// file — previously only the Softskill/Aptitude notification had a (single,
+// different) cc address; this is the one list all of them now share.
+const PLACEMENT_CC = ['povinsup@gmail.com', 'v7032vinsup@gmail.com', 'placementvinsup@gmail.com'];
+
 const SLA_MIN_INTERVIEWS = 3;
 const SLA_WINDOW_DAYS = 90;
 
@@ -101,6 +108,7 @@ async function notifyOfferReceived(result: {
 
   emailService.send({
     to: email,
+    cc: PLACEMENT_CC,
     subject: `Congratulations — You've Been Selected by ${companyName}!`,
     html: emailService.templates.placementOfferReceived({
       studentName: result.studentName,
@@ -135,7 +143,7 @@ async function notifySoftskillSession(
     if (!hasRealEmail(s.email)) continue;
     emailService.send({
       to: s.email,
-      cc: 'v7032vinsup@gmail.com',
+      cc: PLACEMENT_CC,
       subject: `${typeLabel} session scheduled — ${session.topic}`,
       html: emailService.templates.softskillSessionScheduled({
         studentName: `${s.firstName} ${s.lastName}`,
@@ -210,11 +218,11 @@ export const placementsController = {
 
   async createDrive(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { partnerId, role, driveDate, organizedById, notes } = req.body;
+      const { partnerId, role, driveDate, venue, organizedById, notes } = req.body;
       if (!partnerId || !role || !driveDate) throw new AppError('partnerId, role, and driveDate are required', 400);
 
       const drive = await prisma.placementDrive.create({
-        data: { partnerId, role, driveDate: new Date(driveDate), organizedById, notes },
+        data: { partnerId, role, driveDate: new Date(driveDate), venue: venue || null, organizedById, notes },
         include: { partner: true, organizedBy: { select: employeeSelect } },
       });
       res.status(201).json({ success: true, data: drive });
@@ -223,11 +231,12 @@ export const placementsController = {
 
   async updateDrive(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { role, driveDate, status, organizedById, notes } = req.body;
+      const { role, driveDate, venue, status, organizedById, notes } = req.body;
       const drive = await prisma.placementDrive.update({
         where: { id: req.params.id },
         data: {
           role, status, organizedById, notes,
+          venue: venue === '' ? null : venue,
           driveDate: driveDate ? new Date(driveDate) : undefined,
         },
       });
@@ -1059,12 +1068,14 @@ export const placementsController = {
       if (hasRealEmail(student.email)) {
         emailService.send({
           to: student.email,
+          cc: PLACEMENT_CC,
           subject: `You've been shortlisted — ${candidate.drive.partner.name}`,
           html: emailService.templates.placementShortlisted({
             studentName: `${student.firstName} ${student.lastName}`,
             companyName: candidate.drive.partner.name,
             role: candidate.drive.role,
-            driveDate: candidate.drive.driveDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }),
+            driveDate: candidate.drive.driveDate.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' }),
+            venue: candidate.drive.venue,
           }),
           template: 'placement_shortlisted',
         }).catch((err) => console.error('Placement shortlist email failed:', err));
@@ -1148,6 +1159,7 @@ export const placementsController = {
       if (resolvedOutcome === 'SCHEDULED' && hasRealEmail(interview.student.email)) {
         emailService.send({
           to: interview.student.email,
+          cc: PLACEMENT_CC,
           subject: `Interview Scheduled — ${interview.companyName || interview.drive?.partner.name || 'Placement'}`,
           html: emailService.templates.placementInterviewScheduled({
             studentName: `${interview.student.firstName} ${interview.student.lastName}`,

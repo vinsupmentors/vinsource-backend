@@ -106,6 +106,24 @@ export function getTrackEmiLimit(config: { trackEmiMonthLimits: unknown }, track
   return limit;
 }
 
+/**
+ * Max EMI months for a track, checking the course's own override first
+ * (AcademyCourse.emiMonthLimits) before falling back to the global
+ * AdmissionConfig value. Lets one course (e.g. Dataverse) offer a longer
+ * EMI window on a track than every other course, without changing the
+ * global default for everyone else.
+ */
+export function resolveEmiLimit(
+  track: string,
+  courseEmiLimits: unknown,
+  config: { trackEmiMonthLimits: unknown }
+): number {
+  const courseLimits = courseEmiLimits as Record<string, number> | null | undefined;
+  const override = courseLimits?.[track];
+  if (typeof override === 'number') return override;
+  return getTrackEmiLimit(config, track);
+}
+
 /** The latest active CourseTrackFee row for a course+track, as of today. */
 export async function getBaseFee(courseId: string, track: string): Promise<number> {
   const row = await prisma.courseTrackFee.findFirst({
@@ -242,7 +260,11 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
       const months = input.emiMonths;
       if (!months || months < 1) throw new AppError('EMI duration is required.', 400);
 
-      const limit = getTrackEmiLimit(config, input.track);
+      const courseForEmi = await prisma.academyCourse.findUnique({
+        where: { id: input.courseId },
+        select: { emiMonthLimits: true },
+      });
+      const limit = resolveEmiLimit(input.track, courseForEmi?.emiMonthLimits, config);
       if (months > limit) {
         throw new AppError(`${input.track} allows a maximum EMI duration of ${limit} months.`, 400);
       }

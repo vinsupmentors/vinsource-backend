@@ -158,10 +158,23 @@ export const admissionController = {
     try {
       const courses = await prisma.academyCourse.findMany({
         where: { isActive: true },
-        select: { id: true, name: true },
+        select: { id: true, name: true, emiMonthLimits: true },
         orderBy: { name: 'asc' },
       });
       res.json({ success: true, data: courses });
+    } catch (err) { next(err); }
+  },
+
+  /** Admin-only: set/clear a course's per-track EMI month-limit override. */
+  async updateCourseEmiLimits(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { emiMonthLimits } = req.body;
+      const course = await prisma.academyCourse.update({
+        where: { id: req.params.id },
+        data: { emiMonthLimits: emiMonthLimits ?? Prisma.JsonNull },
+        select: { id: true, name: true, emiMonthLimits: true },
+      });
+      res.json({ success: true, data: course });
     } catch (err) { next(err); }
   },
 

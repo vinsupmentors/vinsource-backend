@@ -2290,6 +2290,12 @@ model AcademyCourse {
   isCustom    Boolean  @default(false)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
+  // Per-course override of AdmissionConfig.trackEmiMonthLimits, e.g.
+  // { "IOP": 6 } — only needed when one course's EMI cap for a track
+  // differs from the global default (e.g. Dataverse IOP: 6 months vs. the
+  // usual 5). Null/missing track key falls back to the global config; the
+  // fee engine checks this first. See admissionFeeEngine.resolveEmiLimit.
+  emiMonthLimits Json?
 
   modules          AcademyModule[]
   schedules        BatchCourseSchedule[]
@@ -2721,7 +2727,14 @@ model PlacementDrive {
   id            String      @id @default(uuid())
   partnerId     String
   role          String
+  // Full timestamp — the frontend's Add Drive form now uses a
+  // datetime-local input instead of a date-only one, so this actually
+  // carries the interview/drive start time, not just midnight.
   driveDate     DateTime
+  // Venue / location for the drive — on-site address, or "Online" / a
+  // meeting link for a virtual drive. Free text since it varies too much
+  // (a partner's office address vs. a Zoom link) for a fixed set of options.
+  venue         String?
   status        DriveStatus @default(SCHEDULED)
   organizedById String?
   notes         String?

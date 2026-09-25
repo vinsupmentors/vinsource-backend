@@ -9,6 +9,7 @@ router.use(requireModule('ADMISSION', 'VIEW'));
 
 // Courses (for the New Admission course/track picker)
 router.get('/courses', admissionController.listCourses);
+router.put('/courses/:id/emi-limits', requireModule('ADMISSION', 'ADMIN'), admissionController.updateCourseEmiLimits);
 
 // Employees (for the employee-restricted coupon picker) — admin only, same as coupons
 router.get('/employees/search', requireModule('ADMISSION', 'ADMIN'), admissionController.searchEmployees);
