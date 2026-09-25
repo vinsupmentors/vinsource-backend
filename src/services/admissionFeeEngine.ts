@@ -26,11 +26,13 @@ import { AppError } from '../middleware/errorHandler';
 
 export type PaymentMethod = 'SPOT' | 'FULL' | 'PART' | 'EMI';
 
+export const MAX_COUPONS_PER_ADMISSION = 3;
+
 export interface CalculateFeeInput {
   courseId: string;
   track: string; // StudentTrack value, e.g. "JRP_RECORDED"
   scheduleId?: string; // needed to check the EMI batch-start-date cutoff and coupon schedule-scoping
-  couponCode?: string;
+  couponCodes?: string[]; // up to MAX_COUPONS_PER_ADMISSION, stacked
   paymentMethod: PaymentMethod;
   emiMonths?: number; // required when paymentMethod === 'EMI'
   salespersonId?: string; // for per-salesperson coupon usage limits
@@ -40,7 +42,11 @@ export interface FeeBreakdown {
   courseId: string;
   track: string;
   baseFee: number;
-  couponCode: string | null;
+  // Up to 3 coupons can be stacked on one admission — each is validated and
+  // priced independently against the ORIGINAL baseFee (not sequentially),
+  // then their discounts are summed into couponDiscount below.
+  couponCodes: string[];
+  couponBreakdown: { couponId: string; code: string; discount: number }[];
   couponDiscount: number;
   netCourseFee: number; // baseFee - couponDiscount
   paymentMethod: PaymentMethod;
@@ -223,20 +229,32 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
   const config = await getAdmissionConfig();
   const baseFee = await getBaseFee(input.courseId, input.track);
 
+  // Each coupon is validated and priced independently against the original
+  // baseFee (not stacked sequentially off an already-reduced amount) — so
+  // e.g. two 10%-off coupons together take 20% off the original fee, not
+  // 10% then 10% of what's left. Their discounts are then summed and
+  // capped so the total never exceeds the fee itself.
   let couponDiscount = 0;
-  let couponCode: string | null = null;
-  if (input.couponCode) {
+  const couponBreakdown: { couponId: string; code: string; discount: number }[] = [];
+  const requestedCodes = Array.from(
+    new Set((input.couponCodes || []).map((c) => c.trim().toUpperCase()).filter(Boolean))
+  );
+  if (requestedCodes.length > MAX_COUPONS_PER_ADMISSION) {
+    throw new AppError(`A maximum of ${MAX_COUPONS_PER_ADMISSION} coupons can be applied to one admission.`, 400);
+  }
+  for (const code of requestedCodes) {
     const priced = await validateAndPriceCoupon({
-      code: input.couponCode,
+      code,
       courseId: input.courseId,
       track: input.track,
       scheduleId: input.scheduleId,
       netFeeBeforeCoupon: baseFee,
       salespersonId: input.salespersonId,
     });
-    couponDiscount = priced.discount;
-    couponCode = input.couponCode.trim().toUpperCase();
+    couponBreakdown.push({ couponId: priced.couponId, code, discount: priced.discount });
+    couponDiscount += priced.discount;
   }
+  couponDiscount = roundMoney(Math.min(couponDiscount, baseFee));
 
   const netCourseFee = roundMoney(baseFee - couponDiscount);
 
@@ -244,7 +262,8 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
     courseId: input.courseId,
     track: input.track,
     baseFee,
-    couponCode,
+    couponCodes: couponBreakdown.map((c) => c.code),
+    couponBreakdown,
     couponDiscount,
     netCourseFee,
     paymentMethod: input.paymentMethod,

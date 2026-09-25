@@ -33,6 +33,11 @@ const admissionInclude = {
   createdBy: { select: employeeSelect },
   course: { select: { id: true, name: true } },
   schedule: { select: { id: true, code: true, timing: true, startTime: true, endTime: true, startDate: true, batch: { select: { id: true, code: true } } } },
+  // couponUsages covers 0, 1, or up to 3 stacked coupons uniformly — prefer
+  // this over the legacy singular `coupon` relation below when displaying
+  // "what coupons applied here" (that one is only ever set for the
+  // exactly-one-coupon case, kept for backward-compat filtering/joins).
+  couponUsages: { include: { coupon: { select: { id: true, code: true, name: true } } } },
   coupon: { select: { id: true, code: true, name: true } },
   installments: {
     orderBy: { dueDate: 'asc' as const },
@@ -114,7 +119,7 @@ export const admissionController = {
 
   async calculateFeeEndpoint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { courseId, track, scheduleId, couponCode, paymentMethod, emiMonths } = req.body as CalculateFeeInput;
+      const { courseId, track, scheduleId, couponCodes, paymentMethod, emiMonths } = req.body as CalculateFeeInput;
       if (!courseId || !track || !paymentMethod) {
         throw new AppError('courseId, track, and paymentMethod are required', 400);
       }
@@ -122,7 +127,7 @@ export const admissionController = {
         courseId,
         track,
         scheduleId,
-        couponCode,
+        couponCodes,
         paymentMethod,
         emiMonths: emiMonths ? Number(emiMonths) : undefined,
         salespersonId: req.user?.employeeId,
@@ -488,7 +493,7 @@ export const admissionController = {
         courseId,
         track,
         scheduleId,
-        couponCode,
+        couponCodes,
         paymentMethod,
         emiMonths,
         deliveryMode, // 'ONLINE' | 'OFFLINE' — required only when the chosen schedule is HYBRID
@@ -508,7 +513,7 @@ export const admissionController = {
         courseId,
         track,
         scheduleId,
-        couponCode,
+        couponCodes,
         paymentMethod,
         emiMonths: emiMonths ? Number(emiMonths) : undefined,
         salespersonId,
@@ -564,9 +569,11 @@ export const admissionController = {
             deliveryMode: schedule.mode === 'HYBRID' ? deliveryMode : undefined,
             totalFee: breakdown.baseFee,
             planType: paymentMethod,
-            couponId: breakdown.couponCode
-              ? (await tx.coupon.findUnique({ where: { code: breakdown.couponCode }, select: { id: true } }))?.id
-              : undefined,
+            // Legacy singular FK — only meaningful (and only set) when
+            // exactly one coupon applied; 0 or 2-3 coupons leave this null
+            // and rely on couponUsages below for the full list. couponDiscount
+            // always stays the combined total regardless of coupon count.
+            couponId: breakdown.couponBreakdown.length === 1 ? breakdown.couponBreakdown[0].couponId : undefined,
             couponDiscount: breakdown.couponDiscount || undefined,
             paymentDiscountAmount: breakdown.paymentDiscountAmount ?? undefined,
             registrationFee: breakdown.registrationFee ?? undefined,
@@ -582,13 +589,10 @@ export const admissionController = {
           },
         });
 
-        if (breakdown.couponCode) {
-          const coupon = await tx.coupon.findUnique({ where: { code: breakdown.couponCode } });
-          if (coupon) {
-            await tx.couponUsage.create({
-              data: { couponId: coupon.id, admissionId: plan.id, salespersonId },
-            });
-          }
+        for (const applied of breakdown.couponBreakdown) {
+          await tx.couponUsage.create({
+            data: { couponId: applied.couponId, admissionId: plan.id, salespersonId, discountApplied: applied.discount },
+          });
         }
 
         // Installments — money isn't real until an Admin approves it
@@ -713,7 +717,9 @@ export const admissionController = {
       if (scheduleId) where.scheduleId = String(scheduleId);
       if (paymentMethod) where.planType = String(paymentMethod);
       if (admissionStatus) where.admissionStatus = String(admissionStatus);
-      if (couponCode) where.coupon = { code: String(couponCode).toUpperCase() };
+      // couponUsages (not the legacy singular `coupon` FK) so this still
+      // finds admissions where the code was one of several stacked coupons.
+      if (couponCode) where.couponUsages = { some: { coupon: { code: String(couponCode).toUpperCase() } } };
       if (from || to) {
         const range: Record<string, Date> = {};
         if (from) range.gte = new Date(String(from));

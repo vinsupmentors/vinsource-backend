@@ -1842,6 +1842,12 @@ model CouponUsage {
   admissionId  String // FeePaymentPlan.id
   salespersonId String?
   usedAt       DateTime @default(now())
+  // Rupee amount THIS coupon contributed — an admission can have up to 3
+  // CouponUsage rows (stacked coupons, summed independently off the
+  // original course fee), so the combined total lives on
+  // FeePaymentPlan.couponDiscount while this is the per-coupon slice. See
+  // admissionFeeEngine.calculateFee.
+  discountApplied Float  @default(0)
 
   coupon     Coupon         @relation(fields: [couponId], references: [id])
   admission  FeePaymentPlan @relation(fields: [admissionId], references: [id], onDelete: Cascade)
