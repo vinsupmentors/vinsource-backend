@@ -30,10 +30,10 @@ export const productionContentController = {
     } catch (err) { next(err); }
   },
 
-  /** Create a Project for a module. Multipart: resource (PDF or ZIP) + body { moduleId, title, description } */
+  /** Create a Project for a module. Multipart: resource (PDF or ZIP) + body { moduleId, title, description, isCapstone } */
   async createProject(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { moduleId, title, description } = req.body;
+      const { moduleId, title, description, isCapstone } = req.body;
       const file = req.file as Express.Multer.File | undefined;
       if (!moduleId || !title) throw new AppError('moduleId and title are required', 400);
       if (!file) throw new AppError('A PDF or ZIP project brief is required', 400);
@@ -44,6 +44,8 @@ export const productionContentController = {
           title,
           description: description || undefined,
           resourceUrl: `/uploads/project-resources/${file.filename}`,
+          // multipart bodies arrive as strings ("true"/"false"), not booleans
+          isCapstone: isCapstone === true || isCapstone === 'true',
           createdById: req.user!.employeeId!,
         },
       });
@@ -54,7 +56,7 @@ export const productionContentController = {
   async updateProject(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { id } = req.params;
-      const { title, description, moduleId } = req.body;
+      const { title, description, moduleId, isCapstone } = req.body;
       const file = req.file as Express.Multer.File | undefined;
       const project = await prisma.project.update({
         where: { id },
@@ -63,6 +65,7 @@ export const productionContentController = {
           title: title || undefined,
           description: description ?? undefined,
           resourceUrl: file ? `/uploads/project-resources/${file.filename}` : undefined,
+          isCapstone: isCapstone === undefined ? undefined : (isCapstone === true || isCapstone === 'true'),
         },
       });
       res.json({ success: true, data: project });
