@@ -672,21 +672,34 @@ export const emailService = {
         </div>
       </div>`,
 
-    placementInterviewScheduled: (data: { studentName: string; companyName: string; round: number; scheduledAt: string; interviewerName?: string | null }) => `
+    placementInterviewScheduled: (data: { studentName: string; companyName: string; round: number; scheduledAt: string; interviewerName?: string | null; venue?: string | null }) => `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#7c3aed;padding:24px;">
           <h1 style="color:#fff;margin:0;font-size:22px;">📅 Interview Scheduled</h1>
+          <p style="color:#ede9fe;margin:6px 0 0;font-size:14px;">You're one step closer to your next opportunity!</p>
         </div>
         <div style="padding:24px;">
           <p>Dear ${data.studentName},</p>
-          <p>Your interview has been scheduled:</p>
+          <p>Great news — your interview has been scheduled. Here are the details:</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Company</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.companyName || '—'}</td></tr>
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Round</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.round}</td></tr>
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>Date &amp; Time</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#fef3c7;"><strong>${data.scheduledAt}</strong></td></tr>
+            ${data.venue ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Venue</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.venue}</td></tr>` : ''}
             ${data.interviewerName ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Interviewer</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">${data.interviewerName}</td></tr>` : ''}
           </table>
-          <p>Prepare well and reach out to the placement team if you have any questions. Good luck!</p>
+          <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:16px;margin:20px 0;">
+            <p style="margin:0 0 8px;font-weight:700;color:#5b21b6;">A few tips before you go in</p>
+            <ul style="margin:0;padding-left:18px;color:#4c1d95;">
+              <li>Revisit your resume and be ready to walk through your projects with confidence.</li>
+              <li>Spend a few minutes researching ${data.companyName || 'the company'} — what they do, and why you want to be there.</li>
+              <li>${data.venue ? 'Plan to reach the venue (or log in, if it\'s online) at least 15 minutes early.' : 'Log in a few minutes early so a connectivity hiccup doesn\'t cost you time.'}</li>
+              <li>Carry a copy of your resume and any certificates you might need.</li>
+            </ul>
+          </div>
+          <p>You've put in the work to get here — trust your preparation and go show them what you've got. We're rooting for you!</p>
+          <p>Reach out to the placement team any time if you have questions.</p>
+          <p style="margin-top:20px;">All the best,<br/><strong>Placement Team</strong><br/>Vinsup Skill Academy</p>
         </div>
       </div>`,
 

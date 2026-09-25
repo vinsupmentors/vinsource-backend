@@ -1219,6 +1219,7 @@ export const placementsController = {
             round: interview.round,
             scheduledAt: interview.scheduledAt.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' }),
             interviewerName: interview.interviewerName,
+            venue: interview.drive?.venue,
           }),
           template: 'placement_interview_scheduled',
         }).catch((err) => console.error('Placement interview-scheduled email failed:', err));
