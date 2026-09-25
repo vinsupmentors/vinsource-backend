@@ -36,6 +36,11 @@ export interface CalculateFeeInput {
   paymentMethod: PaymentMethod;
   emiMonths?: number; // required when paymentMethod === 'EMI'
   salespersonId?: string; // for per-salesperson coupon usage limits
+  // PART only — Sales enters whatever registration amount suits the
+  // student's situation instead of a fixed number; falls back to
+  // AdmissionConfig.registrationFee (the admin-set default) when omitted.
+  // Must be > 0 and can't exceed the net course fee.
+  registrationFee?: number;
 }
 
 export interface FeeBreakdown {
@@ -289,7 +294,20 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
     }
 
     case 'PART': {
-      const registrationFee = config.registrationFee;
+      // Sales can enter whatever registration amount fits the student's
+      // situation instead of a fixed number — falls back to the
+      // admin-configured default (AdmissionConfig.registrationFee) when not
+      // provided, so old callers and the Config tab's default keep working.
+      let registrationFee = config.registrationFee;
+      if (input.registrationFee != null) {
+        registrationFee = roundMoney(Number(input.registrationFee));
+        if (!(registrationFee > 0)) {
+          throw new AppError('Registration fee must be a positive amount.', 400);
+        }
+        if (registrationFee > netCourseFee) {
+          throw new AppError(`Registration fee can't exceed the net course fee (${netCourseFee}).`, 400);
+        }
+      }
       breakdown.registrationFee = registrationFee;
       breakdown.orientationBalance = roundMoney(netCourseFee - registrationFee);
       return breakdown;

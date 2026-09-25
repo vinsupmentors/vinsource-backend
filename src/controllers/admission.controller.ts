@@ -119,7 +119,7 @@ export const admissionController = {
 
   async calculateFeeEndpoint(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { courseId, track, scheduleId, couponCodes, paymentMethod, emiMonths } = req.body as CalculateFeeInput;
+      const { courseId, track, scheduleId, couponCodes, paymentMethod, emiMonths, registrationFee } = req.body as CalculateFeeInput;
       if (!courseId || !track || !paymentMethod) {
         throw new AppError('courseId, track, and paymentMethod are required', 400);
       }
@@ -130,6 +130,7 @@ export const admissionController = {
         couponCodes,
         paymentMethod,
         emiMonths: emiMonths ? Number(emiMonths) : undefined,
+        registrationFee: registrationFee != null && registrationFee !== ('' as unknown) ? Number(registrationFee) : undefined,
         salespersonId: req.user?.employeeId,
       });
       res.json({ success: true, data: breakdown });
@@ -587,6 +588,7 @@ export const admissionController = {
         couponCodes,
         paymentMethod,
         emiMonths,
+        registrationFee, // PART only — Sales-entered override of the config default
         deliveryMode, // 'ONLINE' | 'OFFLINE' — required only when the chosen schedule is HYBRID
         payment, // { amount, mode, collectedAt } — the amount actually collected right now (spot/full/registration/down payment)
       } = req.body;
@@ -607,6 +609,7 @@ export const admissionController = {
         couponCodes,
         paymentMethod,
         emiMonths: emiMonths ? Number(emiMonths) : undefined,
+        registrationFee: registrationFee != null && registrationFee !== '' ? Number(registrationFee) : undefined,
         salespersonId,
       });
 
