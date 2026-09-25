@@ -247,24 +247,51 @@ export const placementsController = {
   },
 
   /**
-   * Only allowed once the drive has nothing recorded against it (no
-   * results, interviews, or shortlisted candidates) — deleting a drive
-   * with real history would silently orphan/erase that data. A drive with
-   * history should be Cancelled instead (keeps the record, just marks it
-   * dead), which is already one click via the status dropdown.
+   * By default, only allowed once the drive has nothing recorded against
+   * it (no results, interviews, or shortlisted candidates) — deleting a
+   * drive with real history would silently orphan/erase that data. A
+   * drive with history should normally be Cancelled instead (keeps the
+   * record, just marks it dead), which is already one click via the
+   * status dropdown.
+   *
+   * ?force=true overrides that block for genuine cleanup (e.g. a
+   * duplicate/test drive that already picked up a few shortlisted
+   * candidates by accident):
+   *  - PlacementDriveCandidate rows are hard-deleted — a shortlist entry
+   *    has no meaning once the drive it's for is gone.
+   *  - PlacementResult / PlacementInterview rows are NOT deleted — they're
+   *    real placement outcomes/interview history. Instead they're
+   *    detached (driveId -> null) with companyName backfilled from the
+   *    drive's partner, so they keep displaying correctly (same fallback
+   *    path already used for direct/off-campus offers) instead of vanishing.
    */
   async deleteDrive(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { id } = req.params;
+      const force = req.query.force === 'true';
       const [resultCount, interviewCount, candidateCount] = await Promise.all([
         prisma.placementResult.count({ where: { driveId: id } }),
         prisma.placementInterview.count({ where: { driveId: id } }),
         prisma.placementDriveCandidate.count({ where: { driveId: id } }),
       ]);
-      if (resultCount + interviewCount + candidateCount > 0) {
+      const hasHistory = resultCount + interviewCount + candidateCount > 0;
+
+      if (hasHistory && !force) {
         throw new AppError('This drive has results, interviews, or shortlisted candidates recorded against it — cancel it instead of deleting, to keep that history.', 400);
       }
-      await prisma.placementDrive.delete({ where: { id } });
+
+      if (hasHistory) {
+        const drive = await prisma.placementDrive.findUnique({ where: { id }, include: { partner: { select: { name: true } } } });
+        if (!drive) throw new AppError('Drive not found', 404);
+        await prisma.$transaction([
+          prisma.placementDriveCandidate.deleteMany({ where: { driveId: id } }),
+          prisma.placementResult.updateMany({ where: { driveId: id }, data: { driveId: null, companyName: drive.partner.name } }),
+          prisma.placementInterview.updateMany({ where: { driveId: id }, data: { driveId: null, companyName: drive.partner.name } }),
+          prisma.placementDrive.delete({ where: { id } }),
+        ]);
+      } else {
+        await prisma.placementDrive.delete({ where: { id } });
+      }
       res.json({ success: true });
     } catch (err) { next(err); }
   },
