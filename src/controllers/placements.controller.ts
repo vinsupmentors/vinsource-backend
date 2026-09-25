@@ -218,11 +218,11 @@ export const placementsController = {
 
   async createDrive(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { partnerId, role, driveDate, venue, organizedById, notes } = req.body;
+      const { partnerId, role, driveDate, venue, jobDescription, organizedById, notes } = req.body;
       if (!partnerId || !role || !driveDate) throw new AppError('partnerId, role, and driveDate are required', 400);
 
       const drive = await prisma.placementDrive.create({
-        data: { partnerId, role, driveDate: new Date(driveDate), venue: venue || null, organizedById, notes },
+        data: { partnerId, role, driveDate: new Date(driveDate), venue: venue || null, jobDescription: jobDescription || null, organizedById, notes },
         include: { partner: true, organizedBy: { select: employeeSelect } },
       });
       res.status(201).json({ success: true, data: drive });
@@ -231,12 +231,13 @@ export const placementsController = {
 
   async updateDrive(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { role, driveDate, venue, status, organizedById, notes } = req.body;
+      const { role, driveDate, venue, jobDescription, status, organizedById, notes } = req.body;
       const drive = await prisma.placementDrive.update({
         where: { id: req.params.id },
         data: {
           role, status, organizedById, notes,
           venue: venue === '' ? null : venue,
+          jobDescription: jobDescription === '' ? null : jobDescription,
           driveDate: driveDate ? new Date(driveDate) : undefined,
         },
       });

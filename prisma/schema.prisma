@@ -2735,6 +2735,10 @@ model PlacementDrive {
   // meeting link for a virtual drive. Free text since it varies too much
   // (a partner's office address vs. a Zoom link) for a fixed set of options.
   venue         String?
+  // Free-text job description for the role being hired — pasted in when
+  // the drive is created so candidates/staff can see what the role
+  // actually involves without chasing the partner for it separately.
+  jobDescription String?    @db.Text
   status        DriveStatus @default(SCHEDULED)
   organizedById String?
   notes         String?
