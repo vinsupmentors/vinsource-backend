@@ -66,11 +66,12 @@ export interface FeeBreakdown {
   orientationBalance?: number;
 
   // EMI only
+  downPaymentPct?: number;
+  downPayment?: number;
+  financedAmount?: number; // netCourseFee - downPayment — the balance interest is charged on
   interestRatePct?: number;
   interestAmount?: number;
   emiTotal?: number;
-  downPaymentPct?: number;
-  downPayment?: number;
   emiBalance?: number;
   emiMonths?: number;
   monthlyInstallments?: number[]; // length === emiMonths, last one absorbs rounding
@@ -346,11 +347,12 @@ export async function calculateFee(input: CalculateFeeInput): Promise<FeeBreakdo
       const emiTotal = roundMoney(netCourseFee + interestAmount);
       const emiBalance = roundMoney(emiTotal - downPayment); // = financedAmount + interestAmount — the part actually split into monthly installments
 
+      breakdown.downPaymentPct = config.downPaymentPct;
+      breakdown.downPayment = downPayment;
+      breakdown.financedAmount = financedAmount;
       breakdown.interestRatePct = interestPct;
       breakdown.interestAmount = interestAmount;
       breakdown.emiTotal = emiTotal;
-      breakdown.downPaymentPct = config.downPaymentPct;
-      breakdown.downPayment = downPayment;
       breakdown.emiBalance = emiBalance;
       breakdown.emiMonths = months;
       breakdown.monthlyInstallments = splitIntoInstallments(emiBalance, months);
