@@ -308,6 +308,97 @@ export const admissionController = {
   },
 
   /**
+   * Edit an existing batch schedule from the Admission side (Upcoming
+   * Batches tab) — same lightweight scope as createBatchSchedule (timing,
+   * day pattern, start date, seat capacity). Admin only.
+   *
+   * Delivery mode can only be changed while the schedule has zero bookings
+   * in any pool — switching Hybrid <-> Online/Offline after students are
+   * already enrolled against a specific pool would orphan their seat.
+   * Capacity can be lowered, but never below what's already booked.
+   */
+  async updateBatchSchedule(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { scheduleId } = req.params;
+      const { startTime, endTime, dayPattern, mode, startDate, capacity, onlineCapacity, offlineCapacity } = req.body;
+
+      const existing = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId } });
+      if (!existing) throw new AppError('Batch schedule not found', 404);
+
+      const seats = await getSeatAvailability(scheduleId);
+      const effectiveMode: 'ONLINE' | 'OFFLINE' | 'HYBRID' = mode || existing.mode;
+
+      if (mode && mode !== existing.mode) {
+        const totalBooked = existing.mode === 'HYBRID'
+          ? (seats.online?.booked ?? 0) + (seats.offline?.booked ?? 0)
+          : seats.booked ?? 0;
+        if (totalBooked > 0) {
+          throw new AppError('Cannot change delivery mode — students are already booked against this batch. Create a new batch instead.', 400);
+        }
+      }
+
+      if (effectiveMode === 'HYBRID') {
+        if (onlineCapacity !== undefined && onlineCapacity !== null && onlineCapacity !== '') {
+          const newCap = Number(onlineCapacity);
+          const booked = seats.online?.booked ?? 0;
+          if (newCap < booked) throw new AppError(`Cannot set Online seats to ${newCap} — ${booked} are already booked.`, 400);
+        }
+        if (offlineCapacity !== undefined && offlineCapacity !== null && offlineCapacity !== '') {
+          const newCap = Number(offlineCapacity);
+          const booked = seats.offline?.booked ?? 0;
+          if (newCap < booked) throw new AppError(`Cannot set Offline seats to ${newCap} — ${booked} are already booked.`, 400);
+        }
+      } else if (capacity !== undefined && capacity !== null && capacity !== '') {
+        const newCap = Number(capacity);
+        const booked = seats.booked ?? 0;
+        if (newCap < booked) throw new AppError(`Cannot set seats to ${newCap} — ${booked} are already booked.`, 400);
+      }
+
+      const startHour = startTime ? Number(String(startTime).split(':')[0]) : null;
+      const timing: 'MORNING' | 'AFTERNOON' | 'EVENING' | undefined =
+        startHour == null ? undefined : startHour < 12 ? 'MORNING' : startHour < 17 ? 'AFTERNOON' : 'EVENING';
+
+      const schedule = await prisma.batchCourseSchedule.update({
+        where: { id: scheduleId },
+        data: {
+          startTime: startTime || undefined,
+          endTime: endTime || undefined,
+          timing,
+          dayPattern: dayPattern || undefined,
+          mode: mode || undefined,
+          startDate: startDate ? new Date(startDate) : undefined,
+          capacity: effectiveMode !== 'HYBRID'
+            ? (capacity === '' ? null : capacity != null ? Number(capacity) : undefined)
+            : null,
+          onlineCapacity: effectiveMode === 'HYBRID'
+            ? (onlineCapacity === '' ? null : onlineCapacity != null ? Number(onlineCapacity) : undefined)
+            : null,
+          offlineCapacity: effectiveMode === 'HYBRID'
+            ? (offlineCapacity === '' ? null : offlineCapacity != null ? Number(offlineCapacity) : undefined)
+            : null,
+        },
+        include: { batch: { select: { id: true, code: true } }, course: { select: { id: true, name: true } } },
+      });
+
+      if (req.user?.userId) {
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user.userId,
+            action: 'EDIT',
+            module: 'ADMISSION',
+            entityId: scheduleId,
+            entityType: 'BatchCourseSchedule',
+            oldData: existing as object,
+            newData: schedule as object,
+          },
+        });
+      }
+
+      res.json({ success: true, data: { ...schedule, seats: await getSeatAvailability(scheduleId) } });
+    } catch (err) { next(err); }
+  },
+
+  /**
    * Batch Plan — a Course x (Offline/Online x time-slot) matrix of live
    * booked/capacity, e.g. "5/10" under DA -> Offline -> 9:30-11:30. Built
    * entirely from real, live-computed seat counts (the same

@@ -28,6 +28,7 @@ router.get('/batches/upcoming', admissionController.listUpcomingBatches);
 router.get('/batches/:scheduleId/seats', admissionController.seatAvailability);
 router.get('/batches/groups', requireModule('ADMISSION', 'ADMIN'), admissionController.listBatchGroups);
 router.post('/batches', requireModule('ADMISSION', 'ADMIN'), admissionController.createBatchSchedule);
+router.put('/batches/:scheduleId', requireModule('ADMISSION', 'ADMIN'), admissionController.updateBatchSchedule);
 
 // Seat hold-back — admin withholds genuine seats from bookable inventory
 // (e.g. for an anticipated college enrollment); reps request release, admin

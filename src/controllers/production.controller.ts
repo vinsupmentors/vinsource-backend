@@ -520,6 +520,10 @@ export const productionController = {
       const { scheduleId } = req.params;
       const {
         timing, dayPattern, mode, startDate, endDate, capacity, status,
+        // For HYBRID sub-batches, seats are tracked separately per delivery
+        // mode (see the schema comment on BatchCourseSchedule) — `capacity`
+        // only applies to ONLINE/OFFLINE-only sub-batches.
+        onlineCapacity, offlineCapacity,
         // Same quick-edit fields the Calendar module's edit panel sends —
         // see addSchedule's comment above for what each means. All optional
         // so every pre-existing caller (Production's own edit form, which
@@ -529,6 +533,27 @@ export const productionController = {
       } = req.body;
       if (dayPattern === 'CUSTOM' && customWeekdays === undefined) {
         throw new AppError('Select at least one weekday for a custom recurrence.', 400);
+      }
+
+      const existing = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId } });
+      if (!existing) throw new AppError('Sub-batch not found', 404);
+      const effectiveMode = mode || existing.mode;
+      // Only clear out the other mode's capacity field(s) when the mode is
+      // actually changing this request — a plain status/date-only PATCH
+      // (mode omitted) must never wipe capacity data that's still in use.
+      const modeChanging = mode !== undefined && mode !== existing.mode;
+
+      let capacityData: number | null | undefined;
+      let onlineCapacityData: number | null | undefined;
+      let offlineCapacityData: number | null | undefined;
+      if (effectiveMode === 'HYBRID') {
+        capacityData = modeChanging ? null : undefined;
+        onlineCapacityData = onlineCapacity === '' ? null : onlineCapacity !== undefined ? Number(onlineCapacity) : (modeChanging ? null : undefined);
+        offlineCapacityData = offlineCapacity === '' ? null : offlineCapacity !== undefined ? Number(offlineCapacity) : (modeChanging ? null : undefined);
+      } else {
+        onlineCapacityData = modeChanging ? null : undefined;
+        offlineCapacityData = modeChanging ? null : undefined;
+        capacityData = capacity === '' ? null : capacity !== undefined ? Number(capacity) : (modeChanging ? null : undefined);
       }
 
       const schedule = await prisma.batchCourseSchedule.update({
@@ -543,7 +568,9 @@ export const productionController = {
           customWeekdays: dayPattern === undefined ? undefined : dayPattern === 'CUSTOM' ? Number(customWeekdays) : null,
           startDate: startDate ? new Date(startDate) : undefined,
           endDate: endDate === '' ? null : endDate ? new Date(endDate) : undefined,
-          capacity: capacity === '' ? null : capacity !== undefined ? Number(capacity) : undefined,
+          capacity: capacityData,
+          onlineCapacity: onlineCapacityData,
+          offlineCapacity: offlineCapacityData,
         },
         include: {
           course: true,
