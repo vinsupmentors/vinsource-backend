@@ -85,12 +85,20 @@ export const documentController = {
 
       let doc;
       if (existing) {
-        // Delete the old file (cloud or disk)
-        if (isCloudStorageEnabled()) {
-          await storageService.delete(existing.fileKey);
-        } else {
-          const oldPath = path.join(process.cwd(), 'uploads', 'documents', path.basename(existing.fileKey));
-          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        // Delete the old file (cloud or disk) — but only if one was ever
+        // actually uploaded. HR's "collect originals at joining" flow
+        // creates a placeholder Document row with fileKey: '' before any
+        // file exists; path.basename('') resolves to the uploads/documents
+        // directory itself, and unlinkSync on a directory throws EISDIR —
+        // that was crashing every upload for an employee whose HR had
+        // already marked the original as collected. Guard against it.
+        if (existing.fileKey) {
+          if (isCloudStorageEnabled()) {
+            await storageService.delete(existing.fileKey);
+          } else {
+            const oldPath = path.join(process.cwd(), 'uploads', 'documents', path.basename(existing.fileKey));
+            if (fs.existsSync(oldPath) && fs.statSync(oldPath).isFile()) fs.unlinkSync(oldPath);
+          }
         }
 
         doc = await prisma.document.update({
@@ -246,13 +254,17 @@ export const documentController = {
         throw new AppError('This document has been verified by HR and can no longer be deleted. Contact HR if it needs correction.', 403);
       }
 
-      if (isCloudStorageEnabled() && !doc.fileKey.startsWith('/uploads/')) {
-        // Cloud file
-        await storageService.delete(doc.fileKey);
-      } else {
-        // Local disk file
-        const filePath = path.join(process.cwd(), 'uploads', 'documents', path.basename(doc.fileKey));
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      // Same empty-fileKey guard as upload() above — a placeholder doc from
+      // "collect originals at joining" has no real file to remove.
+      if (doc.fileKey) {
+        if (isCloudStorageEnabled() && !doc.fileKey.startsWith('/uploads/')) {
+          // Cloud file
+          await storageService.delete(doc.fileKey);
+        } else {
+          // Local disk file
+          const filePath = path.join(process.cwd(), 'uploads', 'documents', path.basename(doc.fileKey));
+          if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) fs.unlinkSync(filePath);
+        }
       }
 
       await prisma.document.delete({ where: { id: req.params.id } });
