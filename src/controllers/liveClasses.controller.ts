@@ -92,6 +92,7 @@ async function generateClassCode(batchCode: string, courseName: string, topic: s
 function dayMatchesPattern(date: Date, pattern: string, customWeekdays: number | null): boolean {
   const dow = date.getUTCDay();
   if (pattern === 'MON_SAT') return dow !== 0;
+  if (pattern === 'MON_FRI') return dow !== 0 && dow !== 6;
   if (pattern === 'SAT_SUN') return dow === 0 || dow === 6;
   if (pattern === 'SUNDAY_ONLY') return dow === 0;
   if (pattern === 'CUSTOM') return !!customWeekdays && (customWeekdays & (1 << dow)) !== 0;

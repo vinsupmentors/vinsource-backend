@@ -390,6 +390,7 @@ enum BatchTiming {
 
 enum DayPattern {
   MON_SAT
+  MON_FRI
   SAT_SUN
   SUNDAY_ONLY
   // Any combination of weekdays (e.g. Mon/Wed/Fri only) that doesn't fit the
