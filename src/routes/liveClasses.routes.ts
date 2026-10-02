@@ -18,6 +18,7 @@ router.use(authenticate);
 router.get('/analytics', requireModule('LIVE_CLASSES', 'VIEW'), liveClassesController.analytics);
 router.get('/schedules', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.listSchedules);
 router.post('/', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.create);
+router.post('/bulk', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.bulkCreate);
 router.put('/:id', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.update);
 router.post('/:id/cancel', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.cancel);
 router.post('/:id/start', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.start);

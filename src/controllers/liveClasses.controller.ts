@@ -85,6 +85,19 @@ async function generateClassCode(batchCode: string, courseName: string, topic: s
   return candidate;
 }
 
+/** MON_SAT/SAT_SUN/SUNDAY_ONLY/CUSTOM -> does this calendar day match? (UTC
+ * weekday, 0=Sun). Local copy of the same helper in calendar.controller.ts —
+ * kept separate rather than shared to avoid coupling two independently-owned
+ * controllers over a two-line function, same reasoning as that file's. */
+function dayMatchesPattern(date: Date, pattern: string, customWeekdays: number | null): boolean {
+  const dow = date.getUTCDay();
+  if (pattern === 'MON_SAT') return dow !== 0;
+  if (pattern === 'SAT_SUN') return dow === 0 || dow === 6;
+  if (pattern === 'SUNDAY_ONLY') return dow === 0;
+  if (pattern === 'CUSTOM') return !!customWeekdays && (customWeekdays & (1 << dow)) !== 0;
+  return false;
+}
+
 /** Real name for the LiveKit participant display label — falls back to email if somehow neither profile is loaded. */
 async function resolveDisplayName(req: AuthRequest): Promise<string> {
   if (req.user?.employeeId) {
@@ -276,6 +289,7 @@ export const liveClassesController = {
         where,
         select: {
           id: true, code: true, timing: true, startTime: true, endTime: true,
+          dayPattern: true, customWeekdays: true, startDate: true, endDate: true,
           batch: { select: { id: true, code: true } },
           course: { select: { id: true, name: true } },
         },
@@ -342,6 +356,106 @@ export const liveClassesController = {
       }).catch(() => {});
 
       res.status(201).json({ success: true, data: created, warning: overlapsTime.length ? 'This batch already has another class scheduled at an overlapping time.' : undefined });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Bulk-create recurring classes for one sub-batch: pick a schedule, set a
+   * title/timing, a start date and an end date — one LiveClass gets created
+   * for every day in that range that matches the sub-batch's own dayPattern
+   * (the actual days it runs on), so a trainer doesn't have to add a class
+   * one day at a time for an entire batch run.
+   *
+   * Idempotent-ish: any date in the range that already has a non-cancelled
+   * class on this schedule is silently skipped (reported back, not
+   * duplicated) — safe to re-run after adding a few classes by hand, or
+   * after extending the end date.
+   */
+  async bulkCreate(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { scheduleId, title, topic, description, startTime, endTime, startDate, endDate } = req.body;
+      if (!scheduleId || !title || !startTime || !endTime || !startDate || !endDate) {
+        throw new AppError('scheduleId, title, startTime, endTime, startDate, and endDate are required.', 400);
+      }
+      if (!(await canManageSchedule(req, scheduleId))) {
+        throw new AppError('You are not assigned to train this batch.', 403);
+      }
+
+      const schedule = await prisma.batchCourseSchedule.findUnique({
+        where: { id: scheduleId },
+        include: { batch: { select: { code: true } }, course: { select: { name: true } } },
+      });
+      if (!schedule) throw new AppError('Batch schedule not found.', 404);
+
+      const from = new Date(`${String(startDate).slice(0, 10)}T00:00:00.000Z`);
+      const to = new Date(`${String(endDate).slice(0, 10)}T00:00:00.000Z`);
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid start or end date.', 400);
+      if (to < from) throw new AppError('End date must not be before start date.', 400);
+      if ((to.getTime() - from.getTime()) / 86400000 > 180) {
+        throw new AppError('Date range too large (max 180 days) — run this in smaller chunks.', 400);
+      }
+
+      // Existing (non-cancelled) classes on this schedule already in range —
+      // skip those dates rather than creating a duplicate.
+      const existing = await prisma.liveClass.findMany({
+        where: { scheduleId, scheduledDate: { gte: from, lte: to }, status: { not: 'CANCELLED' } },
+        select: { scheduledDate: true },
+      });
+      const existingDates = new Set(existing.map((e: { scheduledDate: Date }) => e.scheduledDate.toISOString().slice(0, 10)));
+
+      const createdRows: { id: string; classCode: string; scheduledDate: Date }[] = [];
+      const skippedDates: string[] = [];
+      const noMatchDates: string[] = [];
+
+      for (let d = new Date(from); d <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+        const dateCopy = new Date(d);
+        const dateStr = dateCopy.toISOString().slice(0, 10);
+        if (!dayMatchesPattern(dateCopy, schedule.dayPattern, schedule.customWeekdays)) {
+          noMatchDates.push(dateStr);
+          continue;
+        }
+        if (existingDates.has(dateStr)) {
+          skippedDates.push(dateStr);
+          continue;
+        }
+
+        const classCode = await generateClassCode(schedule.batch.code, schedule.course.name, topic, dateCopy); // eslint-disable-line no-await-in-loop
+        const roomName = `live-${classCode.toLowerCase()}`;
+        const row = await prisma.liveClass.create({ // eslint-disable-line no-await-in-loop
+          data: {
+            classCode, roomName, title,
+            scheduleId,
+            topic: topic || undefined,
+            description: description || undefined,
+            scheduledDate: dateCopy,
+            startTime, endTime,
+            createdById: req.user?.employeeId || undefined,
+          },
+          select: { id: true, classCode: true, scheduledDate: true },
+        });
+        createdRows.push(row);
+      }
+
+      if (req.user?.userId && createdRows.length) {
+        await prisma.auditLog.create({
+          data: {
+            userId: req.user.userId, action: 'CREATE', module: 'LIVE_CLASSES',
+            entityId: scheduleId, entityType: 'LiveClass.bulk',
+            newData: { count: createdRows.length, startDate, endDate, skipped: skippedDates.length },
+          },
+        }).catch(() => {});
+      }
+
+      res.status(201).json({
+        success: true,
+        data: {
+          createdCount: createdRows.length,
+          created: createdRows,
+          skippedCount: skippedDates.length,
+          skippedDates,
+          notRunningCount: noMatchDates.length,
+        },
+      });
     } catch (err) { next(err); }
   },
 
