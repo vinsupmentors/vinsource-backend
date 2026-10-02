@@ -30,6 +30,11 @@ const liveClassInclude = {
       batch: { select: { id: true, code: true } },
       course: { select: { id: true, name: true } },
       _count: { select: { enrollments: true } },
+      // The actual trainer(s) assigned to this sub-batch in Production —
+      // shown as "Trainer" on the class card instead of createdBy, since
+      // a manager/admin bulk-creating classes on a trainer's behalf is the
+      // one who scheduled it, not the one who'll teach it.
+      trainers: { select: { trainer: { select: employeeSelect } } },
     },
   },
   createdBy: { select: employeeSelect },
