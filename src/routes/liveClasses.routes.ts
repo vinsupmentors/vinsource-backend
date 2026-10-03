@@ -16,6 +16,7 @@ router.use(authenticate);
 // enrollment/trainer-assignment check per class instead, so both a
 // student and a trainer can reach the same endpoint safely.
 router.get('/analytics', requireModule('LIVE_CLASSES', 'VIEW'), liveClassesController.analytics);
+router.get('/summary', requireModule('LIVE_CLASSES', 'VIEW'), liveClassesController.summary);
 router.get('/schedules', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.listSchedules);
 router.post('/', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.create);
 router.post('/bulk', requireModule('LIVE_CLASSES', 'EDIT'), liveClassesController.bulkCreate);

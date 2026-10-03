@@ -305,6 +305,65 @@ export const liveClassesController = {
     } catch (err) { next(err); }
   },
 
+  /** One row per sub-batch: Batch, Sub-batch, Schedule From, Date Till, and
+   * the total number of days it actually runs on (day-pattern-aware, not a
+   * raw calendar span) plus how many classes have been created for it so
+   * far — the "how much of this sub-batch is actually scheduled" overview a
+   * manager bulk-creating classes needs instead of scanning the class grid. */
+  async summary(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const admin = await isLiveClassesAdmin(req);
+      const where: Record<string, unknown> = {};
+      if (!admin) {
+        const scope = selfScopeWhere(req);
+        if (!scope) return res.json({ success: true, data: [] });
+        Object.assign(where, scope);
+      }
+      const schedules = await prisma.batchCourseSchedule.findMany({
+        where,
+        select: {
+          id: true, code: true, timing: true, startTime: true, endTime: true,
+          dayPattern: true, customWeekdays: true, startDate: true, endDate: true, status: true,
+          batch: { select: { id: true, code: true } },
+          course: { select: { id: true, name: true } },
+          _count: { select: { liveClasses: true } },
+        },
+        orderBy: [{ batch: { code: 'asc' } }, { startDate: 'asc' }],
+      });
+
+      const data = schedules.map((s: (typeof schedules)[number]) => {
+        let totalRunningDays: number | null = null;
+        // Cap the count at ~3 years of iteration so a schedule with no end
+        // date (still running) can't hang the request.
+        const cappedEnd = s.endDate || new Date(Date.now() + 3 * 365 * 86400000);
+        const spanDays = Math.round((cappedEnd.getTime() - s.startDate.getTime()) / 86400000);
+        if (spanDays >= 0 && spanDays <= 3 * 365) {
+          let count = 0;
+          for (let d = new Date(s.startDate); d <= cappedEnd; d.setUTCDate(d.getUTCDate() + 1)) {
+            if (dayMatchesPattern(d, s.dayPattern, s.customWeekdays)) count++;
+          }
+          totalRunningDays = count;
+        }
+        return {
+          scheduleId: s.id,
+          code: s.code,
+          batch: s.batch,
+          course: s.course,
+          timing: s.timing,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          status: s.status,
+          totalRunningDays,
+          classesScheduledCount: s._count.liveClasses,
+        };
+      });
+
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
   // ── CRUD ───────────────────────────────────────────────────────────────────
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
