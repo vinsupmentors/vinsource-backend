@@ -524,6 +524,171 @@ export const liveClassesController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Excel/CSV bulk upload — one row per class, each with its own date/time,
+   * unlike `bulkCreate` which fills a single sub-batch's own day-pattern
+   * across a date range. Parsed client-side (same pattern as Sales'
+   * bulkUploadLeads and Production's bulkUploadStudents), rows posted as
+   * JSON here. Each row is independently validated/permission-checked and
+   * reported back — one bad row never blocks the rest of the file.
+   */
+  async bulkUploadExcel(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { classes } = req.body;
+      if (!Array.isArray(classes) || !classes.length) {
+        throw new AppError('classes array is required', 400);
+      }
+
+      const schedules = await prisma.batchCourseSchedule.findMany({
+        select: {
+          id: true, code: true,
+          batch: { select: { code: true } },
+          course: { select: { name: true } },
+        },
+      });
+      const scheduleByCode = new Map<string, (typeof schedules)[number]>(
+        schedules.filter((s: (typeof schedules)[number]) => s.code).map((s: (typeof schedules)[number]) => [s.code!.trim().toLowerCase(), s])
+      );
+
+      // Case/space-insensitive column lookup, same convention as the other
+      // bulk-upload endpoints in this codebase.
+      const field = (row: Record<string, unknown>, ...aliases: string[]): string => {
+        const normalized: Record<string, unknown> = {};
+        for (const key of Object.keys(row)) normalized[key.trim().toLowerCase().replace(/\s+/g, '')] = row[key];
+        for (const alias of aliases) {
+          const v = normalized[alias];
+          if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+        }
+        return '';
+      };
+
+      const results: Array<{ row: number; status: 'created' | 'error'; message?: string; classId?: string }> = [];
+
+      for (let i = 0; i < classes.length; i++) {
+        const row = (classes[i] || {}) as Record<string, unknown>;
+        const rowNum = i + 1;
+        try {
+          const subBatchCode = field(row, 'subbatchcode', 'subbatch', 'code', 'schedulecode');
+          const title = field(row, 'title', 'classtitle');
+          const topic = field(row, 'topic');
+          const description = field(row, 'description', 'desc');
+          const dateRaw = field(row, 'date', 'scheduleddate', 'classdate');
+          const startTime = field(row, 'starttime', 'start');
+          const endTime = field(row, 'endtime', 'end');
+
+          if (!subBatchCode || !title || !dateRaw || !startTime || !endTime) {
+            results.push({ row: rowNum, status: 'error', message: 'subBatchCode, title, date, startTime, and endTime are required' });
+            continue;
+          }
+
+          const schedule = scheduleByCode.get(subBatchCode.toLowerCase());
+          if (!schedule) {
+            results.push({ row: rowNum, status: 'error', message: `Sub-batch code "${subBatchCode}" not found` });
+            continue;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          if (!(await canManageSchedule(req, schedule.id))) {
+            results.push({ row: rowNum, status: 'error', message: `You are not assigned to train "${subBatchCode}"` });
+            continue;
+          }
+
+          const scheduledDate = new Date(`${dateRaw.slice(0, 10)}T00:00:00.000Z`);
+          if (isNaN(scheduledDate.getTime())) {
+            results.push({ row: rowNum, status: 'error', message: `Could not parse date "${dateRaw}" — use YYYY-MM-DD` });
+            continue;
+          }
+
+          // eslint-disable-next-line no-await-in-loop
+          const dup = await prisma.liveClass.findFirst({
+            where: { scheduleId: schedule.id, scheduledDate, status: { not: 'CANCELLED' } },
+            select: { id: true },
+          });
+          if (dup) {
+            results.push({ row: rowNum, status: 'error', message: `A class already exists on ${dateRaw.slice(0, 10)} for "${subBatchCode}"` });
+            continue;
+          }
+
+          // eslint-disable-next-line no-await-in-loop
+          const classCode = await generateClassCode(schedule.batch.code, schedule.course.name, topic || undefined, scheduledDate);
+          const roomName = `live-${classCode.toLowerCase()}`;
+          // eslint-disable-next-line no-await-in-loop
+          const created = await prisma.liveClass.create({
+            data: {
+              classCode, roomName, title,
+              scheduleId: schedule.id,
+              topic: topic || undefined,
+              description: description || undefined,
+              scheduledDate, startTime, endTime,
+              createdById: req.user?.employeeId || undefined,
+            },
+            select: { id: true },
+          });
+          results.push({ row: rowNum, status: 'created', classId: created.id });
+        } catch (rowErr) {
+          results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : 'Unexpected error' });
+        }
+      }
+
+      const createdCount = results.filter((r) => r.status === 'created').length;
+      if (req.user?.userId && createdCount) {
+        await prisma.auditLog.create({
+          data: { userId: req.user.userId, action: 'CREATE', module: 'LIVE_CLASSES', entityType: 'LiveClass.bulkUpload', newData: { count: createdCount, total: classes.length } },
+        }).catch(() => {});
+      }
+
+      res.status(201).json({ success: true, data: { results } });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Cancel multiple classes in one call — same guardrails as the single
+   * `cancel` endpoint (per-id permission + status check), just looped, so
+   * the UI can offer a multi-select "Cancel Selected" without N round trips
+   * and without one bad id blocking the rest of the batch.
+   */
+  async cancelBulk(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { ids, reason } = req.body;
+      if (!Array.isArray(ids) || !ids.length) throw new AppError('ids array is required', 400);
+
+      const results: Array<{ id: string; status: 'cancelled' | 'error'; message?: string }> = [];
+
+      for (const id of ids as string[]) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const existing = await prisma.liveClass.findUnique({ where: { id } });
+          if (!existing) { results.push({ id, status: 'error', message: 'Class not found.' }); continue; }
+          // eslint-disable-next-line no-await-in-loop
+          if (!(await canManageSchedule(req, existing.scheduleId))) { results.push({ id, status: 'error', message: 'You cannot cancel this class.' }); continue; }
+          if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
+            results.push({ id, status: 'error', message: `Already ${existing.status.toLowerCase()}.` });
+            continue;
+          }
+
+          // eslint-disable-next-line no-await-in-loop
+          await prisma.liveClass.update({
+            where: { id: existing.id },
+            data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: reason || undefined },
+          });
+          // eslint-disable-next-line no-await-in-loop
+          if (existing.status === 'LIVE') await closeRoom(existing.roomName);
+          results.push({ id, status: 'cancelled' });
+        } catch (rowErr) {
+          results.push({ id, status: 'error', message: rowErr instanceof Error ? rowErr.message : 'Unexpected error' });
+        }
+      }
+
+      const cancelledCount = results.filter((r) => r.status === 'cancelled').length;
+      if (req.user?.userId && cancelledCount) {
+        await prisma.auditLog.create({
+          data: { userId: req.user.userId, action: 'EDIT', module: 'LIVE_CLASSES', entityType: 'LiveClass.cancelBulk', newData: { count: cancelledCount, reason } },
+        }).catch(() => {});
+      }
+
+      res.json({ success: true, data: { results } });
+    } catch (err) { next(err); }
+  },
+
   async list(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { view, batchId, courseId, scheduleId, search } = req.query;
