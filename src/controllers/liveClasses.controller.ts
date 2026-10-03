@@ -584,6 +584,24 @@ export const liveClassesController = {
         return '';
       };
 
+      // Belt-and-suspenders for a raw Excel day-serial slipping through
+      // despite the frontend formatting dates before posting (e.g. a caller
+      // hitting this endpoint directly, or an older cached frontend build):
+      // Excel's epoch is Dec 30 1899, with its well-known leap-year bug for
+      // day counts <= 60 that this range is far past, so a plain offset is
+      // exact. Only treated as a serial when it's a bare number in a
+      // plausible date range (roughly 1950–2200) — anything else falls
+      // through to the normal `new Date(...)` parse and its own error.
+      const parseDateCell = (raw: string): Date => {
+        if (/^\d+(\.\d+)?$/.test(raw)) {
+          const serial = Number(raw);
+          if (serial > 18000 && serial < 110000) {
+            return new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+          }
+        }
+        return new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+      };
+
       const results: Array<{ row: number; status: 'created' | 'error'; message?: string; classId?: string; date?: string }> = [];
 
       // Creates one class on a single already-validated date; shared by both
@@ -651,7 +669,7 @@ export const liveClassesController = {
           }
 
           if (dateRaw) {
-            const scheduledDate = new Date(`${dateRaw.slice(0, 10)}T00:00:00.000Z`);
+            const scheduledDate = parseDateCell(dateRaw);
             if (isNaN(scheduledDate.getTime())) {
               results.push({ row: rowNum, status: 'error', message: `Could not parse date "${dateRaw}" — use YYYY-MM-DD` });
               continue;
@@ -663,8 +681,8 @@ export const liveClassesController = {
           }
 
           // Range path: startDate + endDate.
-          const from = new Date(`${startDateRaw.slice(0, 10)}T00:00:00.000Z`);
-          const to = new Date(`${endDateRaw.slice(0, 10)}T00:00:00.000Z`);
+          const from = parseDateCell(startDateRaw);
+          const to = parseDateCell(endDateRaw);
           if (isNaN(from.getTime()) || isNaN(to.getTime())) {
             results.push({ row: rowNum, status: 'error', message: `Could not parse startDate/endDate — use YYYY-MM-DD` });
             continue;
