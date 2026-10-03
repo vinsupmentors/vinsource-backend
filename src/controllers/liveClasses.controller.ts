@@ -305,11 +305,15 @@ export const liveClassesController = {
     } catch (err) { next(err); }
   },
 
-  /** One row per sub-batch: Batch, Sub-batch, Schedule From, Date Till, and
-   * the total number of days it actually runs on (day-pattern-aware, not a
-   * raw calendar span) plus how many classes have been created for it so
-   * far — the "how much of this sub-batch is actually scheduled" overview a
-   * manager bulk-creating classes needs instead of scanning the class grid. */
+  /** One row per sub-batch: Batch, Sub-batch, Schedule From, Date Till, the
+   * total number of days it's meant to run (day-pattern-aware, not a raw
+   * calendar span — only computable when the sub-batch actually has an end
+   * date; an open-ended "Ongoing" sub-batch has no fixed total, so that's
+   * reported as null rather than guessed at), how many live classes have
+   * actually been created so far, and how many distinct days those classes
+   * cover — the "how much of this sub-batch is actually scheduled, out of
+   * how much there is to schedule" overview a manager needs instead of
+   * scanning the class grid. */
   async summary(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const admin = await isLiveClassesAdmin(req);
@@ -326,24 +330,41 @@ export const liveClassesController = {
           dayPattern: true, customWeekdays: true, startDate: true, endDate: true, status: true,
           batch: { select: { id: true, code: true } },
           course: { select: { id: true, name: true } },
-          _count: { select: { liveClasses: true } },
         },
         orderBy: [{ batch: { code: 'asc' } }, { startDate: 'asc' }],
       });
 
+      // One query for every schedule's non-cancelled classes, rather than a
+      // _count (which can't also tell us *which* dates are covered) or N
+      // separate queries — grouped into per-schedule counts below.
+      const liveClasses = await prisma.liveClass.findMany({
+        where: { scheduleId: { in: schedules.map((s: (typeof schedules)[number]) => s.id) }, status: { not: 'CANCELLED' } },
+        select: { scheduleId: true, scheduledDate: true },
+      });
+      const classesByScheduleId = new Map<string, Date[]>();
+      for (const c of liveClasses as { scheduleId: string; scheduledDate: Date }[]) {
+        classesByScheduleId.set(c.scheduleId, [...(classesByScheduleId.get(c.scheduleId) || []), c.scheduledDate]);
+      }
+
       const data = schedules.map((s: (typeof schedules)[number]) => {
+        // Only a sub-batch with a real end date has a fixed total to report
+        // — an "Ongoing" one has no defined finish line, so there's nothing
+        // meaningful to count up to (previously this guessed a 3-year cap,
+        // which produced a huge, arbitrary-looking number for some rows and
+        // nothing for others depending on how close startDate happened to
+        // land to that cutoff).
         let totalRunningDays: number | null = null;
-        // Cap the count at ~3 years of iteration so a schedule with no end
-        // date (still running) can't hang the request.
-        const cappedEnd = s.endDate || new Date(Date.now() + 3 * 365 * 86400000);
-        const spanDays = Math.round((cappedEnd.getTime() - s.startDate.getTime()) / 86400000);
-        if (spanDays >= 0 && spanDays <= 3 * 365) {
+        if (s.endDate) {
           let count = 0;
-          for (let d = new Date(s.startDate); d <= cappedEnd; d.setUTCDate(d.getUTCDate() + 1)) {
+          for (let d = new Date(s.startDate); d <= s.endDate; d.setUTCDate(d.getUTCDate() + 1)) {
             if (dayMatchesPattern(d, s.dayPattern, s.customWeekdays)) count++;
           }
           totalRunningDays = count;
         }
+
+        const classDates = classesByScheduleId.get(s.id) || [];
+        const daysCreated = new Set(classDates.map((d) => d.toISOString().slice(0, 10))).size;
+
         return {
           scheduleId: s.id,
           code: s.code,
@@ -356,7 +377,8 @@ export const liveClassesController = {
           endDate: s.endDate,
           status: s.status,
           totalRunningDays,
-          classesScheduledCount: s._count.liveClasses,
+          classesScheduledCount: classDates.length,
+          daysCreated,
         };
       });
 
