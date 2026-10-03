@@ -563,7 +563,7 @@ export const liveClassesController = {
 
       const schedules = await prisma.batchCourseSchedule.findMany({
         select: {
-          id: true, code: true,
+          id: true, code: true, dayPattern: true, customWeekdays: true,
           batch: { select: { code: true } },
           course: { select: { name: true } },
         },
@@ -584,7 +584,36 @@ export const liveClassesController = {
         return '';
       };
 
-      const results: Array<{ row: number; status: 'created' | 'error'; message?: string; classId?: string }> = [];
+      const results: Array<{ row: number; status: 'created' | 'error'; message?: string; classId?: string; date?: string }> = [];
+
+      // Creates one class on a single already-validated date; shared by both
+      // the single-date path and the date-range path below so duplicate/dup
+      // handling and class-code generation stay in exactly one place.
+      const createOne = async (
+        schedule: (typeof schedules)[number], title: string, topic: string, description: string,
+        scheduledDate: Date, startTime: string, endTime: string
+      ): Promise<{ status: 'created' | 'error'; message?: string; classId?: string }> => {
+        const dup = await prisma.liveClass.findFirst({
+          where: { scheduleId: schedule.id, scheduledDate, status: { not: 'CANCELLED' } },
+          select: { id: true },
+        });
+        if (dup) return { status: 'error', message: `A class already exists on ${scheduledDate.toISOString().slice(0, 10)} for "${schedule.code}"` };
+
+        const classCode = await generateClassCode(schedule.batch.code, schedule.course.name, topic || undefined, scheduledDate);
+        const roomName = `live-${classCode.toLowerCase()}`;
+        const created = await prisma.liveClass.create({
+          data: {
+            classCode, roomName, title,
+            scheduleId: schedule.id,
+            topic: topic || undefined,
+            description: description || undefined,
+            scheduledDate, startTime, endTime,
+            createdById: req.user?.employeeId || undefined,
+          },
+          select: { id: true },
+        });
+        return { status: 'created', classId: created.id };
+      };
 
       for (let i = 0; i < classes.length; i++) {
         const row = (classes[i] || {}) as Record<string, unknown>;
@@ -595,11 +624,18 @@ export const liveClassesController = {
           const topic = field(row, 'topic');
           const description = field(row, 'description', 'desc');
           const dateRaw = field(row, 'date', 'scheduleddate', 'classdate');
+          // A row can give either a single `date`, or a `startDate`+`endDate`
+          // range — the range fills every day the sub-batch actually runs on
+          // (same day-pattern logic as Bulk Create), so one spreadsheet row
+          // can schedule a whole stretch of classes instead of needing one
+          // row per date.
+          const startDateRaw = field(row, 'startdate', 'start date', 'from');
+          const endDateRaw = field(row, 'enddate', 'end date', 'till', 'to');
           const startTime = field(row, 'starttime', 'start');
           const endTime = field(row, 'endtime', 'end');
 
-          if (!subBatchCode || !title || !dateRaw || !startTime || !endTime) {
-            results.push({ row: rowNum, status: 'error', message: 'subBatchCode, title, date, startTime, and endTime are required' });
+          if (!subBatchCode || !title || !startTime || !endTime || (!dateRaw && !(startDateRaw && endDateRaw))) {
+            results.push({ row: rowNum, status: 'error', message: 'subBatchCode, title, startTime, endTime, and either date or startDate+endDate are required' });
             continue;
           }
 
@@ -614,38 +650,46 @@ export const liveClassesController = {
             continue;
           }
 
-          const scheduledDate = new Date(`${dateRaw.slice(0, 10)}T00:00:00.000Z`);
-          if (isNaN(scheduledDate.getTime())) {
-            results.push({ row: rowNum, status: 'error', message: `Could not parse date "${dateRaw}" — use YYYY-MM-DD` });
+          if (dateRaw) {
+            const scheduledDate = new Date(`${dateRaw.slice(0, 10)}T00:00:00.000Z`);
+            if (isNaN(scheduledDate.getTime())) {
+              results.push({ row: rowNum, status: 'error', message: `Could not parse date "${dateRaw}" — use YYYY-MM-DD` });
+              continue;
+            }
+            // eslint-disable-next-line no-await-in-loop
+            const outcome = await createOne(schedule, title, topic, description, scheduledDate, startTime, endTime);
+            results.push({ row: rowNum, date: scheduledDate.toISOString().slice(0, 10), ...outcome });
             continue;
           }
 
-          // eslint-disable-next-line no-await-in-loop
-          const dup = await prisma.liveClass.findFirst({
-            where: { scheduleId: schedule.id, scheduledDate, status: { not: 'CANCELLED' } },
-            select: { id: true },
-          });
-          if (dup) {
-            results.push({ row: rowNum, status: 'error', message: `A class already exists on ${dateRaw.slice(0, 10)} for "${subBatchCode}"` });
+          // Range path: startDate + endDate.
+          const from = new Date(`${startDateRaw.slice(0, 10)}T00:00:00.000Z`);
+          const to = new Date(`${endDateRaw.slice(0, 10)}T00:00:00.000Z`);
+          if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+            results.push({ row: rowNum, status: 'error', message: `Could not parse startDate/endDate — use YYYY-MM-DD` });
+            continue;
+          }
+          if (to < from) {
+            results.push({ row: rowNum, status: 'error', message: 'endDate must not be before startDate' });
+            continue;
+          }
+          if ((to.getTime() - from.getTime()) / 86400000 > 180) {
+            results.push({ row: rowNum, status: 'error', message: 'Date range too large (max 180 days) — split into smaller ranges' });
             continue;
           }
 
-          // eslint-disable-next-line no-await-in-loop
-          const classCode = await generateClassCode(schedule.batch.code, schedule.course.name, topic || undefined, scheduledDate);
-          const roomName = `live-${classCode.toLowerCase()}`;
-          // eslint-disable-next-line no-await-in-loop
-          const created = await prisma.liveClass.create({
-            data: {
-              classCode, roomName, title,
-              scheduleId: schedule.id,
-              topic: topic || undefined,
-              description: description || undefined,
-              scheduledDate, startTime, endTime,
-              createdById: req.user?.employeeId || undefined,
-            },
-            select: { id: true },
-          });
-          results.push({ row: rowNum, status: 'created', classId: created.id });
+          let anyMatched = false;
+          for (let d = new Date(from); d <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+            const dateCopy = new Date(d);
+            if (!dayMatchesPattern(dateCopy, schedule.dayPattern, schedule.customWeekdays)) continue;
+            anyMatched = true;
+            // eslint-disable-next-line no-await-in-loop
+            const outcome = await createOne(schedule, title, topic, description, dateCopy, startTime, endTime);
+            results.push({ row: rowNum, date: dateCopy.toISOString().slice(0, 10), ...outcome });
+          }
+          if (!anyMatched) {
+            results.push({ row: rowNum, status: 'error', message: `"${subBatchCode}" doesn't run on any day in ${startDateRaw}–${endDateRaw}` });
+          }
         } catch (rowErr) {
           results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : 'Unexpected error' });
         }
