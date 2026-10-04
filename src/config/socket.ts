@@ -2,6 +2,7 @@ import { Server } from 'socket.io';
 import { Server as HttpServer } from 'http';
 import { config } from './env';
 import { verifyToken } from '../utils/jwt';
+import prisma from './database';
 
 export let io: Server;
 
@@ -17,11 +18,20 @@ export const initSocket = (httpServer: HttpServer) => {
     },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) return next(new Error('Authentication required'));
     try {
       const payload = verifyToken(token);
+      // Student sockets follow the same one-device rule as the REST API —
+      // a device that's no longer the registered one shouldn't keep
+      // receiving that student's live notifications.
+      if (payload.role === 'STUDENT') {
+        const u = await prisma.user.findUnique({ where: { id: payload.userId }, select: { boundDeviceId: true } });
+        if (!payload.deviceId || !u?.boundDeviceId || u.boundDeviceId !== payload.deviceId) {
+          return next(new Error('Invalid token'));
+        }
+      }
       (socket as any).user = payload;
       next();
     } catch {

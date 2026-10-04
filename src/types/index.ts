@@ -9,6 +9,9 @@ export interface AuthPayload {
   companyId?: string;
   email: string;
   canManageAccess?: boolean;
+  // STUDENT tokens only — the device this session was issued to. Checked
+  // against User.boundDeviceId on every request (see middleware/auth.ts).
+  deviceId?: string;
 }
 
 export interface AuthRequest extends Request {

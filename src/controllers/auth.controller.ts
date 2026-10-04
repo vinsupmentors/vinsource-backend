@@ -7,6 +7,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest, AuthPayload } from '../types';
 import { emailService } from '../services/email.service';
 import { config } from '../config/env';
+import { invalidateStudentDeviceCache } from '../middleware/auth';
 
 export const authController = {
   async login(req: Request, res: Response, next: NextFunction) {
@@ -28,6 +29,46 @@ export const authController = {
         throw new AppError('Account is deactivated', 403);
       }
 
+      // Student accounts are locked to ONE device. The browser sends a
+      // persistent random id as X-Device-Id; the first login binds it, any
+      // later login from a different id is refused and filed as a request
+      // for an admin to approve (see studentDevice.controller.ts) — which
+      // is what actually moves the account to the new device.
+      let studentDeviceId: string | undefined;
+      if (user.role === 'STUDENT') {
+        const deviceId = String(req.headers['x-device-id'] || '').trim().slice(0, 100);
+        if (!deviceId) {
+          throw new AppError('Could not identify this device. Please refresh the page and try signing in again.', 400);
+        }
+        const deviceLabel = String(req.headers['user-agent'] || 'Unknown device').slice(0, 500);
+
+        if (!user.boundDeviceId) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { boundDeviceId: deviceId, boundDeviceLabel: deviceLabel, boundDeviceAt: new Date() },
+          });
+          invalidateStudentDeviceCache(user.id);
+        } else if (user.boundDeviceId !== deviceId) {
+          const pending = await prisma.studentDeviceChangeRequest.findFirst({
+            where: { userId: user.id, newDeviceId: deviceId, status: 'PENDING' },
+            select: { id: true },
+          });
+          if (!pending) {
+            await prisma.studentDeviceChangeRequest.create({
+              data: { userId: user.id, newDeviceId: deviceId, newDeviceLabel: deviceLabel, ipAddress: req.ip },
+            });
+          }
+          throw new AppError(
+            'This student account is already registered on another device, and an account can only be used on one device at a time. ' +
+            "We've sent a request to the admin to switch it to this device — you'll be able to sign in here as soon as it's approved. " +
+            'If it is urgent, please contact your training coordinator.',
+            403,
+            'DEVICE_NOT_REGISTERED'
+          );
+        }
+        studentDeviceId = deviceId;
+      }
+
       const payload = {
         userId: user.id,
         employeeId: user.employee?.id,
@@ -36,6 +77,7 @@ export const authController = {
         companyId: user.employee?.companyId,
         email: user.email,
         canManageAccess: user.canManageAccess,
+        deviceId: studentDeviceId,
       };
 
       const token = generateToken(payload);
@@ -100,6 +142,18 @@ export const authController = {
 
       // Strip JWT-internal fields (iat, exp) so jwt.sign doesn't clash with expiresIn option
       const { iat, exp, ...payload } = decoded as any;
+
+      // A student session can only be refreshed while it's still on the
+      // account's registered device — otherwise an old device could keep
+      // itself alive indefinitely through the refresh token after an admin
+      // moved the account elsewhere.
+      if (payload.role === 'STUDENT') {
+        const u = await prisma.user.findUnique({ where: { id: payload.userId }, select: { boundDeviceId: true } });
+        if (!payload.deviceId || !u?.boundDeviceId || u.boundDeviceId !== payload.deviceId) {
+          await prisma.userSession.deleteMany({ where: { id: session.id } });
+          throw new AppError('Your account is now active on a different device, so you have been signed out here. Please sign in again.', 401, 'DEVICE_CHANGED');
+        }
+      }
       const newToken = generateToken(payload as AuthPayload);
       const newRefreshToken = generateRefreshToken(payload as AuthPayload);
 

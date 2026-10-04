@@ -522,9 +522,18 @@ model User {
   mustChangePassword Boolean @default(false) // forces a password reset (+ MIS completion for students) on next login
   passwordResetToken  String?   @unique
   passwordResetExpiry DateTime?
+  // Student portal only — a student account is locked to ONE device at a
+  // time. boundDeviceId is a random id the browser generates once and
+  // sends as X-Device-Id; a login from any other id is refused and files a
+  // StudentDeviceChangeRequest that an admin has to approve (which is what
+  // re-points this field). Null until the student's first login.
+  boundDeviceId    String?
+  boundDeviceLabel String?
+  boundDeviceAt    DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  deviceChangeRequests StudentDeviceChangeRequest[]
   employee      Employee?
   sessions      UserSession[]
   auditLogs     AuditLog[]
@@ -538,6 +547,33 @@ model User {
   appointmentLettersApproved AppointmentLetter[] @relation("AppointmentLetterApprover")
   liveClassParticipations LiveClassParticipant[]
   liveClassChatMessages   LiveClassChatMessage[]
+}
+
+enum DeviceChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// A student tried to log in from a device other than the one their account
+// is bound to. Filed automatically at that login attempt; an admin approving
+// it re-binds the account to newDeviceId and signs the old device out.
+model StudentDeviceChangeRequest {
+  id             String             @id @default(uuid())
+  userId         String
+  newDeviceId    String
+  newDeviceLabel String?            @db.VarChar(512)
+  ipAddress      String?
+  status         DeviceChangeStatus @default(PENDING)
+  requestedAt    DateTime           @default(now())
+  reviewedById   String?
+  reviewedAt     DateTime?
+  reviewNote     String?            @db.Text
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, requestedAt])
 }
 
 model UserSession {
