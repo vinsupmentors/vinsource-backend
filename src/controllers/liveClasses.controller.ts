@@ -448,21 +448,25 @@ export const liveClassesController = {
 
   /**
    * Bulk-create recurring classes for one sub-batch: pick a schedule, set a
-   * title/timing, a start date and an end date — one LiveClass gets created
-   * for every day in that range that matches the sub-batch's own dayPattern
-   * (the actual days it runs on), so a trainer doesn't have to add a class
-   * one day at a time for an entire batch run.
+   * title/timing, a start date, and either an end date OR a target number of
+   * running days — one LiveClass gets created for every day that matches
+   * the sub-batch's own dayPattern (the actual days it runs on), so a
+   * trainer doesn't have to add a class one day at a time for an entire
+   * batch run. With numDays, the end date is derived by walking forward
+   * from the start date counting only matching (running) days — e.g.
+   * "25 days" on a Mon-Sat sub-batch spans just over 4 weeks of calendar
+   * time, skipping Sundays, rather than 25 raw calendar days.
    *
    * Idempotent-ish: any date in the range that already has a non-cancelled
    * class on this schedule is silently skipped (reported back, not
    * duplicated) — safe to re-run after adding a few classes by hand, or
-   * after extending the end date.
+   * after extending the end date/numDays.
    */
   async bulkCreate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { scheduleId, title, topic, description, startTime, endTime, startDate, endDate } = req.body;
-      if (!scheduleId || !title || !startTime || !endTime || !startDate || !endDate) {
-        throw new AppError('scheduleId, title, startTime, endTime, startDate, and endDate are required.', 400);
+      const { scheduleId, title, topic, description, startTime, endTime, startDate, endDate, numDays } = req.body;
+      if (!scheduleId || !title || !startTime || !endTime || !startDate || (!endDate && !numDays)) {
+        throw new AppError('scheduleId, title, startTime, endTime, startDate, and either endDate or numDays are required.', 400);
       }
       if (!(await canManageSchedule(req, scheduleId))) {
         throw new AppError('You are not assigned to train this batch.', 403);
@@ -475,11 +479,38 @@ export const liveClassesController = {
       if (!schedule) throw new AppError('Batch schedule not found.', 404);
 
       const from = new Date(`${String(startDate).slice(0, 10)}T00:00:00.000Z`);
-      const to = new Date(`${String(endDate).slice(0, 10)}T00:00:00.000Z`);
-      if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid start or end date.', 400);
+      if (isNaN(from.getTime())) throw new AppError('Invalid start date.', 400);
+
+      let to: Date;
+      if (endDate) {
+        to = new Date(`${String(endDate).slice(0, 10)}T00:00:00.000Z`);
+        if (isNaN(to.getTime())) throw new AppError('Invalid end date.', 400);
+      } else {
+        const days = Number(numDays);
+        if (!Number.isFinite(days) || days < 1 || days > 300) {
+          throw new AppError('numDays must be a number between 1 and 300.', 400);
+        }
+        // Walk forward from the start date, counting only days the sub-batch
+        // actually runs on, until we've counted `days` of them — the last
+        // one counted becomes the derived end date.
+        let count = 0;
+        let cursor = new Date(from);
+        let guard = 0;
+        while (count < days) {
+          if (dayMatchesPattern(cursor, schedule.dayPattern, schedule.customWeekdays)) count++;
+          if (count === days) break;
+          cursor.setUTCDate(cursor.getUTCDate() + 1);
+          guard++;
+          if (guard > 3000) {
+            throw new AppError(`"${schedule.code || 'This sub-batch'}" never reaches ${days} running days on its current day pattern — check the pattern in Production.`, 400);
+          }
+        }
+        to = cursor;
+      }
+
       if (to < from) throw new AppError('End date must not be before start date.', 400);
-      if ((to.getTime() - from.getTime()) / 86400000 > 180) {
-        throw new AppError('Date range too large (max 180 days) — run this in smaller chunks.', 400);
+      if ((to.getTime() - from.getTime()) / 86400000 > 450) {
+        throw new AppError('Date range too large — run this in smaller chunks.', 400);
       }
 
       // Existing (non-cancelled) classes on this schedule already in range —
@@ -528,7 +559,7 @@ export const liveClassesController = {
           data: {
             userId: req.user.userId, action: 'CREATE', module: 'LIVE_CLASSES',
             entityId: scheduleId, entityType: 'LiveClass.bulk',
-            newData: { count: createdRows.length, startDate, endDate, skipped: skippedDates.length },
+            newData: { count: createdRows.length, startDate, endDate: to.toISOString().slice(0, 10), numDays, skipped: skippedDates.length },
           },
         }).catch(() => {});
       }
@@ -541,6 +572,7 @@ export const liveClassesController = {
           skippedCount: skippedDates.length,
           skippedDates,
           notRunningCount: noMatchDates.length,
+          endDate: to.toISOString().slice(0, 10),
         },
       });
     } catch (err) { next(err); }
@@ -649,11 +681,16 @@ export const liveClassesController = {
           // row per date.
           const startDateRaw = field(row, 'startdate', 'start date', 'from');
           const endDateRaw = field(row, 'enddate', 'end date', 'till', 'to');
+          // Alternative to endDate — a target count of running days instead
+          // of a literal end date, same as Bulk Create's "Number of running
+          // days" option (e.g. 25 means 25 actual classes, skipping the
+          // sub-batch's own off days, not 25 raw calendar days).
+          const numDaysRaw = field(row, 'numdays', 'days', 'noofdays');
           const startTime = field(row, 'starttime', 'start');
           const endTime = field(row, 'endtime', 'end');
 
-          if (!subBatchCode || !title || !startTime || !endTime || (!dateRaw && !(startDateRaw && endDateRaw))) {
-            results.push({ row: rowNum, status: 'error', message: 'subBatchCode, title, startTime, endTime, and either date or startDate+endDate are required' });
+          if (!subBatchCode || !title || !startTime || !endTime || (!dateRaw && !startDateRaw) || (!dateRaw && !endDateRaw && !numDaysRaw)) {
+            results.push({ row: rowNum, status: 'error', message: 'subBatchCode, title, startTime, endTime, and either date or startDate + (endDate or numDays) are required' });
             continue;
           }
 
@@ -680,19 +717,48 @@ export const liveClassesController = {
             continue;
           }
 
-          // Range path: startDate + endDate.
+          // Range path: startDate + (endDate or numDays).
           const from = parseDateCell(startDateRaw);
-          const to = parseDateCell(endDateRaw);
-          if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-            results.push({ row: rowNum, status: 'error', message: `Could not parse startDate/endDate — use YYYY-MM-DD` });
+          if (isNaN(from.getTime())) {
+            results.push({ row: rowNum, status: 'error', message: `Could not parse startDate "${startDateRaw}" — use YYYY-MM-DD` });
             continue;
           }
+
+          let to: Date;
+          if (endDateRaw) {
+            to = parseDateCell(endDateRaw);
+            if (isNaN(to.getTime())) {
+              results.push({ row: rowNum, status: 'error', message: `Could not parse endDate "${endDateRaw}" — use YYYY-MM-DD` });
+              continue;
+            }
+          } else {
+            const days = Number(numDaysRaw);
+            if (!Number.isFinite(days) || days < 1 || days > 300) {
+              results.push({ row: rowNum, status: 'error', message: 'numDays must be a number between 1 and 300' });
+              continue;
+            }
+            let count = 0;
+            let cursor = new Date(from);
+            let guard = 0;
+            while (count < days && guard <= 3000) {
+              if (dayMatchesPattern(cursor, schedule.dayPattern, schedule.customWeekdays)) count++;
+              if (count === days) break;
+              cursor.setUTCDate(cursor.getUTCDate() + 1);
+              guard++;
+            }
+            if (count < days) {
+              results.push({ row: rowNum, status: 'error', message: `"${subBatchCode}" never reaches ${days} running days on its current day pattern` });
+              continue;
+            }
+            to = cursor;
+          }
+
           if (to < from) {
             results.push({ row: rowNum, status: 'error', message: 'endDate must not be before startDate' });
             continue;
           }
-          if ((to.getTime() - from.getTime()) / 86400000 > 180) {
-            results.push({ row: rowNum, status: 'error', message: 'Date range too large (max 180 days) — split into smaller ranges' });
+          if ((to.getTime() - from.getTime()) / 86400000 > 450) {
+            results.push({ row: rowNum, status: 'error', message: 'Date range too large — split into smaller ranges' });
             continue;
           }
 
@@ -706,7 +772,7 @@ export const liveClassesController = {
             results.push({ row: rowNum, date: dateCopy.toISOString().slice(0, 10), ...outcome });
           }
           if (!anyMatched) {
-            results.push({ row: rowNum, status: 'error', message: `"${subBatchCode}" doesn't run on any day in ${startDateRaw}–${endDateRaw}` });
+            results.push({ row: rowNum, status: 'error', message: `"${subBatchCode}" doesn't run on any day in ${startDateRaw}–${to.toISOString().slice(0, 10)}` });
           }
         } catch (rowErr) {
           results.push({ row: rowNum, status: 'error', message: rowErr instanceof Error ? rowErr.message : 'Unexpected error' });
