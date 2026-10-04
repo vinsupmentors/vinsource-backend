@@ -1161,10 +1161,13 @@ export const liveClassesController = {
 
       const rows = await prisma.liveClassRecording.findMany({
         where: { liveClassId: liveClass.id },
-        select: { id: true, status: true, durationSec: true, startedAt: true, endedAt: true },
+        select: { id: true, status: true, durationSec: true, startedAt: true, endedAt: true, failReason: true },
         orderBy: { startedAt: 'desc' },
       });
-      res.json({ success: true, data: rows });
+      // The technical failure reason (LiveKit/R2 error text) is for staff
+      // diagnosing a failed recording — students just see "Failed".
+      const data = req.user?.role === 'STUDENT' ? rows.map(({ failReason: _f, ...rest }: { failReason: string | null }) => rest) : rows;
+      res.json({ success: true, data });
     } catch (err) { next(err); }
   },
 
