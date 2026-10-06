@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import prisma from '../config/database';
@@ -29,42 +30,22 @@ export const authController = {
         throw new AppError('Account is deactivated', 403);
       }
 
-      // Student accounts are locked to ONE device. The browser sends a
-      // persistent random id as X-Device-Id; the first login binds it, any
-      // later login from a different id is refused and filed as a request
-      // for an admin to approve (see studentDevice.controller.ts) — which
-      // is what actually moves the account to the new device.
+      // Student accounts are active on ONE device at a time — "latest login
+      // wins". Signing in on a new browser/device never blocks: it takes
+      // over the account and the previously active device is signed out
+      // (its next request gets 401 DEVICE_CHANGED). No admin approval step.
       let studentDeviceId: string | undefined;
       if (user.role === 'STUDENT') {
-        const deviceId = String(req.headers['x-device-id'] || '').trim().slice(0, 100);
-        if (!deviceId) {
-          throw new AppError('Could not identify this device. Please refresh the page and try signing in again.', 400);
-        }
+        const deviceId = (String(req.headers['x-device-id'] || '').trim().slice(0, 100)) || randomUUID();
         const deviceLabel = String(req.headers['user-agent'] || 'Unknown device').slice(0, 500);
 
-        if (!user.boundDeviceId) {
+        if (user.boundDeviceId !== deviceId) {
           await prisma.user.update({
             where: { id: user.id },
             data: { boundDeviceId: deviceId, boundDeviceLabel: deviceLabel, boundDeviceAt: new Date() },
           });
+          await prisma.userSession.deleteMany({ where: { userId: user.id } });
           invalidateStudentDeviceCache(user.id);
-        } else if (user.boundDeviceId !== deviceId) {
-          const pending = await prisma.studentDeviceChangeRequest.findFirst({
-            where: { userId: user.id, newDeviceId: deviceId, status: 'PENDING' },
-            select: { id: true },
-          });
-          if (!pending) {
-            await prisma.studentDeviceChangeRequest.create({
-              data: { userId: user.id, newDeviceId: deviceId, newDeviceLabel: deviceLabel, ipAddress: req.ip },
-            });
-          }
-          throw new AppError(
-            'This student account is already registered on another device, and an account can only be used on one device at a time. ' +
-            "We've sent a request to the admin to switch it to this device — you'll be able to sign in here as soon as it's approved. " +
-            'If it is urgent, please contact your training coordinator.',
-            403,
-            'DEVICE_NOT_REGISTERED'
-          );
         }
         studentDeviceId = deviceId;
       }
