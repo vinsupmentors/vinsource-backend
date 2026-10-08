@@ -275,6 +275,12 @@ export const publicDemoController = {
       if (lc.status === 'COMPLETED') throw new AppError('This class has already ended.', 400);
       if (lc.status === 'SCHEDULED') return res.json({ success: true, data: { waiting: true, title: lc.title } });
 
+      // Step 1 (no `enter`): just confirm the class is live so the browser can
+      // show its mic/camera lobby — the 20-minute clock must NOT start yet.
+      if (!req.body?.enter) {
+        return res.json({ success: true, data: { waiting: false, ready: true, title: lc.title, course: lc.schedule.course.name } });
+      }
+
       // First entry starts the clock; re-entering inside the window keeps the original deadline.
       let expiresAt = r.expiresAt;
       if (!r.joinedAt || !expiresAt) {
