@@ -3950,3 +3950,44 @@ enum LiveClassRecordingStatus {
   READY
   FAILED
 }
+
+enum DemoRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// A prospect sitting in on a normal, already-scheduled live class as a demo.
+/// Sales raises it against a specific LiveClass (picked from today's classes
+/// for a course); the Production Manager or that sub-batch's trainer approves.
+/// ONLINE: approval emails the prospect a link + code that lets them join the
+/// running class like a normal student for `maxMinutes`, then they are cut.
+/// OFFLINE: just a visit record — they attend in person.
+model DemoSessionRequest {
+  id            String            @id @default(uuid())
+  mode          DemoMode
+  liveClassId   String
+  scheduleId    String
+  attendeeName  String
+  attendeeEmail String?
+  attendeePhone String?
+  leadId        String?
+  requestedById String?
+  status        DemoRequestStatus @default(PENDING)
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?           @db.Text
+  accessCode    String?           @unique
+  maxMinutes    Int               @default(20)
+  joinedAt      DateTime?         // first time the prospect entered the room
+  expiresAt     DateTime?         // joinedAt + maxMinutes
+  cutAt         DateTime?         // set once the server has removed them
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([status])
+  @@index([liveClassId])
+  @@index([scheduleId])
+  @@index([requestedById])
+}

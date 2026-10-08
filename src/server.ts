@@ -12,6 +12,7 @@ import { passwordReminderService } from './services/passwordReminder.service';
 import { checkoutReminderService } from './services/checkoutReminder.service';
 import { salesCronService } from './services/salesCron.service';
 import { feeReminderService } from './services/feeReminder.service';
+import { cutExpiredDemoGuests } from './controllers/demoSessions.controller';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -31,6 +32,11 @@ const start = async () => {
 
     httpServer.listen(config.PORT, () => {
       console.log(`🚀 HRMS Backend running on port ${config.PORT} [${config.NODE_ENV}]`);
+    });
+
+    // Demo sit-ins: remove prospects whose 20-minute window is up.
+    cron.schedule('* * * * *', async () => {
+      try { await cutExpiredDemoGuests(); } catch (err) { console.error('Demo guest cut-off failed:', err); }
     });
 
     // Password change reminder — runs every day at 9:00 AM, emails anyone with mustChangePassword=true

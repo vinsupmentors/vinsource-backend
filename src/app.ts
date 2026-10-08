@@ -44,6 +44,7 @@ import appointmentLetterRoutes from './routes/appointmentLetter.routes';
 import callTrackingRoutes from './routes/callTracking.routes';
 import admissionRoutes from './routes/admission.routes';
 import liveClassesRoutes from './routes/liveClasses.routes';
+import demoSessionsRoutes from './routes/demoSessions.routes';
 import studentDeviceRoutes from './routes/studentDevice.routes';
 import liveClassWebhookRoutes from './routes/liveClassWebhook.routes';
 import calendarRoutes from './routes/calendar.routes';
@@ -161,6 +162,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/appointment-letters', appointmentLetterRoutes);
 app.use('/api/admissions', admissionRoutes);
 app.use('/api/live-classes', liveClassesRoutes);
+app.use('/api/demo-requests', demoSessionsRoutes);
 app.use('/api/student-devices', studentDeviceRoutes);
 app.use('/api/calendar', calendarRoutes);
 // Hit by the SIM call-tracking Android app via its own device token, not an

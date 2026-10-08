@@ -66,18 +66,18 @@ export function getLiveKitUrl(): string {
  * the right person, and so a disconnect/reconnect resolves to the same
  * LiveClassParticipant bookkeeping.
  */
-export async function mintAccessToken(opts: { roomName: string; identity: string; name: string; metadata?: string }): Promise<string> {
+export async function mintAccessToken(opts: { roomName: string; identity: string; name: string; metadata?: string; canPublish?: boolean; ttlSeconds?: number }): Promise<string> {
   assertConfigured();
   const at = new AccessToken(config.LIVEKIT_API_KEY, config.LIVEKIT_API_SECRET, {
     identity: opts.identity,
     name: opts.name,
     metadata: opts.metadata,
-    ttl: '4h',
+    ttl: opts.ttlSeconds ?? '4h',
   });
   const grant: VideoGrant = {
     roomJoin: true,
     room: opts.roomName,
-    canPublish: true,
+    canPublish: opts.canPublish ?? true,
     canSubscribe: true,
     canPublishData: true,
   };
