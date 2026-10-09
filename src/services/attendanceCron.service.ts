@@ -137,12 +137,12 @@ export const attendanceCronService = {
     const recipientEmails = new Map<string, true>();
     for (const r of [...escalationRecipients, ...managers]) recipientEmails.set(r.email, true);
     const toList = Array.from(recipientEmails.keys());
-    if (toList.length === 0) return { sent: 0, flagged: 0 };
+    // (No early return: even with no configured recipients, the student's mapped Sales advisor is still emailed below.)
 
     const enrollments = await prisma.studentBatchEnrollment.findMany({
       where: { status: 'ACTIVE' },
       include: {
-        student: { select: { firstName: true, lastName: true, studentCode: true } },
+        student: { select: { firstName: true, lastName: true, studentCode: true, skillAdvisor: { select: { email: true } } } },
         schedule: { select: { id: true, batch: { select: { code: true } }, course: { select: { name: true } } } },
       },
     });
@@ -191,9 +191,14 @@ export const attendanceCronService = {
       // One student's email failing (transient SMTP hiccup) shouldn't abort
       // the whole cron run and skip escalation for every student after them
       // in the loop — log and move on, same as everywhere else in the app.
+      // Production/escalation recipients plus this student's own mapped Sales advisor.
+      const advisorEmail = enr.student.skillAdvisor?.email;
+      const recipients = Array.from(new Set([...toList, ...(advisorEmail ? [advisorEmail] : [])]));
+      if (recipients.length === 0) continue;
+
       try {
         await emailService.send({
-          to: toList,
+          to: recipients,
           subject: `🚨 ${streak}-Day Absence Escalation — ${enr.student.firstName} ${enr.student.lastName}`,
           html,
           template: 'attendanceEscalation',
