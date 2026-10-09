@@ -10,10 +10,21 @@ const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode
 // going to — Gaurav + the ops mailbox, per the requested delivery flow.
 const CERTIFICATE_EMAIL_CC = ['v7032vinsup@gmail.com', 'v7030vinsup@gmail.com'];
 
-async function nextCertNo(): Promise<string> {
+/** Next free VSA/CCT/<year>/NNNN number. Based on the highest number already
+ * issued this year (NOT a row count — deleting any certificate used to make
+ * count()+1 land on a number that still existed, and the unique certNo then
+ * failed the whole batch generation). `skip` lets a retry move past a number
+ * that a concurrent request just took. */
+async function nextCertNo(skip = 0): Promise<string> {
   const year = new Date().getFullYear();
-  const count = await prisma.batchCertificate.count();
-  return `VSA/CCT/${year}/${String(count + 1).padStart(4, '0')}`;
+  const prefix = `VSA/CCT/${year}/`;
+  const existing = await prisma.batchCertificate.findMany({ where: { certNo: { startsWith: prefix } }, select: { certNo: true } });
+  let max = 0;
+  for (const c of existing) {
+    const n = parseInt(c.certNo.slice(prefix.length), 10);
+    if (!isNaN(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1 + skip).padStart(4, '0')}`;
 }
 
 export const batchCertificateController = {
@@ -90,27 +101,41 @@ export const batchCertificateController = {
 
       const toCreate = Array.from(byStudent.values()).filter((e) => !existingIds.has(e.studentId));
       let created = 0;
+      const failed: string[] = [];
       for (const e of toCreate) {
-        const certNo = await nextCertNo();
-        await prisma.batchCertificate.create({
-          data: {
-            studentId: e.studentId,
-            batchId,
-            certNo,
-            studentName: `${e.student.firstName} ${e.student.lastName}`,
-            studentCode: e.student.studentCode,
-            course: e.schedule.course.name,
-            batchLabel: batch.code,
-            photoUrl: e.student.photo || null,
-            generatedById: req.user!.employeeId || null,
-          },
-        });
-        created++;
+        let ok = false;
+        // Retry with the next number if a certNo collides; any other error is recorded for that student and the rest still go through.
+        for (let attempt = 0; attempt < 5 && !ok; attempt++) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const certNo = await nextCertNo(attempt);
+            // eslint-disable-next-line no-await-in-loop
+            await prisma.batchCertificate.create({
+              data: {
+                studentId: e.studentId,
+                batchId,
+                certNo,
+                studentName: `${e.student.firstName} ${e.student.lastName}`,
+                studentCode: e.student.studentCode,
+                course: e.schedule.course.name,
+                batchLabel: batch.code,
+                photoUrl: e.student.photo || null,
+                generatedById: req.user!.employeeId || null,
+              },
+            });
+            created++; ok = true;
+          } catch (err) {
+            const code = (err as { code?: string }).code;
+            if (code !== 'P2002') { failed.push(`${e.student.studentCode}: ${(err as Error).message.split('\n').pop()}`); break; }
+          }
+        }
+        if (!ok && !failed.some((f) => f.startsWith(e.student.studentCode))) failed.push(`${e.student.studentCode}: could not allocate a certificate number`);
       }
+      if (failed.length && created === 0) throw new AppError(`Could not generate certificates — ${failed[0]}${failed.length > 1 ? ` (+${failed.length - 1} more)` : ''}`, 500);
 
       res.json({
         success: true,
-        message: `${created} certificate${created === 1 ? '' : 's'} generated${existingIds.size ? `, ${existingIds.size} already existed` : ''}.`,
+        message: `${created} certificate${created === 1 ? '' : 's'} generated${existingIds.size ? `, ${existingIds.size} already existed` : ''}${failed.length ? `, ${failed.length} failed (${failed[0]})` : ''}.`,
         data: { created, alreadyExisted: existingIds.size, total: byStudent.size },
       });
     } catch (err) { next(err); }
