@@ -19,7 +19,7 @@ export const salesCronService = {
     if (recipients.length === 0) return { sent: 0 };
 
     const stats = await computeSalesPulse();
-    const timeLabel = new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const timeLabel = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true });
 
     const html = emailService.templates.salesPulseReport({ timeLabel, isEod, stats });
     await emailService.send({

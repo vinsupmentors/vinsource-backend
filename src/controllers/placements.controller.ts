@@ -137,7 +137,7 @@ async function notifySoftskillSession(
   ]);
   const trainerName = trainer ? `${trainer.firstName} ${trainer.lastName}` : undefined;
   const typeLabel = SOFTSKILL_TYPE_LABEL[session.type] || 'Softskill';
-  const dateOpts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', year: 'numeric' };
+  const dateOpts: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' };
 
   for (const s of students) {
     if (!hasRealEmail(s.email)) continue;
@@ -1126,7 +1126,7 @@ export const placementsController = {
             studentName: `${student.firstName} ${student.lastName}`,
             companyName: candidate.drive.partner.name,
             role: candidate.drive.role,
-            driveDate: candidate.drive.driveDate.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' }),
+            driveDate: candidate.drive.driveDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'long', timeStyle: 'short' }),
             venue: candidate.drive.venue,
           }),
           template: 'placement_shortlisted',
@@ -1217,7 +1217,7 @@ export const placementsController = {
             studentName: `${interview.student.firstName} ${interview.student.lastName}`,
             companyName: interview.companyName || interview.drive?.partner.name || '',
             round: interview.round,
-            scheduledAt: interview.scheduledAt.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short' }),
+            scheduledAt: interview.scheduledAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'long', timeStyle: 'short' }),
             interviewerName: interview.interviewerName,
             venue: interview.drive?.venue,
           }),
