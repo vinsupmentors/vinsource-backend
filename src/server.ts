@@ -12,6 +12,7 @@ import { passwordReminderService } from './services/passwordReminder.service';
 import { checkoutReminderService } from './services/checkoutReminder.service';
 import { salesCronService } from './services/salesCron.service';
 import { feeReminderService } from './services/feeReminder.service';
+import { salesAdvisorReportService } from './services/salesAdvisorReport.service';
 import { cutExpiredDemoGuests } from './controllers/demoSessions.controller';
 
 const httpServer = createServer(app);
@@ -33,6 +34,14 @@ const start = async () => {
     httpServer.listen(config.PORT, () => {
       console.log(`🚀 HRMS Backend running on port ${config.PORT} [${config.NODE_ENV}]`);
     });
+
+    // Cumulative attendance email to each student's Sales advisor — 8:30 PM IST, class days only, until classes are completed.
+    cron.schedule('30 20 * * *', async () => {
+      try {
+        const r = await salesAdvisorReportService.sendCumulativeAttendance();
+        if (r.emails > 0) console.log(`📧 Advisor attendance emails: ${r.emails} (${r.schedules} sub-batches)`);
+      } catch (err) { console.error('Advisor attendance email job failed:', err); }
+    }, { timezone: 'Asia/Kolkata' });
 
     // Demo sit-ins: remove prospects whose 20-minute window is up.
     cron.schedule('* * * * *', async () => {

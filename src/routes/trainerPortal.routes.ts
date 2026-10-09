@@ -8,6 +8,7 @@ router.use(authenticate);
 // TrainerAssignment itself (see assertOwnsSchedule in the controller).
 
 router.get('/schedules', trainerPortalController.mySchedules);
+router.post('/schedules/:scheduleId/complete-classes', trainerPortalController.completeClasses);
 router.get('/schedules/:scheduleId/students', trainerPortalController.scheduleStudents);
 router.get('/schedules/:scheduleId/attendance', trainerPortalController.getAttendance);
 router.post('/schedules/:scheduleId/attendance', trainerPortalController.markAttendance);

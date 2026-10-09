@@ -414,6 +414,11 @@ enum StudentAttendanceStatus {
   LATE
 }
 
+enum AttendanceMode {
+  ONLINE
+  OFFLINE
+}
+
 enum BatchEnrollmentStatus {
   ACTIVE
   COMPLETED
@@ -2468,6 +2473,10 @@ model BatchCourseSchedule {
   // marked COMPLETED once all of its (non-cancelled) sub-batches are, since
   // different courses within the same batch finish at different times.
   status    BatchStatus  @default(UPCOMING)
+  // Set by the trainer when classes are over and the sub-batch moves to its
+  // project phase — the presentation date is mandatory to do so.
+  classesCompletedAt      DateTime?
+  projectPresentationDate DateTime?
 
   batch  Batch         @relation(fields: [batchId], references: [id])
   course AcademyCourse @relation(fields: [courseId], references: [id])
@@ -2532,6 +2541,8 @@ model StudentAttendance {
   scheduleId String
   date       DateTime
   status     StudentAttendanceStatus  @default(PRESENT)
+  // How a PRESENT student attended — Online or in the classroom (null on records marked before this existed).
+  mode       AttendanceMode?
   markedById String?
   createdAt  DateTime                 @default(now())
 

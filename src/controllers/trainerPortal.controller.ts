@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import { salesAdvisorReportService } from '../services/salesAdvisorReport.service';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
@@ -89,6 +90,7 @@ export const trainerPortalController = {
               timing: true,
               course: { select: { id: true, name: true, modules: { orderBy: { order: 'asc' } } } },
               batch: { select: { id: true, code: true, startDate: true, endDate: true, status: true } },
+              status: true, classesCompletedAt: true, projectPresentationDate: true,
               _count: { select: { enrollments: true } },
             },
           },
@@ -144,6 +146,7 @@ export const trainerPortalController = {
       const roster = enrollments.map((e) => ({
         student: e.student,
         status: byStudent.get(e.studentId)?.status ?? null,
+        mode: byStudent.get(e.studentId)?.mode ?? null,
         attendanceId: byStudent.get(e.studentId)?.id ?? null,
       }));
       res.json({ success: true, data: roster });
@@ -163,14 +166,24 @@ export const trainerPortalController = {
       const day = new Date(String(date));
       const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
 
+      type Rec = { studentId: string; status: 'PRESENT' | 'ABSENT' | 'LATE'; mode?: 'ONLINE' | 'OFFLINE' | null };
+      // A present student must be recorded as Online or Offline (P-ON / P-OFF);
+      // an absent student carries no mode.
+      for (const r of records as Rec[]) {
+        if (r.status !== 'PRESENT' && r.status !== 'ABSENT' && r.status !== 'LATE') throw new AppError('Invalid attendance status.', 400);
+        if (r.status === 'PRESENT' && r.mode !== 'ONLINE' && r.mode !== 'OFFLINE') {
+          throw new AppError('Choose Present-Online or Present-Offline for every present student.', 400);
+        }
+      }
       const results = await Promise.all(
-        records.map((r: { studentId: string; status: 'PRESENT' | 'ABSENT' | 'LATE' }) =>
-          prisma.studentAttendance.upsert({
+        (records as Rec[]).map((r) => {
+          const mode = r.status === 'ABSENT' ? null : (r.mode === 'ONLINE' || r.mode === 'OFFLINE' ? r.mode : null);
+          return prisma.studentAttendance.upsert({
             where: { studentId_scheduleId_date: { studentId: r.studentId, scheduleId, date: dayStart } },
-            update: { status: r.status, markedById: employeeId },
-            create: { studentId: r.studentId, scheduleId, date: dayStart, status: r.status, markedById: employeeId },
-          })
-        )
+            update: { status: r.status, mode, markedById: employeeId },
+            create: { studentId: r.studentId, scheduleId, date: dayStart, status: r.status, mode, markedById: employeeId },
+          });
+        })
       );
 
       // Student lifecycle: the moment attendance is first marked for a
@@ -377,6 +390,41 @@ export const trainerPortalController = {
       await ensureCourseCompletionCertRequest(studentId);
 
       res.json({ success: true, data: updated });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Trainer marks the sub-batch's classes as completed — which moves it into
+   * its PROJECT phase. A project-presentation date is mandatory; without it
+   * the batch cannot be marked completed. Stops the daily attendance emails
+   * and tells each student's Sales advisor which batch finished and when the
+   * presentation is.
+   */
+  async completeClasses(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const { scheduleId } = req.params;
+      await assertOwnsSchedule(employeeId, scheduleId);
+      const raw = req.body?.presentationDate;
+      if (!raw) throw new AppError('Enter the project presentation date to complete the classes.', 400);
+      const presentationDate = new Date(raw);
+      if (isNaN(presentationDate.getTime())) throw new AppError('Invalid presentation date.', 400);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      if (presentationDate < today) throw new AppError('The presentation date cannot be in the past.', 400);
+
+      const existing = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, select: { status: true, classesCompletedAt: true } });
+      if (!existing) throw new AppError('Sub-batch not found.', 404);
+      if (existing.status === 'CANCELLED') throw new AppError('This sub-batch is cancelled.', 400);
+      if (existing.classesCompletedAt) throw new AppError('Classes are already marked completed for this sub-batch.', 400);
+
+      const updated = await prisma.batchCourseSchedule.update({
+        where: { id: scheduleId },
+        data: { classesCompletedAt: new Date(), projectPresentationDate: presentationDate, status: 'COMPLETED' },
+        select: { id: true, status: true, classesCompletedAt: true, projectPresentationDate: true },
+      });
+      // Best effort — never fail the completion because an email bounced.
+      const notified = await salesAdvisorReportService.sendCompletionNotice(scheduleId, presentationDate).catch(() => 0);
+      res.json({ success: true, data: { ...updated, advisorsNotified: notified } });
     } catch (err) { next(err); }
   },
 

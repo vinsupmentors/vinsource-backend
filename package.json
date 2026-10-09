@@ -19,7 +19,8 @@
     "pricing:update-2026": "ts-node src/utils/updateCoursePricing2026.ts",
     "access:sales-admission": "ts-node src/utils/setSalesAdmissionAccess.ts",
     "test:email": "ts-node src/utils/testEmailConfig.ts",
-    "check:live-classes": "ts-node src/utils/checkRecentLiveClasses.ts"
+    "check:live-classes": "ts-node src/utils/checkRecentLiveClasses.ts",
+    "send:advisor-attendance": "ts-node src/utils/sendAdvisorAttendanceNow.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1077.0",

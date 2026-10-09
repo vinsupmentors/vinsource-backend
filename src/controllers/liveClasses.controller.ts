@@ -1118,6 +1118,78 @@ export const liveClassesController = {
     } catch (err) { next(err); }
   },
 
+  /** Meeting history for staff: when the class actually ran, and for every participant their first-joined time, last-left time and total time in the room (summed over every join/leave, so reconnects are counted once each). Demo sit-in guests are included, marked as such. */
+  async report(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({
+        where: { id: req.params.id },
+        include: { schedule: { select: { code: true, batch: { select: { code: true } }, course: { select: { name: true } } } } },
+      });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      const { canHost } = await assertCanJoin(req, liveClass);
+      if (!canHost) throw new AppError('Only staff can view the meeting report.', 403);
+
+      const classEnd = liveClass.actualEndAt ? liveClass.actualEndAt.getTime() : Date.now();
+      const rows = await prisma.liveClassParticipant.findMany({
+        where: { liveClassId: liveClass.id },
+        include: { user: { include: { employee: { select: employeeSelect }, student: { select: studentSelect } } } },
+        orderBy: { joinedAt: 'asc' },
+      });
+
+      type Agg = { key: string; name: string; code: string | null; role: string; first: number; last: number; totalMs: number };
+      const byUser = new Map<string, Agg>();
+      for (const r of rows) {
+        const joined = r.joinedAt.getTime();
+        const left = Math.min(r.leftAt ? r.leftAt.getTime() : classEnd, classEnd);
+        const dur = Math.max(0, left - joined);
+        const u = r.user;
+        const name = u.student ? `${u.student.firstName} ${u.student.lastName}` : u.employee ? `${u.employee.firstName} ${u.employee.lastName}` : u.email;
+        const code = u.student?.studentCode || u.employee?.employeeCode || null;
+        const cur = byUser.get(r.userId);
+        if (!cur) byUser.set(r.userId, { key: r.userId, name, code, role: r.role, first: joined, last: left, totalMs: dur });
+        else {
+          cur.first = Math.min(cur.first, joined);
+          cur.last = Math.max(cur.last, left);
+          cur.totalMs += dur;
+          if (r.role === 'HOST') cur.role = 'HOST';
+        }
+      }
+
+      const demos = await prisma.demoSessionRequest.findMany({ where: { liveClassId: liveClass.id, joinedAt: { not: null } } });
+      const out: { name: string; code: string | null; role: string; firstJoinedAt: string; lastLeftAt: string; totalSec: number }[] = Array.from(byUser.values()).map((a) => ({
+        name: a.name, code: a.code, role: a.role,
+        firstJoinedAt: new Date(a.first).toISOString(), lastLeftAt: new Date(a.last).toISOString(), totalSec: Math.round(a.totalMs / 1000),
+      }));
+      for (const d of demos) {
+        const joined = d.joinedAt!.getTime();
+        const left = Math.min(d.cutAt?.getTime() ?? d.expiresAt?.getTime() ?? classEnd, d.expiresAt?.getTime() ?? classEnd, classEnd);
+        out.push({
+          name: `${d.attendeeName} (Demo guest)`, code: null, role: 'DEMO',
+          firstJoinedAt: d.joinedAt!.toISOString(), lastLeftAt: new Date(Math.max(joined, left)).toISOString(), totalSec: Math.round(Math.max(0, left - joined) / 1000),
+        });
+      }
+      out.sort((a, b) => a.firstJoinedAt.localeCompare(b.firstJoinedAt));
+
+      const attendees = out.filter((o) => o.role !== 'HOST' && o.role !== 'CO_TRAINER');
+      const durationSec = liveClass.actualStartAt ? Math.max(0, Math.round((classEnd - liveClass.actualStartAt.getTime()) / 1000)) : 0;
+      res.json({
+        success: true,
+        data: {
+          class: {
+            id: liveClass.id, title: liveClass.title, status: liveClass.status, scheduledDate: liveClass.scheduledDate,
+            startTime: liveClass.startTime, endTime: liveClass.endTime, actualStartAt: liveClass.actualStartAt, actualEndAt: liveClass.actualEndAt,
+            course: liveClass.schedule.course.name, batch: liveClass.schedule.batch.code, subBatch: liveClass.schedule.code,
+          },
+          summary: {
+            durationSec, participantCount: out.length,
+            avgSec: attendees.length ? Math.round(attendees.reduce((s, a) => s + a.totalSec, 0) / attendees.length) : 0,
+          },
+          participants: out,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
   /** Opt-in only — a trainer explicitly pushes the computed roster into the
    * existing daily StudentAttendance table (PARTIAL maps to LATE, that table's
    * closest equivalent). Never automatic: StudentAttendance is otherwise owned

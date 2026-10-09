@@ -1,0 +1,1 @@
+ALTER TABLE `StudentAttendance` ADD COLUMN `mode` ENUM('ONLINE', 'OFFLINE') NULL;
