@@ -79,8 +79,10 @@ export const salesAdvisorReportService = {
       select: { id: true, code: true, batch: { select: { code: true } }, course: { select: { name: true } } },
     });
 
-    const perAdvisor = new Map<string, { advisor: Advisor; sections: string[] }>();
-    const pmSections: string[] = [];
+    const legend = `<b>P-ON</b> = present online, <b>P-OFF</b> = present offline, <b>A</b> = absent, <b>P</b> = present (mode not recorded), – = not marked.`;
+    const footer = `<p style="font-size:12px;color:#777;margin-top:18px">Sent each class day until the trainer marks the classes completed.</p>`;
+    const pms = await productionManagers();
+    let emails = 0;
     let used = 0;
 
     for (const sch of schedules as SchedLite[]) {
@@ -123,32 +125,18 @@ export const salesAdvisorReportService = {
       const intro = `<h3 style="margin:18px 0 4px;font-size:14px">${esc(label)}</h3>
 <p style="margin:0 0 6px;font-size:12px;color:#555">Classes from <b>${pretty(dayDates[0])}</b> to <b>${pretty(dayDates[dayDates.length - 1])}</b> (${dayKeys.length} class days)</p>`;
 
-      pmSections.push(intro + table(all, true));
+      // One email per batch + course (sub-batch) — never several batches mixed into one message.
+      const subject = `Attendance — ${label} — ${pretty(new Date())}`;
       for (const g of groups.values()) {
-        const section = intro + table(g.students, false);
-        const cur = perAdvisor.get(g.advisor.id);
-        if (cur) cur.sections.push(section); else perAdvisor.set(g.advisor.id, { advisor: g.advisor, sections: [section] });
-      }
-    }
-
-    const legend = `<b>P-ON</b> = present online, <b>P-OFF</b> = present offline, <b>A</b> = absent, <b>P</b> = present (mode not recorded), – = not marked.`;
-    const footer = `<p style="font-size:12px;color:#777;margin-top:18px">Sent each class day until the trainer marks the classes completed.</p>`;
-    let emails = 0;
-    for (const { advisor, sections } of perAdvisor.values()) {
-      await emailService.send({
-        to: advisor.email,
-        subject: `Student attendance update — ${pretty(new Date())}`,
-        template: 'advisor-attendance',
-        html: `<p>Hi ${esc(advisor.name)},</p><p>Cumulative attendance of <b>your students</b> up to today. ${legend}</p>${sections.join('')}${footer}`,
-      }).then(() => { emails++; }).catch(() => {});
-    }
-    if (pmSections.length) {
-      for (const pm of await productionManagers()) {
         await emailService.send({
-          to: pm.email,
-          subject: `Attendance — all running batches — ${pretty(new Date())}`,
-          template: 'pm-attendance',
-          html: `<p>Hi ${esc(pm.name)},</p><p>Cumulative attendance of all running sub-batches up to today. ${legend}</p>${pmSections.join('')}${footer}`,
+          to: g.advisor.email, subject, template: 'advisor-attendance',
+          html: `<p>Hi ${esc(g.advisor.name)},</p><p>Cumulative attendance of <b>your students</b> in this batch up to today. ${legend}</p>${intro}${table(g.students, false)}${footer}`,
+        }).then(() => { emails++; }).catch(() => {});
+      }
+      for (const pm of pms) {
+        await emailService.send({
+          to: pm.email, subject, template: 'pm-attendance',
+          html: `<p>Hi ${esc(pm.name)},</p><p>Cumulative attendance for this batch up to today (all students, with their Sales advisor). ${legend}</p>${intro}${table(all, true)}${footer}`,
         }).then(() => { emails++; }).catch(() => {});
       }
     }
