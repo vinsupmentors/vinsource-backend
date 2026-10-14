@@ -20,6 +20,7 @@
     "access:sales-admission": "ts-node src/utils/setSalesAdmissionAccess.ts",
     "test:email": "ts-node src/utils/testEmailConfig.ts",
     "check:live-classes": "ts-node src/utils/checkRecentLiveClasses.ts",
+    "check:double-enrollments": "ts-node src/utils/checkDoubleEnrollments.ts",
     "send:advisor-attendance": "ts-node src/utils/sendAdvisorAttendanceNow.ts"
   },
   "dependencies": {

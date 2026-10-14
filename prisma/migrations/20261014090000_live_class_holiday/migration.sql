@@ -1,0 +1,1 @@
+ALTER TABLE `LiveClass` ADD COLUMN `isHoliday` BOOLEAN NOT NULL DEFAULT false;

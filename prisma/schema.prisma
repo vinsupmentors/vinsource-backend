@@ -3821,6 +3821,9 @@ model LiveClass {
   status       LiveClassStatus @default(SCHEDULED)
   cancelledAt  DateTime?
   cancelReason String?         @db.Text
+  // A CANCELLED class marked as a Holiday instead of a plain cancellation:
+  // plain cancellations are hidden from every list, holidays stay visible.
+  isHoliday    Boolean         @default(false)
 
   // Reschedule history — spec asks the original schedule to be preserved,
   // not silently overwritten, whenever a class is moved.

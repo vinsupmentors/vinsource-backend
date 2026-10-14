@@ -197,7 +197,7 @@ export const liveClassesController = {
 
       const empty = { summary: { totalClasses: 0, completedClasses: 0, cancelledClasses: 0, avgAttendancePercent: 0, totalChatMessages: 0, avgChatMessagesPerClass: 0 }, byTrainer: [], byBatch: [], trend: [] };
 
-      const where: Record<string, unknown> = { status: { in: ['COMPLETED', 'CANCELLED'] } };
+      const where: Record<string, unknown> = { status: { in: ['COMPLETED', 'CANCELLED'] }, NOT: { status: 'CANCELLED', isHoliday: false } };
       const scheduleWhere: Record<string, unknown> = {};
       if (!admin) {
         const scope = selfScopeWhere(req);
@@ -818,7 +818,7 @@ export const liveClassesController = {
           // eslint-disable-next-line no-await-in-loop
           await prisma.liveClass.update({
             where: { id: existing.id },
-            data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: reason || undefined },
+            data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: reason || undefined, isHoliday: !!req.body?.holiday },
           });
           // eslint-disable-next-line no-await-in-loop
           if (existing.status === 'LIVE') await closeRoom(existing.roomName);
@@ -856,17 +856,22 @@ export const liveClassesController = {
       if (Object.keys(scheduleWhere).length) where.schedule = scheduleWhere;
       if (scheduleId) where.scheduleId = String(scheduleId);
 
+      // Plain cancellations are never shown anywhere; only Holidays (a cancelled class flagged isHoliday) stay visible.
+      where.NOT = { status: 'CANCELLED', isHoliday: false };
+
       if (view === 'today') {
         where.scheduledDate = dayRange(new Date());
-        where.status = { in: ['SCHEDULED', 'LIVE'] };
+        where.status = { in: ['SCHEDULED', 'LIVE', 'CANCELLED'] };
       } else if (view === 'live') {
         where.status = 'LIVE';
       } else if (view === 'upcoming') {
         const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(0, 0, 0, 0);
         where.scheduledDate = { gte: tomorrow };
-        where.status = 'SCHEDULED';
+        where.status = { in: ['SCHEDULED', 'CANCELLED'] };
       } else if (view === 'completed') {
-        where.status = { in: ['COMPLETED', 'CANCELLED'] };
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        // Finished classes, plus past Holidays (today's / future ones show under Today / Upcoming).
+        where.AND = [{ OR: [{ status: 'COMPLETED' }, { status: 'CANCELLED', scheduledDate: { lt: todayStart } }] }];
       }
 
       if (search) {
@@ -976,7 +981,7 @@ export const liveClassesController = {
 
       const updated = await prisma.liveClass.update({
         where: { id: existing.id },
-        data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: req.body?.reason || undefined },
+        data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: req.body?.reason || undefined, isHoliday: !!req.body?.holiday },
         include: liveClassInclude,
       });
       if (existing.status === 'LIVE') await closeRoom(existing.roomName);
