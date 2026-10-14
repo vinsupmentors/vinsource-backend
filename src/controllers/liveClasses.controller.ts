@@ -117,12 +117,61 @@ async function resolveDisplayName(req: AuthRequest): Promise<string> {
   return req.user?.email || 'Participant';
 }
 
+// ── Time handling ─────────────────────────────────────────────────────────────
+// Class dates are calendar dates in India. The server may run in UTC, so every
+// "today / tomorrow / class start" decision is made in IST explicitly — never
+// with the server's own local clock (which put "today" 5½ hours off).
+const IST = 'Asia/Kolkata';
+const istYmd = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: IST }); // yyyy-mm-dd
+
+/** Range that matches a LiveClass.scheduledDate falling on the IST calendar day of `d`. scheduledDate is stored as UTC midnight of that date; the window is widened (-6h/+18h) so a date saved as local-midnight by older code still matches, without touching the neighbouring days. */
 function dayRange(d: Date) {
-  const start = new Date(d);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { gte: start, lt: end };
+  const start = new Date(`${istYmd(d)}T00:00:00.000Z`);
+  return { gte: new Date(start.getTime() - 6 * 3600000), lt: new Date(start.getTime() + 18 * 3600000) };
+}
+
+/** The real instant a class is meant to start: its calendar date + "HH:mm", read as IST. */
+function classStartAt(scheduledDate: Date, hhmm: string): Date {
+  return new Date(`${istYmd(scheduledDate)}T${hhmm}:00+05:30`);
+}
+
+/** "9:30", "09:30", "9:30 AM", "1:05 pm", or an Excel time fraction (0.3958) -> "HH:mm"; null if it isn't a time. Plain string compares ("9:30" < "10:00" is false!) only work on zero-padded HH:mm. */
+function normalizeTime(raw: unknown): string | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw === 'number' && raw >= 0 && raw < 1) {
+    const mins = Math.round(raw * 24 * 60);
+    return `${String(Math.floor(mins / 60) % 24).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+  }
+  const m = String(raw).trim().match(/^(\d{1,2})[:.](\d{2})(?::\d{2})?\s*([AaPp][Mm])?$/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (m[3]) { const pm = m[3].toLowerCase() === 'pm'; if (h < 1 || h > 12) return null; h = (h % 12) + (pm ? 12 : 0); }
+  if (h > 23 || min > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+/** Both times valid and the class ends AFTER it starts (a class entered as 9:30 AM – 12:30 AM used to be accepted). Returns the normalized pair. */
+function checkTimes(startRaw: unknown, endRaw: unknown): { startTime: string; endTime: string } {
+  const startTime = normalizeTime(startRaw);
+  const endTime = normalizeTime(endRaw);
+  if (!startTime || !endTime) throw new AppError('Start and end time must be valid times (e.g. 09:30 and 12:30).', 400);
+  if (endTime <= startTime) throw new AppError('End time must be after the start time — check AM/PM (e.g. 09:30 AM to 12:30 PM, not 12:30 AM).', 400);
+  return { startTime, endTime };
+}
+
+/** Total length covered by a set of [start,end] intervals, counting overlaps ONCE — a refresh/reconnect that left an old "open" session overlapping the new one used to be summed twice. */
+function unionMs(intervals: Array<[number, number]>): number {
+  const sorted = intervals.filter(([s, e]) => e > s).sort((x, y) => x[0] - y[0]);
+  let total = 0;
+  let curS = -1;
+  let curE = -1;
+  for (const [s, e] of sorted) {
+    if (curE < 0 || s > curE) { if (curE >= 0) total += curE - curS; curS = s; curE = e; }
+    else if (e > curE) curE = e;
+  }
+  if (curE >= 0) total += curE - curS;
+  return total;
 }
 
 /** Attendance-from-video — computed once when a class ends. Sums every
@@ -145,15 +194,18 @@ async function computeAttendance(liveClassId: string, scheduleId: string, actual
     }),
   ]);
 
-  const minutesByStudent = new Map<string, number>();
+  const intervalsByStudent = new Map<string, Array<[number, number]>>();
   for (const s of sessions) {
     const studentId = s.user.student?.id;
     if (!studentId) continue; // shouldn't happen (STUDENT-role rows always have a linked Student), but don't crash on it
-    const joined = s.joinedAt < actualStartAt ? actualStartAt : s.joinedAt;
-    const left = s.leftAt && s.leftAt < actualEndAt ? s.leftAt : actualEndAt; // clamp anyone still "open" at class end
-    const mins = Math.max(0, (left.getTime() - joined.getTime()) / 60000);
-    minutesByStudent.set(studentId, (minutesByStudent.get(studentId) || 0) + mins);
+    const joined = Math.max(s.joinedAt.getTime(), actualStartAt.getTime());
+    const left = Math.min(s.leftAt ? s.leftAt.getTime() : actualEndAt.getTime(), actualEndAt.getTime()); // clamp anyone still "open" at class end
+    if (!intervalsByStudent.has(studentId)) intervalsByStudent.set(studentId, []);
+    intervalsByStudent.get(studentId)!.push([joined, left]);
   }
+  // Overlapping sessions (e.g. a refresh that never "left") count once.
+  const minutesByStudent = new Map<string, number>();
+  for (const [studentId, iv] of intervalsByStudent) minutesByStudent.set(studentId, unionMs(iv) / 60000);
 
   const presentPct = config.LIVE_CLASS_ATTENDANCE_PRESENT_PCT;
   const partialPct = config.LIVE_CLASS_ATTENDANCE_PARTIAL_PCT;
@@ -389,10 +441,12 @@ export const liveClassesController = {
   // ── CRUD ───────────────────────────────────────────────────────────────────
   async create(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { scheduleId, title, topic, description, scheduledDate, startTime, endTime } = req.body;
+      const { scheduleId, title, topic, description, scheduledDate } = req.body;
+      let { startTime, endTime } = req.body;
       if (!scheduleId || !title || !scheduledDate || !startTime || !endTime) {
         throw new AppError('scheduleId, title, scheduledDate, startTime, and endTime are required.', 400);
       }
+      ({ startTime, endTime } = checkTimes(startTime, endTime));
       if (!(await canManageSchedule(req, scheduleId))) {
         throw new AppError('You are not assigned to train this batch.', 403);
       }
@@ -464,10 +518,12 @@ export const liveClassesController = {
    */
   async bulkCreate(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { scheduleId, title, topic, description, startTime, endTime, startDate, endDate, numDays } = req.body;
+      const { scheduleId, title, topic, description, startDate, endDate, numDays } = req.body;
+      let { startTime, endTime } = req.body;
       if (!scheduleId || !title || !startTime || !endTime || !startDate || (!endDate && !numDays)) {
         throw new AppError('scheduleId, title, startTime, endTime, startDate, and either endDate or numDays are required.', 400);
       }
+      ({ startTime, endTime } = checkTimes(startTime, endTime));
       if (!(await canManageSchedule(req, scheduleId))) {
         throw new AppError('You are not assigned to train this batch.', 403);
       }
@@ -686,8 +742,15 @@ export const liveClassesController = {
           // days" option (e.g. 25 means 25 actual classes, skipping the
           // sub-batch's own off days, not 25 raw calendar days).
           const numDaysRaw = field(row, 'numdays', 'days', 'noofdays');
-          const startTime = field(row, 'starttime', 'start');
-          const endTime = field(row, 'endtime', 'end');
+          const startTimeRaw = field(row, 'starttime', 'start');
+          const endTimeRaw = field(row, 'endtime', 'end');
+          // Accepts 9:30 / 09:30 / 9:30 AM / Excel time cells; rejects end-before-start (e.g. 9:30 AM - 12:30 AM).
+          let startTime = startTimeRaw;
+          let endTime = endTimeRaw;
+          if (startTimeRaw && endTimeRaw) {
+            try { ({ startTime, endTime } = checkTimes(startTimeRaw, endTimeRaw)); }
+            catch (e) { results.push({ row: rowNum, status: 'error', message: e instanceof Error ? e.message : 'Invalid times' }); continue; }
+          }
 
           if (!subBatchCode || !title || !startTime || !endTime || (!dateRaw && !startDateRaw) || (!dateRaw && !endDateRaw && !numDaysRaw)) {
             results.push({ row: rowNum, status: 'error', message: 'subBatchCode, title, startTime, endTime, and either date or startDate + (endDate or numDays) are required' });
@@ -865,11 +928,10 @@ export const liveClassesController = {
       } else if (view === 'live') {
         where.status = 'LIVE';
       } else if (view === 'upcoming') {
-        const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(0, 0, 0, 0);
-        where.scheduledDate = { gte: tomorrow };
+        where.scheduledDate = { gte: dayRange(new Date()).lt }; // everything after today (IST)
         where.status = { in: ['SCHEDULED', 'CANCELLED'] };
       } else if (view === 'completed') {
-        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayStart = dayRange(new Date()).gte; // start of today (IST)
         // Finished classes, plus past Holidays (today's / future ones show under Today / Upcoming).
         where.AND = [{ OR: [{ status: 'COMPLETED' }, { status: 'CANCELLED', scheduledDate: { lt: todayStart } }] }];
       }
@@ -944,7 +1006,11 @@ export const liveClassesController = {
         throw new AppError(`This class is already ${existing.status.toLowerCase()} and cannot be edited.`, 400);
       }
 
-      const { title, topic, description, scheduledDate, startTime, endTime, rescheduledReason } = req.body;
+      const { title, topic, description, scheduledDate, rescheduledReason } = req.body;
+      let { startTime, endTime } = req.body;
+      if (startTime || endTime) {
+        ({ startTime, endTime } = checkTimes(startTime || existing.startTime, endTime || existing.endTime));
+      }
       const isReschedule = (scheduledDate && new Date(scheduledDate).getTime() !== existing.scheduledDate.getTime()) || (startTime && startTime !== existing.startTime);
 
       const updated = await prisma.liveClass.update({
@@ -1141,21 +1207,21 @@ export const liveClassesController = {
         orderBy: { joinedAt: 'asc' },
       });
 
-      type Agg = { key: string; name: string; code: string | null; role: string; first: number; last: number; totalMs: number };
+      type Agg = { key: string; name: string; code: string | null; role: string; first: number; last: number; iv: Array<[number, number]> };
+      const classStart = liveClass.actualStartAt ? liveClass.actualStartAt.getTime() : 0;
       const byUser = new Map<string, Agg>();
       for (const r of rows) {
-        const joined = r.joinedAt.getTime();
+        const joined = Math.max(r.joinedAt.getTime(), classStart);
         const left = Math.min(r.leftAt ? r.leftAt.getTime() : classEnd, classEnd);
-        const dur = Math.max(0, left - joined);
         const u = r.user;
         const name = u.student ? `${u.student.firstName} ${u.student.lastName}` : u.employee ? `${u.employee.firstName} ${u.employee.lastName}` : u.email;
         const code = u.student?.studentCode || u.employee?.employeeCode || null;
         const cur = byUser.get(r.userId);
-        if (!cur) byUser.set(r.userId, { key: r.userId, name, code, role: r.role, first: joined, last: left, totalMs: dur });
+        if (!cur) byUser.set(r.userId, { key: r.userId, name, code, role: r.role, first: joined, last: left, iv: [[joined, left]] });
         else {
           cur.first = Math.min(cur.first, joined);
           cur.last = Math.max(cur.last, left);
-          cur.totalMs += dur;
+          cur.iv.push([joined, left]);
           if (r.role === 'HOST') cur.role = 'HOST';
         }
       }
@@ -1163,7 +1229,7 @@ export const liveClassesController = {
       const demos = await prisma.demoSessionRequest.findMany({ where: { liveClassId: liveClass.id, joinedAt: { not: null } } });
       const out: { name: string; code: string | null; role: string; firstJoinedAt: string; lastLeftAt: string; totalSec: number }[] = Array.from(byUser.values()).map((a) => ({
         name: a.name, code: a.code, role: a.role,
-        firstJoinedAt: new Date(a.first).toISOString(), lastLeftAt: new Date(a.last).toISOString(), totalSec: Math.round(a.totalMs / 1000),
+        firstJoinedAt: new Date(a.first).toISOString(), lastLeftAt: new Date(a.last).toISOString(), totalSec: Math.round(unionMs(a.iv) / 1000),
       }));
       for (const d of demos) {
         const joined = d.joinedAt!.getTime();
@@ -1316,9 +1382,7 @@ export const liveClassesController = {
           // A trainer joining an un-started class is prompted to Start it — see frontend.
           return res.json({ success: true, data: { waitingForHost: true, canHost: true } });
         }
-        const [h, m] = liveClass.startTime.split(':').map(Number);
-        const scheduledStart = new Date(liveClass.scheduledDate);
-        scheduledStart.setHours(h, m, 0, 0);
+        const scheduledStart = classStartAt(liveClass.scheduledDate, liveClass.startTime);
         const earliestJoin = new Date(scheduledStart.getTime() - config.LIVE_CLASS_EARLY_JOIN_MINUTES * 60000);
         if (new Date() < earliestJoin) {
           throw new AppError(`You can join from ${config.LIVE_CLASS_EARLY_JOIN_MINUTES} minutes before the class starts.`, 403);
@@ -1338,6 +1402,12 @@ export const liveClassesController = {
         const activeHost = await prisma.liveClassParticipant.findFirst({ where: { liveClassId: liveClass.id, role: 'HOST', leftAt: null } });
         role = activeHost ? 'CO_TRAINER' : 'HOST';
       }
+      // A refresh / dropped connection never called /leave, so that user's previous session is still "open" —
+      // close it now, otherwise it overlaps the new one and the time in the class gets counted twice.
+      await prisma.liveClassParticipant.updateMany({
+        where: { liveClassId: liveClass.id, userId: req.user!.userId, leftAt: null },
+        data: { leftAt: new Date() },
+      });
       await prisma.liveClassParticipant.create({
         data: { liveClassId: liveClass.id, userId: req.user!.userId, role },
       });

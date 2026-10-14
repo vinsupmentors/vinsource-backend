@@ -590,7 +590,8 @@ export const studentPortalController = {
     try {
       const studentId = getStudentId(req);
       const enrollments = await prisma.studentBatchEnrollment.findMany({
-        where: { studentId },
+        // DROPPED = moved to another batch / left; never show those as a rank card.
+        where: { studentId, status: { not: 'DROPPED' } },
         include: { schedule: { include: { course: { select: { id: true, name: true } } } } },
       });
 
@@ -598,7 +599,7 @@ export const studentPortalController = {
       for (const e of enrollments) {
         const scheduleId = e.scheduleId;
         const classmateIds = (
-          await prisma.studentBatchEnrollment.findMany({ where: { scheduleId }, select: { studentId: true } })
+          await prisma.studentBatchEnrollment.findMany({ where: { scheduleId, status: { not: 'DROPPED' } }, select: { studentId: true } })
         ).map((c) => c.studentId);
 
         const marks = await prisma.moduleMark.findMany({

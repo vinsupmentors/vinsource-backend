@@ -9,7 +9,7 @@ import prisma from '../config/database';
  */
 export async function computeRankCard(studentId: string) {
   const enrollments = await prisma.studentBatchEnrollment.findMany({
-    where: { studentId },
+    where: { studentId, status: { not: 'DROPPED' } },
     include: { schedule: { include: { course: { select: { id: true, name: true } }, batch: { select: { code: true } } } } },
   });
 
@@ -17,7 +17,7 @@ export async function computeRankCard(studentId: string) {
     enrollments.map(async (e) => {
       const scheduleId = e.scheduleId;
       const classmateIds = (
-        await prisma.studentBatchEnrollment.findMany({ where: { scheduleId }, select: { studentId: true } })
+        await prisma.studentBatchEnrollment.findMany({ where: { scheduleId, status: { not: 'DROPPED' } }, select: { studentId: true } })
       ).map((c) => c.studentId);
 
       const marks = await prisma.moduleMark.findMany({
