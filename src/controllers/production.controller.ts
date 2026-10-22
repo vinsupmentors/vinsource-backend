@@ -206,6 +206,58 @@ export async function generateSubBatchCode(db: typeof prisma, batchId: string, c
 }
 
 /** Resolves a sub-batch code (case-insensitive) to a schedule id. */
+/**
+ * Students (of `studentIds`) who are already live in a DIFFERENT sub-batch
+ * (ACTIVE / ON_HOLD). Enrolling them again is a double enrollment and needs
+ * Production Manager approval. Returns studentId -> "Course · Batch" label.
+ */
+async function activeElsewhere(studentIds: string[], scheduleId: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!studentIds.length) return out;
+  const rows = await prisma.studentBatchEnrollment.findMany({
+    where: { studentId: { in: studentIds }, scheduleId: { not: scheduleId }, status: { in: ['ACTIVE', 'ON_HOLD'] } },
+    include: { schedule: { include: { course: { select: { name: true } }, batch: { select: { code: true } } } } },
+  });
+  for (const r of rows) {
+    const label = `${r.schedule.course.name} · ${r.schedule.batch.code}`;
+    out.set(r.studentId, out.has(r.studentId) ? `${out.get(r.studentId)}, ${label}` : label);
+  }
+  return out;
+}
+
+/** File (or reuse) a PENDING double-enrollment request and tell the Production approvers. */
+async function fileDoubleEnrollRequest(studentId: string, scheduleId: string, requestedById: string | null | undefined, currentLabel: string, reason?: string) {
+  const existing = await prisma.doubleEnrollmentRequest.findFirst({ where: { studentId, scheduleId, status: 'PENDING' } });
+  if (existing) return { request: existing, created: false };
+  const request = await prisma.doubleEnrollmentRequest.create({
+    data: { studentId, scheduleId, requestedById: requestedById || null, reason: reason || null },
+  });
+  try {
+    const [student, schedule] = await Promise.all([
+      prisma.student.findUnique({ where: { id: studentId }, select: { firstName: true, lastName: true, studentCode: true } }),
+      prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, include: { course: { select: { name: true } }, batch: { select: { code: true } } } }),
+    ]);
+    const approvers = await prisma.user.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { role: { in: ['ADMIN', 'SUPER_ADMIN'] } },
+          { role: 'MANAGER', employee: { department: { name: { contains: 'production' } } } },
+        ],
+      },
+      select: { id: true },
+    });
+    const { notificationService } = await import('../services/notification.service');
+    await Promise.all(approvers.map((u) => notificationService.create({
+      userId: u.id,
+      type: 'SYSTEM',
+      title: 'Double enrollment needs approval',
+      message: `${student?.firstName} ${student?.lastName} (${student?.studentCode}) is already in ${currentLabel}. Request to also enrol in ${schedule?.course.name} · ${schedule?.batch.code}. Approve in Production → Double Enrollments.`,
+    }).catch(() => undefined)));
+  } catch { /* notifications are best effort */ }
+  return { request, created: true };
+}
+
 /** Ids of students whose trainer marked the project presentation done (optionally for one course). */
 async function studentsWithPresentation(studentIds: string[], courseId?: string): Promise<Set<string>> {
   if (!studentIds.length) return new Set();
@@ -460,6 +512,7 @@ export const productionController = {
 
       const subBatchCode = await generateSubBatchCode(prisma, batchId, courseId, timing);
 
+      let heldBack: [string, string][] = [];
       const schedule = await prisma.$transaction(async (tx) => {
         const created = await tx.batchCourseSchedule.create({
           data: {
@@ -481,10 +534,16 @@ export const productionController = {
           });
         }
         if (Array.isArray(studentIds) && studentIds.length) {
-          await tx.studentBatchEnrollment.createMany({
-            data: studentIds.map((studentId: string) => ({ scheduleId: created.id, studentId })),
-            skipDuplicates: true,
-          });
+          // Anyone already live in another sub-batch is held back for PM approval.
+          const elsewhere = await activeElsewhere(studentIds, created.id);
+          heldBack = Array.from(elsewhere.entries());
+          const okIds = studentIds.filter((sid: string) => !elsewhere.has(sid));
+          if (okIds.length) {
+            await tx.studentBatchEnrollment.createMany({
+              data: okIds.map((studentId: string) => ({ scheduleId: created.id, studentId })),
+              skipDuplicates: true,
+            });
+          }
         }
 
         return tx.batchCourseSchedule.findUnique({
@@ -497,7 +556,12 @@ export const productionController = {
         });
       });
 
-      res.status(201).json({ success: true, data: schedule });
+      // File PM-approval requests for students who were held back (already in another sub-batch).
+      if (schedule) {
+        for (const [sid, label] of heldBack) await fileDoubleEnrollRequest(sid, schedule.id, req.user?.employeeId, label);
+      }
+
+      res.status(201).json({ success: true, data: schedule, pendingApproval: heldBack.length });
     } catch (err) { next(err); }
   },
 
@@ -1092,6 +1156,22 @@ export const productionController = {
       // present, retire the old enrollment in the same transaction so the
       // student portal only ever reflects the current batch/trainer — not
       // both — without touching any other, unrelated enrollments.
+      //
+      // A genuinely ADDITIONAL enrollment (no previousEnrollmentId) while the
+      // student is already live in another sub-batch is a double enrollment:
+      // it is NOT created here — a request goes to the Production Manager,
+      // who must approve it first (see approveDoubleEnrollment).
+      if (!previousEnrollmentId) {
+        const elsewhere = await activeElsewhere([studentId], scheduleId);
+        if (elsewhere.has(studentId)) {
+          const { request } = await fileDoubleEnrollRequest(studentId, scheduleId, req.user?.employeeId, elsewhere.get(studentId)!, req.body?.reason);
+          return res.status(202).json({
+            success: true,
+            data: { pendingApproval: true, requestId: request.id, alreadyIn: elsewhere.get(studentId) },
+            message: `This student is already in ${elsewhere.get(studentId)}. A double-enrollment request was sent to the Production Manager for approval.`,
+          });
+        }
+      }
       const enrollment = await prisma.$transaction(async (tx) => {
         if (previousEnrollmentId) {
           const prev = await tx.studentBatchEnrollment.findUnique({ where: { id: previousEnrollmentId } });
@@ -1145,7 +1225,15 @@ export const productionController = {
         select: { id: true, studentId: true, status: true },
       });
       const existingIds = new Set(existing.map((e) => e.studentId));
-      const toCreate = studentIds.filter((id: string) => !existingIds.has(id));
+      const newIds = studentIds.filter((id: string) => !existingIds.has(id));
+      // Students already live in another sub-batch need Production Manager approval.
+      const elsewhere = await activeElsewhere(newIds, scheduleId);
+      let pendingApproval = 0;
+      for (const sid of Array.from(elsewhere.keys())) {
+        await fileDoubleEnrollRequest(sid, scheduleId, req.user?.employeeId, elsewhere.get(sid)!);
+        pendingApproval++;
+      }
+      const toCreate = newIds.filter((id: string) => !elsewhere.has(id));
       // A student can already have a row for this schedule from an earlier
       // DROPPED/COMPLETED enrollment — reactivate those rather than silently
       // leaving them un-enrolled (skipDuplicates would just no-op on them).
@@ -1169,9 +1257,76 @@ export const productionController = {
         data: {
           enrolled: toCreate.length + toReactivate.length,
           alreadyEnrolled: existingIds.size - toReactivate.length,
+          pendingApproval,
           total: studentIds.length,
         },
       });
+    } catch (err) { next(err); }
+  },
+
+  // ── Double-enrollment approvals ────────────────────────────────────────────
+  async listDoubleEnrollments(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const status = String(req.query.status || 'PENDING');
+      const rows = await prisma.doubleEnrollmentRequest.findMany({
+        where: status === 'ALL' ? undefined : { status: status as 'PENDING' | 'APPROVED' | 'REJECTED' },
+        include: {
+          student: {
+            select: {
+              id: true, firstName: true, lastName: true, studentCode: true, track: true, phone: true,
+              enrollments: {
+                where: { status: { in: ['ACTIVE', 'ON_HOLD'] } },
+                include: { schedule: { include: { course: { select: { name: true } }, batch: { select: { code: true } } } } },
+              },
+            },
+          },
+          schedule: { include: { course: { select: { name: true } }, batch: { select: { code: true } } } },
+          requestedBy: { select: employeeSelect },
+          reviewedBy: { select: employeeSelect },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 300,
+      });
+      res.json({ success: true, data: rows });
+    } catch (err) { next(err); }
+  },
+
+  async approveDoubleEnrollment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const reqRow = await prisma.doubleEnrollmentRequest.findUnique({ where: { id } });
+      if (!reqRow) throw new AppError('Request not found', 404);
+      if (reqRow.status !== 'PENDING') throw new AppError(`This request was already ${reqRow.status.toLowerCase()}.`, 409);
+
+      await prisma.$transaction(async (tx) => {
+        const existing = await tx.studentBatchEnrollment.findUnique({
+          where: { studentId_scheduleId: { studentId: reqRow.studentId, scheduleId: reqRow.scheduleId } },
+        });
+        if (existing) {
+          if (existing.status !== 'ACTIVE') await tx.studentBatchEnrollment.update({ where: { id: existing.id }, data: { status: 'ACTIVE' } });
+        } else {
+          await tx.studentBatchEnrollment.create({ data: { studentId: reqRow.studentId, scheduleId: reqRow.scheduleId } });
+        }
+        await tx.doubleEnrollmentRequest.update({
+          where: { id },
+          data: { status: 'APPROVED', reviewedById: req.user?.employeeId || null, reviewedAt: new Date(), reviewNote: req.body?.note || null },
+        });
+      });
+      res.json({ success: true, message: 'Approved — the student is now enrolled in the second sub-batch.' });
+    } catch (err) { next(err); }
+  },
+
+  async rejectDoubleEnrollment(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.params;
+      const reqRow = await prisma.doubleEnrollmentRequest.findUnique({ where: { id } });
+      if (!reqRow) throw new AppError('Request not found', 404);
+      if (reqRow.status !== 'PENDING') throw new AppError(`This request was already ${reqRow.status.toLowerCase()}.`, 409);
+      await prisma.doubleEnrollmentRequest.update({
+        where: { id },
+        data: { status: 'REJECTED', reviewedById: req.user?.employeeId || null, reviewedAt: new Date(), reviewNote: req.body?.note || null },
+      });
+      res.json({ success: true, message: 'Request rejected.' });
     } catch (err) { next(err); }
   },
 
@@ -1333,6 +1488,23 @@ export const productionController = {
   async updateEnrollment(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const { status } = req.body;
+      // Re-activating an enrollment must not become a back door around the
+      // double-enrollment approval: if the student is already live in a
+      // different sub-batch, the PM has to approve it via a request instead.
+      if (status === 'ACTIVE') {
+        const current = await prisma.studentBatchEnrollment.findUnique({ where: { id: req.params.id } });
+        if (current && current.status !== 'ACTIVE') {
+          const elsewhere = await activeElsewhere([current.studentId], current.scheduleId);
+          if (elsewhere.has(current.studentId)) {
+            const { request } = await fileDoubleEnrollRequest(current.studentId, current.scheduleId, req.user?.employeeId, elsewhere.get(current.studentId)!);
+            return res.status(202).json({
+              success: true,
+              data: { pendingApproval: true, requestId: request.id, alreadyIn: elsewhere.get(current.studentId) },
+              message: `This student is already in ${elsewhere.get(current.studentId)}. A double-enrollment request was sent to the Production Manager.`,
+            });
+          }
+        }
+      }
       const enrollment = await prisma.studentBatchEnrollment.update({
         where: { id: req.params.id },
         data: { status },

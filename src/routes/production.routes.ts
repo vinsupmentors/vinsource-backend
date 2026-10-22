@@ -66,6 +66,11 @@ router.delete('/students/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), pro
 router.post('/enrollments', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.enrollStudent);
 router.post('/enrollments/bulk', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.bulkEnrollStudents);
 router.put('/enrollments/:id', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.updateEnrollment);
+// Double enrollment: filed automatically when a student already live in one sub-batch is enrolled in
+// another; only the Production Manager / Admin can approve or reject.
+router.get('/double-enrollments', requireModule('PRODUCTION_TRAINING', 'EDIT'), productionController.listDoubleEnrollments);
+router.post('/double-enrollments/:id/approve', requireRole('ADMIN', 'SUPER_ADMIN', 'MANAGER'), productionController.approveDoubleEnrollment);
+router.post('/double-enrollments/:id/reject', requireRole('ADMIN', 'SUPER_ADMIN', 'MANAGER'), productionController.rejectDoubleEnrollment);
 
 // Projects (PM-authored, module-wise)
 router.get('/projects', productionContentController.listProjects);

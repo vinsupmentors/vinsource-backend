@@ -722,6 +722,8 @@ model Employee {
   studentFeedbacksGiven TrainerFeedback[]   @relation("FeedbackTrainer")
   moduleFeedbacksGiven  ModuleFeedback[]    @relation("ModuleFeedbackTrainer")
   liveClassesCreated    LiveClass[]         @relation("LiveClassCreator")
+  doubleEnrollRequested DoubleEnrollmentRequest[] @relation("DoubleEnrollRequester")
+  doubleEnrollReviewed  DoubleEnrollmentRequest[] @relation("DoubleEnrollReviewer")
 
   // Projects / Feedback Forms / Online Tests
   projectsCreated        Project[]             @relation("ProjectCreator")
@@ -2193,6 +2195,7 @@ model Student {
   moduleMarks      ModuleMark[]
   moduleFeedbacks  ModuleFeedback[]
   trainerFeedbacks TrainerFeedback[]
+  doubleEnrollRequests DoubleEnrollmentRequest[]
   placementResults PlacementResult[]
   interviews       PlacementInterview[]
   certificates     Certificate[]
@@ -2500,6 +2503,7 @@ model BatchCourseSchedule {
   coupons    Coupon[]
   seatHoldRequests SeatHoldRequest[]
   liveClasses LiveClass[]
+  doubleEnrollRequests DoubleEnrollmentRequest[]
 
   // Multiple sub-batches of the same course+timing are allowed in a batch
   // (e.g. DA-Morning with Trainer A and DA-Morning with Trainer B in parallel).
@@ -2508,6 +2512,38 @@ model BatchCourseSchedule {
   // after the old composite unique index was removed.
   @@index([batchId])
   @@index([courseId])
+}
+
+// A student who is already ACTIVE in one sub-batch cannot be enrolled in a
+// second one directly — the enrol attempt files one of these and the
+// Production Manager must approve it (double verification) before the second
+// enrollment is actually created.
+enum DoubleEnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model DoubleEnrollmentRequest {
+  id            String                 @id @default(uuid())
+  studentId     String
+  scheduleId    String
+  status        DoubleEnrollmentStatus @default(PENDING)
+  reason        String?                @db.Text
+  requestedById String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?                @db.Text
+  createdAt     DateTime               @default(now())
+
+  student     Student             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  schedule    BatchCourseSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  requestedBy Employee?           @relation("DoubleEnrollRequester", fields: [requestedById], references: [id])
+  reviewedBy  Employee?           @relation("DoubleEnrollReviewer", fields: [reviewedById], references: [id])
+
+  @@index([status])
+  @@index([studentId])
+  @@index([scheduleId])
 }
 
 model TrainerAssignment {
