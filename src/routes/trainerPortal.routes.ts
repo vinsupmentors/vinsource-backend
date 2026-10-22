@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { trainerPortalController } from '../controllers/trainerPortal.controller';
 import { authenticate } from '../middleware/auth';
+import { uploadPresentationPhotos } from '../middleware/upload';
 
 const router = Router();
 router.use(authenticate);
@@ -19,6 +20,7 @@ router.post('/tests/:testId/marks', trainerPortalController.upsertMarks);
 router.get('/feedback', trainerPortalController.listFeedback);
 router.post('/feedback', trainerPortalController.upsertFeedback);
 router.post('/students/:studentId/push-to-placement', trainerPortalController.pushToPlacement);
+router.post('/students/:studentId/presentation', uploadPresentationPhotos, trainerPortalController.markPresentation);
 router.get('/schedules/:scheduleId/module-feedback', trainerPortalController.listModuleFeedback);
 router.post('/schedules/:scheduleId/module-feedback', trainerPortalController.upsertModuleFeedback);
 

@@ -277,6 +277,24 @@ export const uploadDemoProof = multer({
   limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
 }).single('proof');
 
+// ── Trainer: project-presentation photos (exactly two images per student) ───
+const PRESENTATION_DIR = path.join(process.cwd(), 'uploads', 'presentation-photos');
+if (!fs.existsSync(PRESENTATION_DIR)) fs.mkdirSync(PRESENTATION_DIR, { recursive: true });
+
+const presentationStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, PRESENTATION_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
+  },
+});
+
+export const uploadPresentationPhotos = multer({
+  storage: presentationStorage,
+  fileFilter: imageOnlyFilter,
+  limits: { fileSize: 8 * 1024 * 1024, files: 2 }, // 8 MB each
+}).array('photos', 2);
+
 // ── Student Onboarding: reusable signed-document PDF templates (admin) ──────
 const ONBOARDING_TEMPLATE_DIR = path.join(process.cwd(), 'uploads', 'onboarding-templates');
 if (!fs.existsSync(ONBOARDING_TEMPLATE_DIR)) fs.mkdirSync(ONBOARDING_TEMPLATE_DIR, { recursive: true });

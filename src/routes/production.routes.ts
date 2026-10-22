@@ -112,6 +112,7 @@ router.get('/reports/batches', productionReportsController.batchReport);
 router.get('/reports/attendance', productionReportsController.attendanceReport);
 router.get('/reports/students', productionReportsController.studentList);
 router.get('/reports/students/:studentId', productionReportsController.studentReport);
+router.get('/reports/comfort', productionReportsController.comfortReport);
 router.get('/reports/kra', productionReportsController.listKra);
 
 // Student Portfolio approvals — student fills it in the student portal, PM reviews here.

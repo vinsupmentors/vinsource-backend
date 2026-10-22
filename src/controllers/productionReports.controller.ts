@@ -222,6 +222,179 @@ export const productionReportsController = {
     } catch (err) { next(err); }
   },
 
+  // ── COMFORT REPORT ──────────────────────────────────────────────────────────
+  // One row per (student, sub-batch) in the spreadsheet layout the Production
+  // team keeps by hand: contact, type, slot, track, attendance (Total/P/A/%),
+  // module-wise assessment marks, average, project + presentation proof,
+  // trainer comments and status. Filters: batch, course, session (timing), trainer.
+  async comfortReport(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { batchId, courseId, scheduleId, timing, trainerId } = req.query;
+      const scheduleWhere: Record<string, unknown> = {};
+      if (scheduleId) scheduleWhere.id = String(scheduleId);
+      if (batchId) scheduleWhere.batchId = String(batchId);
+      if (courseId) scheduleWhere.courseId = String(courseId);
+      if (timing) scheduleWhere.timing = String(timing);
+      if (trainerId) scheduleWhere.trainers = { some: { trainerId: String(trainerId) } };
+
+      const enrollments = await prisma.studentBatchEnrollment.findMany({
+        where: { status: { not: 'DROPPED' }, schedule: scheduleWhere },
+        include: {
+          student: { select: { ...studentSelect, trainingMode: true } },
+          schedule: {
+            select: {
+              id: true, courseId: true, timing: true, startTime: true, endTime: true, mode: true,
+              course: { select: { id: true, name: true } },
+              batch: { select: { id: true, code: true } },
+              trainers: { select: { trainer: { select: employeeSelect } } },
+            },
+          },
+        },
+        orderBy: [{ schedule: { batch: { code: 'asc' } } }, { student: { studentCode: 'asc' } }],
+      });
+
+      const studentIds = Array.from(new Set(enrollments.map((e) => e.studentId)));
+      const scheduleIds = Array.from(new Set(enrollments.map((e) => e.scheduleId)));
+      const courseIds = Array.from(new Set(enrollments.map((e) => e.schedule.courseId)));
+
+      const [attendance, marks, attempts, modules, feedbacks, submissions] = await Promise.all([
+        prisma.studentAttendance.findMany({
+          where: { scheduleId: { in: scheduleIds } },
+          select: { studentId: true, scheduleId: true, date: true, status: true },
+        }),
+        prisma.moduleMark.findMany({
+          where: { studentId: { in: studentIds }, test: { scheduleId: { in: scheduleIds } } },
+          select: { studentId: true, marksObtained: true, test: { select: { scheduleId: true, moduleId: true, maxMarks: true } } },
+        }),
+        prisma.onlineTestAttempt.findMany({
+          where: { studentId: { in: studentIds }, release: { scheduleId: { in: scheduleIds } }, score: { not: null }, totalMarks: { not: null } },
+          select: { studentId: true, score: true, totalMarks: true, release: { select: { scheduleId: true, test: { select: { moduleId: true } } } } },
+        }),
+        prisma.academyModule.findMany({
+          where: { courseId: { in: courseIds } },
+          select: { id: true, courseId: true, order: true, title: true },
+          orderBy: [{ courseId: 'asc' }, { order: 'asc' }],
+        }),
+        prisma.trainerFeedback.findMany({
+          where: { studentId: { in: studentIds }, courseId: { in: courseIds } },
+          select: {
+            studentId: true, courseId: true, placementReadinessNote: true, jrpToIopRecommended: true,
+            certificateEligible: true, presentationDone: true, presentationAt: true, presentationPhotos: true,
+          },
+        }),
+        prisma.projectSubmission.findMany({
+          where: { studentId: { in: studentIds }, release: { scheduleId: { in: scheduleIds } } },
+          select: {
+            studentId: true, status: true, grade: true, maxGrade: true, linkUrl: true, submittedAt: true,
+            release: { select: { scheduleId: true, project: { select: { title: true, isCapstone: true } } } },
+          },
+        }),
+      ]);
+
+      // Class days held per schedule (distinct dates anyone was marked on).
+      const heldDates = new Map<string, Set<string>>();
+      const attBy = new Map<string, { present: number; absent: number }>();
+      for (const a of attendance) {
+        const d = a.date.toISOString().slice(0, 10);
+        if (!heldDates.has(a.scheduleId)) heldDates.set(a.scheduleId, new Set());
+        heldDates.get(a.scheduleId)!.add(d);
+        const k = `${a.studentId}|${a.scheduleId}`;
+        const cur = attBy.get(k) ?? { present: 0, absent: 0 };
+        if (a.status === 'ABSENT') cur.absent++; else cur.present++;
+        attBy.set(k, cur);
+      }
+
+      // Module score per (student, schedule, module): sum obtained / sum max.
+      const modScore = new Map<string, { got: number; max: number }>();
+      const addScore = (sid: string, schId: string, modId: string, got: number, max: number) => {
+        const k = `${sid}|${schId}|${modId}`;
+        const cur = modScore.get(k) ?? { got: 0, max: 0 };
+        cur.got += got; cur.max += max;
+        modScore.set(k, cur);
+      };
+      for (const m of marks) addScore(m.studentId, m.test.scheduleId, m.test.moduleId, m.marksObtained, m.test.maxMarks);
+      for (const a of attempts) addScore(a.studentId, a.release.scheduleId, a.release.test.moduleId, a.score ?? 0, a.totalMarks ?? 0);
+
+      const fbBy = new Map(feedbacks.map((f) => [`${f.studentId}|${f.courseId}`, f]));
+      const subBy = new Map<string, typeof submissions>();
+      for (const s of submissions) {
+        const k = `${s.studentId}|${s.release.scheduleId}`;
+        if (!subBy.has(k)) subBy.set(k, []);
+        subBy.get(k)!.push(s);
+      }
+
+      const statusLabel = (studentStatus: string, enrStatus: string, pct: number | null) => {
+        if (enrStatus === 'ON_HOLD') return 'Long Leave';
+        const map: Record<string, string> = {
+          ENROLLED: 'Enrolled', ONBOARDED: 'Onboarded', ACTIVE: 'Active', INACTIVE: 'Inactive (<60%)',
+          COMPLETED: 'Completed', IN_PLACEMENT: 'In Placement', PLACED: 'Placed', BATCH_TRANSFER: 'Batch Transfer',
+        };
+        void pct;
+        return map[studentStatus] ?? studentStatus;
+      };
+
+      const rows = enrollments.map((e) => {
+        const sid = e.studentId;
+        const sch = e.schedule;
+        const total = heldDates.get(sch.id)?.size ?? 0;
+        const att = attBy.get(`${sid}|${sch.id}`) ?? { present: 0, absent: 0 };
+        const pct = total ? Math.round((att.present / total) * 100) : null;
+        const fb = fbBy.get(`${sid}|${sch.courseId}`);
+
+        const moduleMarks: Record<string, { got: number; max: number } | null> = {};
+        let gotSum = 0; let maxSum = 0; let done = 0;
+        for (const m of modules.filter((x) => x.courseId === sch.courseId)) {
+          const s = modScore.get(`${sid}|${sch.id}|${m.id}`);
+          moduleMarks[m.id] = s && s.max > 0 ? s : null;
+          if (s && s.max > 0) { gotSum += s.got; maxSum += s.max; done++; }
+        }
+
+        const subs = subBy.get(`${sid}|${sch.id}`) ?? [];
+        const main = subs.find((s) => s.release.project.isCapstone) ?? subs[0];
+        const trainers = sch.trainers.map((t) => t.trainer ? `${t.trainer.firstName} ${t.trainer.lastName}` : '').filter(Boolean);
+        const modeText = e.student.trainingMode || (sch.mode === 'HYBRID' ? '' : sch.mode === 'ONLINE' ? 'Online' : 'Offline');
+
+        return {
+          enrollmentId: e.id,
+          studentId: sid,
+          studentCode: e.student.studentCode,
+          studentName: `${e.student.firstName} ${e.student.lastName}`.trim(),
+          phone: e.student.phone,
+          email: e.student.email,
+          type: modeText,
+          slot: sch.timing.charAt(0) + sch.timing.slice(1).toLowerCase(),
+          slotTime: sch.startTime && sch.endTime ? `${sch.startTime}-${sch.endTime}` : '',
+          track: e.student.track,
+          placementStatus: e.student.track === 'JRP' && fb?.jrpToIopRecommended ? 'JRP-IOP' : e.student.track,
+          batchCode: sch.batch.code,
+          courseName: sch.course.name,
+          trainers: trainers.join(', '),
+          scheduleId: sch.id,
+          courseId: sch.courseId,
+          total, present: att.present, absent: att.absent, attendancePct: pct,
+          moduleMarks,
+          modulesDone: done,
+          avgMark: done ? Math.round((gotSum / done) * 10) / 10 : null,
+          avgPct: maxSum ? Math.round((gotSum / maxSum) * 1000) / 10 : null,
+          mainProject: main
+            ? `${main.release.project.title} — ${main.status === 'REVIEWED' ? (main.grade != null ? `${main.grade}/${main.maxGrade ?? 100}` : 'Reviewed') : 'Submitted'}`
+            : '',
+          presentationDone: !!fb?.presentationDone,
+          presentationAt: fb?.presentationAt ?? null,
+          presentationPhotos: (Array.isArray(fb?.presentationPhotos) ? fb!.presentationPhotos : []) as string[],
+          certificateEligible: !!fb?.certificateEligible,
+          trainerComments: fb?.placementReadinessNote ?? '',
+          status: statusLabel(e.student.status, e.status, pct),
+        };
+      });
+
+      // Module columns: each course's modules in order (de-duplicated by course+order).
+      const moduleCols = modules.map((m) => ({ id: m.id, courseId: m.courseId, order: m.order, title: m.title }));
+
+      res.json({ success: true, data: { modules: moduleCols, rows } });
+    } catch (err) { next(err); }
+  },
+
   // ── CONSOLIDATED STUDENT REPORT ("A to Z") ──────────────────────────────────
   // Everything about one student in one place: enrollments, rank/marks,
   // projects, trainer module feedback, and attendance — reusing the same

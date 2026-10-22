@@ -118,7 +118,77 @@ export const trainerPortalController = {
         },
         orderBy: { enrolledAt: 'asc' },
       });
-      res.json({ success: true, data: enrollments });
+      // Attach each student's project-presentation status (per course) so the
+      // trainer sees who still needs a presentation + photos before eligibility.
+      const sched = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, select: { courseId: true } });
+      const fbs = sched
+        ? await prisma.trainerFeedback.findMany({
+            where: { courseId: sched.courseId, studentId: { in: enrollments.map((e) => e.studentId) } },
+            select: { studentId: true, presentationDone: true, presentationAt: true, presentationPhotos: true, certificateEligible: true },
+          })
+        : [];
+      const fbByStudent = new Map(fbs.map((f) => [f.studentId, f]));
+      res.json({
+        success: true,
+        data: enrollments.map((e) => ({
+          ...e,
+          courseId: sched?.courseId,
+          presentation: fbByStudent.get(e.studentId) ?? { presentationDone: false, presentationAt: null, presentationPhotos: null, certificateEligible: false },
+        })),
+      });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Mark a student's project presentation as completed. Needs exactly two
+   * photos (multipart field "photos") as proof. Until this is done the student
+   * cannot be marked certificate-eligible, recommended for IOP, or moved to
+   * placement. Re-submitting replaces the earlier photos.
+   * Body (multipart): courseId, presentationDate? (YYYY-MM-DD, defaults to today)
+   */
+  async markPresentation(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      if (!employeeId) throw new AppError('No trainer profile is linked to this account', 403);
+      const { studentId } = req.params;
+      const courseId = String(req.body?.courseId || '');
+      if (!courseId) throw new AppError('courseId is required', 400);
+
+      const enrollment = await prisma.studentBatchEnrollment.findFirst({
+        where: { studentId, schedule: { courseId, trainers: { some: { trainerId: employeeId } } } },
+        include: { student: { select: { firstName: true, lastName: true, studentCode: true, skillAdvisorId: true } }, schedule: { include: { course: { select: { name: true } }, batch: { select: { code: true } } } } },
+      });
+      if (!enrollment) throw new AppError('You are not the assigned trainer for this student in this course', 403);
+
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (files.length !== 2) throw new AppError('Upload exactly two photos of the student presenting.', 400);
+
+      const when = req.body?.presentationDate ? new Date(String(req.body.presentationDate)) : new Date();
+      if (isNaN(when.getTime())) throw new AppError('Invalid presentation date.', 400);
+      if (when.getTime() > Date.now() + 86400000) throw new AppError('Presentation date cannot be in the future.', 400);
+
+      const photos = files.map((f) => `/uploads/presentation-photos/${f.filename}`);
+      const feedback = await prisma.trainerFeedback.upsert({
+        where: { studentId_courseId: { studentId, courseId } },
+        update: { trainerId: employeeId, presentationDone: true, presentationAt: when, presentationPhotos: photos, presentationMarkedById: employeeId },
+        create: { studentId, courseId, trainerId: employeeId, presentationDone: true, presentationAt: when, presentationPhotos: photos, presentationMarkedById: employeeId },
+      });
+
+      // Tell the student's skill advisor (best effort).
+      const advisorId = enrollment.student.skillAdvisorId;
+      if (advisorId) {
+        const advisor = await prisma.employee.findUnique({ where: { id: advisorId }, select: { userId: true } }).catch(() => null);
+        if (advisor?.userId) {
+          notificationService.create({
+            userId: advisor.userId,
+            type: 'SYSTEM',
+            title: 'Project presentation completed',
+            message: `${enrollment.student.firstName} ${enrollment.student.lastName} (${enrollment.student.studentCode}) completed the ${enrollment.schedule.course.name} project presentation (${enrollment.schedule.batch.code}).`,
+          }).catch(() => {});
+        }
+      }
+
+      res.json({ success: true, data: feedback });
     } catch (err) { next(err); }
   },
 
@@ -319,6 +389,18 @@ export const trainerPortalController = {
       });
       if (!enrollment) throw new AppError('You are not the assigned trainer for this student in this course', 403);
 
+      // Certificate eligibility / IOP recommendation require a completed project
+      // presentation (with its two proof photos) first.
+      if (certificateEligible === true || jrpToIopRecommended === true) {
+        const current = await prisma.trainerFeedback.findUnique({
+          where: { studentId_courseId: { studentId, courseId } },
+          select: { presentationDone: true },
+        });
+        if (!current?.presentationDone) {
+          throw new AppError('Mark the project presentation as completed (with 2 photos) before making this student certificate eligible or recommending IOP.', 400);
+        }
+      }
+
       const feedback = await prisma.trainerFeedback.upsert({
         where: { studentId_courseId: { studentId, courseId } },
         update: { trainerId: employeeId, performanceRating, placementReadinessNote, jrpToIopRecommended, certificateEligible },
@@ -361,6 +443,9 @@ export const trainerPortalController = {
       if (!enrollment) throw new AppError('You are not the assigned trainer for this student in this course', 403);
 
       const feedback = await prisma.trainerFeedback.findUnique({ where: { studentId_courseId: { studentId, courseId } } });
+      if (!feedback?.presentationDone) {
+        throw new AppError('The student must complete the project presentation (with 2 photos) before moving to the Placement Pool', 400);
+      }
       if (!feedback?.certificateEligible) {
         throw new AppError('Mark this student certificate eligible before transferring them to the Placement Pool', 400);
       }

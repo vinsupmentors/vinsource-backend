@@ -107,6 +107,8 @@ async function listStudentsSummary(studentWhere: Record<string, unknown>) {
       },
       portfolio: { select: { status: true, targetRole: true } },
       certificateRequests: { select: { type: true, feeApprovedAt: true, ldmApprovedAt: true, certificateNo: true } },
+      // Project presentation proof (trainer marks it done + uploads 2 photos) — shown to the advisor.
+      trainerFeedbacks: { select: { courseId: true, presentationDone: true, presentationAt: true, presentationPhotos: true, certificateEligible: true } },
       skillAdvisor: { select: employeeSelect },
     },
     orderBy: { joiningDate: 'desc' },

@@ -2635,6 +2635,12 @@ model TrainerFeedback {
   placementReadinessNote  String?  @db.Text
   jrpToIopRecommended     Boolean?
   certificateEligible     Boolean  @default(false)
+  // Project presentation — must be done (with 2 photos as proof) before the
+  // student can be made certificate-eligible / moved to IOP / pushed to placement.
+  presentationDone        Boolean  @default(false)
+  presentationAt          DateTime?
+  presentationPhotos      Json?    // ["/uploads/presentation-photos/a.jpg", "/uploads/presentation-photos/b.jpg"]
+  presentationMarkedById  String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

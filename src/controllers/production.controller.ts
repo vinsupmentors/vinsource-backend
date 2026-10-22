@@ -206,6 +206,16 @@ export async function generateSubBatchCode(db: typeof prisma, batchId: string, c
 }
 
 /** Resolves a sub-batch code (case-insensitive) to a schedule id. */
+/** Ids of students whose trainer marked the project presentation done (optionally for one course). */
+async function studentsWithPresentation(studentIds: string[], courseId?: string): Promise<Set<string>> {
+  if (!studentIds.length) return new Set();
+  const rows = await prisma.trainerFeedback.findMany({
+    where: { studentId: { in: studentIds }, presentationDone: true, ...(courseId ? { courseId } : {}) },
+    select: { studentId: true },
+  });
+  return new Set(rows.map((r) => r.studentId));
+}
+
 async function resolveScheduleByCode(subBatchCode: string): Promise<string> {
   const code = subBatchCode.trim().toUpperCase();
   const schedule = await prisma.batchCourseSchedule.findUnique({ where: { code } });
@@ -1202,13 +1212,17 @@ export const productionController = {
         track: track || { not: 'JRP' },
       };
 
-      const candidates = await prisma.student.findMany({
+      const allCandidates = await prisma.student.findMany({
         where: studentWhere,
-        select: { id: true, status: true, movedToPlacementAt: true },
+        select: { id: true, status: true, movedToPlacementAt: true, track: true },
       });
+      // Only students who completed their project presentation (2 photos) can go to Placements.
+      const doneIds = await studentsWithPresentation(allCandidates.map((c) => c.id), schedule.courseId);
+      const candidates = allCandidates.filter((c) => c.track === 'PT' || doneIds.has(c.id));
+      const skippedNoPresentation = allCandidates.length - candidates.length;
 
       if (!candidates.length) {
-        return res.json({ success: true, data: { pushed: 0, total: 0 } });
+        return res.json({ success: true, data: { pushed: 0, total: allCandidates.length, skippedNoPresentation } });
       }
 
       const now = new Date();
@@ -1238,7 +1252,8 @@ export const productionController = {
         success: true,
         data: {
           pushed: candidates.length,
-          total: candidates.length,
+          total: allCandidates.length,
+          skippedNoPresentation,
           schedule: { id: schedule.id, course: schedule.course.name, batch: schedule.batch.code },
           track: track || 'ALL',
         },
@@ -1279,7 +1294,9 @@ export const productionController = {
         // JRP is course-only, non-placement — silently exclude JRP students
         // from this bulk push rather than failing the whole batch.
         const skippedJrp = candidates.filter((c) => c.track === 'JRP').map((c) => c.id);
-        const eligible = candidates.filter((c) => c.track !== 'JRP');
+        const presentedIds = await studentsWithPresentation(candidates.filter((c) => c.track !== 'JRP').map((c) => c.id));
+        const eligible = candidates.filter((c) => c.track !== 'JRP' && (c.track === 'PT' || presentedIds.has(c.id)));
+        const skippedNoPresentation = candidates.filter((c) => c.track !== 'JRP').length - eligible.length;
         const now = new Date();
         const needsClockStart = eligible.filter((c) => !c.movedToPlacementAt).map((c) => c.id);
         const alreadyClocked = eligible.filter((c) => c.movedToPlacementAt).map((c) => c.id);
@@ -1301,7 +1318,7 @@ export const productionController = {
 
         await Promise.all(eligible.map((c) => ensureCourseCompletionCertRequest(c.id)));
 
-        return res.json({ success: true, data: { updated: eligible.length, status, skippedJrp: skippedJrp.length } });
+        return res.json({ success: true, data: { updated: eligible.length, status, skippedJrp: skippedJrp.length, skippedNoPresentation } });
       }
 
       const result = await prisma.student.updateMany({
