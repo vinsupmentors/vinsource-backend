@@ -161,7 +161,8 @@ export const trainerPortalController = {
       if (!enrollment) throw new AppError('You are not the assigned trainer for this student in this course', 403);
 
       const files = (req.files as Express.Multer.File[] | undefined) ?? [];
-      if (files.length !== 2) throw new AppError('Upload exactly two photos of the student presenting.', 400);
+      if (files.length < 2) throw new AppError('Add at least two photos of the student presenting.', 400);
+      if (files.length > 6) throw new AppError('You can add up to 6 photos.', 400);
 
       const when = req.body?.presentationDate ? new Date(String(req.body.presentationDate)) : new Date();
       if (isNaN(when.getTime())) throw new AppError('Invalid presentation date.', 400);

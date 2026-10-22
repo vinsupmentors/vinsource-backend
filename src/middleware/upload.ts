@@ -292,8 +292,8 @@ const presentationStorage = multer.diskStorage({
 export const uploadPresentationPhotos = multer({
   storage: presentationStorage,
   fileFilter: imageOnlyFilter,
-  limits: { fileSize: 8 * 1024 * 1024, files: 2 }, // 8 MB each
-}).array('photos', 2);
+  limits: { fileSize: 8 * 1024 * 1024, files: 6 }, // 8 MB each, up to 6
+}).array('photos', 6);
 
 // ── Student Onboarding: reusable signed-document PDF templates (admin) ──────
 const ONBOARDING_TEMPLATE_DIR = path.join(process.cwd(), 'uploads', 'onboarding-templates');
