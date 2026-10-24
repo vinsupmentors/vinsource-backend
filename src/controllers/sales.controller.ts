@@ -151,22 +151,46 @@ export const salesController = {
   // ── Leads ────────────────────────────────────────────────────────────────
   async listLeads(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { page = 1, limit = 20, status, search, assignedToId, followUp, activityStatus, source } = req.query;
+      const { page = 1, limit = 20, status, search, assignedToId, followUp, activityStatus, source, createdFrom, createdTo, followUpFrom, followUpTo, course } = req.query;
       const p = Number(page), l = Number(limit);
 
       const where: Record<string, unknown> = { deletedAt: null };
-      // status = lead stage; both filters accept a comma list for multi-select.
-      if (status) where.status = String(status).includes(',') ? { in: String(status).split(',') } : status;
-      if (activityStatus) where.activityStatus = String(activityStatus).includes(',') ? { in: String(activityStatus).split(',') } : activityStatus;
-      if (source) where.source = String(source);
-      if (assignedToId) where.assignedToId = assignedToId;
-      if (search) {
-        where.OR = [
-          { name: { contains: String(search) } },
-          { phone: { contains: String(search) } },
-          { email: { contains: String(search) } },
-        ];
+      // Every list filter accepts a comma list, so several values can be ticked at once.
+      const list = (v: unknown) => String(v).split(',').map((s) => s.trim()).filter(Boolean);
+      const multi = (v: unknown) => { const a = list(v); return a.length === 1 ? a[0] : { in: a }; };
+      const and: Record<string, unknown>[] = [];
+      // status = lead stage; activityStatus = the Update Status picked while logging an activity.
+      if (status) where.status = multi(status);
+      if (activityStatus) {
+        const a = list(activityStatus);
+        where.activityStatus = a.includes('NONE') ? undefined : multi(activityStatus);
+        if (a.includes('NONE')) and.push({ OR: [{ activityStatus: null }, ...(a.filter((x) => x !== 'NONE').length ? [{ activityStatus: { in: a.filter((x) => x !== 'NONE') } }] : [])] });
       }
+      if (source) {
+        const a = list(source);
+        if (a.includes('Unknown')) and.push({ OR: [{ source: null }, { source: '' }, ...(a.filter((x) => x !== 'Unknown').length ? [{ source: { in: a.filter((x) => x !== 'Unknown') } }] : [])] });
+        else where.source = multi(source);
+      }
+      if (course) where.courseInterest = multi(course);
+      if (assignedToId) where.assignedToId = list(assignedToId).includes('NONE') ? null : multi(assignedToId);
+      const range = (from: unknown, to: unknown) => {
+        const r: Record<string, Date> = {};
+        if (from) { const d = new Date(String(from)); d.setHours(0, 0, 0, 0); r.gte = d; }
+        if (to) { const d = new Date(String(to)); d.setHours(23, 59, 59, 999); r.lte = d; }
+        return r;
+      };
+      if (createdFrom || createdTo) where.createdAt = range(createdFrom, createdTo);
+      if ((followUpFrom || followUpTo) && !followUp) where.nextFollowUpAt = range(followUpFrom, followUpTo);
+      if (search) {
+        and.push({
+          OR: [
+            { name: { contains: String(search) } },
+            { phone: { contains: String(search) } },
+            { email: { contains: String(search) } },
+          ],
+        });
+      }
+      if (and.length) where.AND = and;
       // "Reminder" column filter — leads whose next-follow-up is overdue or due today.
       if (followUp === 'overdue' || followUp === 'today') {
         const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);

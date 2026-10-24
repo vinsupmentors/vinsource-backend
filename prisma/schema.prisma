@@ -680,6 +680,8 @@ model Employee {
   demosCoConducted  Demo[]              @relation("DemoCoConductor")
   leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
   leadHistoryActed  LeadHistory[]       @relation("LeadHistoryActor")
+  salesTasksAssigned SalesTask[]        @relation("SalesTaskAssignee")
+  salesTasksCreated  SalesTask[]        @relation("SalesTaskCreator")
   salesDevices      SalesDevice[]       @relation("SalesDeviceOwner")
   salesTargets      SalesTarget[]       @relation("SalesTargetOwner")
   salesTargetsSet   SalesTarget[]       @relation("SalesTargetSetBy")
@@ -1493,6 +1495,7 @@ model Lead {
   assignedTo  Employee?           @relation("LeadAssignee", fields: [assignedToId], references: [id])
   campaign    Campaign?           @relation(fields: [campaignId], references: [id])
   history     LeadHistory[]
+  tasks       SalesTask[]
   demos       Demo[]
   callLogs    LeadCallLog[]
   collections FeeCollection[]
@@ -1538,6 +1541,35 @@ model LeadCallLog {
 
   @@index([leadId])
   @@index([deviceId])
+}
+
+enum SalesTaskStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
+/// A to-do for a salesperson — created by themselves (My Reminders) or assigned
+/// by a Sales Admin (Manage Tasks), optionally tied to a lead.
+model SalesTask {
+  id           String          @id @default(uuid())
+  title        String
+  description  String?         @db.Text
+  leadId       String?
+  assignedToId String
+  createdById  String?
+  dueAt        DateTime?
+  status       SalesTaskStatus @default(OPEN)
+  completedAt  DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  lead       Lead?     @relation(fields: [leadId], references: [id])
+  assignedTo Employee  @relation("SalesTaskAssignee", fields: [assignedToId], references: [id])
+  createdBy  Employee? @relation("SalesTaskCreator", fields: [createdById], references: [id])
+
+  @@index([assignedToId, status])
+  @@index([leadId])
 }
 
 /// Append-only audit trail for a lead, from the moment it is created:

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { salesController } from '../controllers/sales.controller';
 import { callTrackingController } from '../controllers/callTracking.controller';
 import { salesDemoRoomController } from '../controllers/salesDemoRoom.controller';
+import { salesWorkController } from '../controllers/salesWork.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
 import { uploadDemoProof } from '../middleware/upload';
@@ -39,6 +40,19 @@ router.post('/demos', requireModule('SALES', 'EDIT'), salesController.createDemo
 // through untouched.
 router.put('/demos/:id', requireModule('SALES', 'EDIT'), uploadDemoProof, salesController.updateDemo);
 router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesController.rescheduleDemo);
+
+// Tasks / reminders (self-scoped inside the controller; Sales Admin can assign + see all).
+router.get('/reminders', salesWorkController.reminders);
+router.get('/tasks', salesWorkController.listTasks);
+router.post('/tasks', requireModule('SALES', 'EDIT'), salesWorkController.createTask);
+router.put('/tasks/:id', requireModule('SALES', 'EDIT'), salesWorkController.updateTask);
+router.get('/sources', salesWorkController.sources);
+
+// Summaries + activity monitor — Sales Admin.
+router.get('/insights/assignment', requireModule('SALES', 'ADMIN'), salesWorkController.assignmentSummary);
+router.get('/insights/stages', requireModule('SALES', 'ADMIN'), salesWorkController.stageSummary);
+router.get('/insights/sources', requireModule('SALES', 'ADMIN'), salesWorkController.sourceSummary);
+router.get('/activity-feed', requireModule('SALES', 'ADMIN'), salesWorkController.activityFeed);
 
 // Portal-hosted online demo room — BDA hosts, Sales Admin observes / approves reopen.
 router.get('/demo-rooms', requireModule('SALES', 'ADMIN'), salesDemoRoomController.board);
