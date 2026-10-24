@@ -1,11 +1,15 @@
 import { Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { CallDirection } from '@prisma/client';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { DeviceRequest } from '../middleware/deviceAuth';
 import { normalizePhone } from '../utils/phone';
+import { getEffectiveAccess } from '../utils/moduleAccess';
+import { CALL_RECORDING_DIR } from '../middleware/upload';
 
 const employeeSelect = { id: true, firstName: true, lastName: true } as const;
 
@@ -108,6 +112,106 @@ export const callTrackingController = {
       }
 
       res.status(201).json({ success: true, data: { id: log.id, matched: !!matchedLeadId } });
+    } catch (err) { next(err); }
+  },
+
+  // ─── Call recordings ───────────────────────────────────────────────────
+
+  /**
+   * The phone found the dialer's recording of a call it already reported and
+   * uploads it here (multipart field "recording"). Stored in a PRIVATE folder
+   * as <callLogId><ext>; LeadCallLog.recordingUrl points at the authenticated
+   * playback route below, never at a public file URL.
+   */
+  async uploadRecording(req: DeviceRequest, res: Response, next: NextFunction) {
+    const tmp = (req as DeviceRequest & { file?: Express.Multer.File }).file;
+    try {
+      if (!req.device) throw new AppError('Device not authenticated', 401);
+      if (!tmp) throw new AppError('recording file is required', 400);
+      const log = await prisma.leadCallLog.findUnique({ where: { id: req.params.id } });
+      if (!log) throw new AppError('Call log not found', 404);
+      if (log.deviceId !== req.device.id && log.calledById !== req.device.employeeId) {
+        throw new AppError('This call was not reported by your device', 403);
+      }
+      // Replace any earlier file for this call (re-upload / better match).
+      for (const f of fs.readdirSync(CALL_RECORDING_DIR)) {
+        if (f.startsWith(`${log.id}.`)) fs.unlinkSync(path.join(CALL_RECORDING_DIR, f));
+      }
+      const finalName = `${log.id}${path.extname(tmp.filename).toLowerCase()}`;
+      fs.renameSync(tmp.path, path.join(CALL_RECORDING_DIR, finalName));
+      await prisma.leadCallLog.update({ where: { id: log.id }, data: { recordingUrl: `/api/call-tracking/recordings/${log.id}` } });
+      res.status(201).json({ success: true, data: { id: log.id } });
+    } catch (err) {
+      if (tmp?.path) { try { fs.unlinkSync(tmp.path); } catch { /* already gone */ } }
+      next(err);
+    }
+  },
+
+  /** Authenticated playback — the BDA who made the call, Sales admins, Admin/Super Admin. */
+  async streamRecording(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const log = await prisma.leadCallLog.findUnique({ where: { id: req.params.id }, select: { id: true, calledById: true } });
+      if (!log) throw new AppError('Call log not found', 404);
+      const isOwner = !!req.user?.employeeId && log.calledById === req.user.employeeId;
+      let allowed = isOwner || req.user?.role === 'ADMIN' || req.user?.role === 'SUPER_ADMIN';
+      if (!allowed && req.user) allowed = (await getEffectiveAccess(req.user.userId)).SALES === 'ADMIN';
+      if (!allowed) throw new AppError('You do not have access to this recording', 403);
+
+      const file = fs.readdirSync(CALL_RECORDING_DIR).find((f) => f.startsWith(`${log.id}.`));
+      if (!file) throw new AppError('Recording not found', 404);
+      const ext = path.extname(file).toLowerCase();
+      const mime: Record<string, string> = {
+        '.m4a': 'audio/mp4', '.mp4': 'audio/mp4', '.mp3': 'audio/mpeg', '.amr': 'audio/amr', '.awb': 'audio/amr-wb',
+        '.3gp': 'audio/3gpp', '.aac': 'audio/aac', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac',
+      };
+      res.setHeader('Content-Type', mime[ext] || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'private, no-store');
+      // res.sendFile handles Range requests, so seeking in the <audio> player works.
+      res.sendFile(path.join(CALL_RECORDING_DIR, file));
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Answered AUTO calls older than 15 minutes that still have no recording —
+   * catches phones where auto-record got switched off, or the upload failed.
+   * Sales admin only (route-gated). ?days=7 (default), ?employeeId optional.
+   */
+  async missingRecordings(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
+      const since = new Date(Date.now() - days * 86400000);
+      const cutoff = new Date(Date.now() - 15 * 60000);
+      const where = {
+        source: 'AUTO' as const,
+        recordingUrl: null,
+        durationSeconds: { gt: 0 },
+        calledAt: { gte: since, lte: cutoff },
+        ...(req.query.employeeId ? { calledById: String(req.query.employeeId) } : {}),
+      };
+      const [rows, totalCalls] = await Promise.all([
+        prisma.leadCallLog.findMany({
+          where,
+          include: { calledBy: { select: employeeSelect }, lead: { select: { id: true, name: true } } },
+          orderBy: { calledAt: 'desc' },
+          take: 500,
+        }),
+        prisma.leadCallLog.count({
+          where: { source: 'AUTO', durationSeconds: { gt: 0 }, calledAt: { gte: since, lte: cutoff }, ...(req.query.employeeId ? { calledById: String(req.query.employeeId) } : {}) },
+        }),
+      ]);
+      // Per-BDA summary: how many answered calls vs. how many have no recording.
+      const byEmp = new Map<string, { name: string; missing: number }>();
+      for (const r of rows) {
+        const id = r.calledById || 'unknown';
+        const name = r.calledBy ? `${r.calledBy.firstName} ${r.calledBy.lastName}` : 'Unknown';
+        const cur = byEmp.get(id) ?? { name, missing: 0 };
+        cur.missing++;
+        byEmp.set(id, cur);
+      }
+      res.json({
+        success: true,
+        data: { days, totalAnsweredCalls: totalCalls, missingCount: rows.length, byEmployee: Array.from(byEmp.values()).sort((a, b) => b.missing - a.missing), calls: rows },
+      });
     } catch (err) { next(err); }
   },
 

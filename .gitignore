@@ -12,6 +12,7 @@ logs/
 
 # Uploads (if storing files locally)
 uploads/
+private-uploads/
 
 # IDE
 .vscode/

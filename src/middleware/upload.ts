@@ -277,6 +277,25 @@ export const uploadDemoProof = multer({
   limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
 }).single('proof');
 
+// ── Call tracker app: call recording audio (PRIVATE dir — never served statically) ──
+export const CALL_RECORDING_DIR = path.join(process.cwd(), 'private-uploads', 'call-recordings');
+if (!fs.existsSync(CALL_RECORDING_DIR)) fs.mkdirSync(CALL_RECORDING_DIR, { recursive: true });
+
+const AUDIO_EXTS = ['.m4a', '.mp3', '.amr', '.3gp', '.aac', '.wav', '.ogg', '.opus', '.mp4', '.flac', '.awb'];
+export const uploadCallRecording = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, CALL_RECORDING_DIR),
+    // Temp name — the controller verifies the device owns the call log, then renames to <logId><ext>.
+    filename: (_req, file, cb) => cb(null, `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 10)}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (AUDIO_EXTS.includes(ext)) cb(null, true);
+    else cb(new AppError(`Unsupported recording type "${ext || 'unknown'}"`, 400));
+  },
+  limits: { fileSize: 80 * 1024 * 1024 }, // 80 MB — long calls
+}).single('recording');
+
 // ── Trainer: project-presentation photos (exactly two images per student) ───
 const PRESENTATION_DIR = path.join(process.cwd(), 'uploads', 'presentation-photos');
 if (!fs.existsSync(PRESENTATION_DIR)) fs.mkdirSync(PRESENTATION_DIR, { recursive: true });

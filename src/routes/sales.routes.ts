@@ -64,6 +64,7 @@ router.get('/devices', requireModule('SALES', 'ADMIN'), callTrackingController.l
 router.post('/devices', requireModule('SALES', 'ADMIN'), callTrackingController.registerDevice);
 router.put('/devices/:id/deactivate', requireModule('SALES', 'ADMIN'), callTrackingController.deactivateDevice);
 
+router.get('/missing-recordings', requireModule('SALES', 'ADMIN'), callTrackingController.missingRecordings);
 router.get('/unmatched-calls', requireModule('SALES', 'EDIT'), callTrackingController.listUnmatchedCalls);
 router.post('/unmatched-calls/:id/link', requireModule('SALES', 'EDIT'), callTrackingController.linkUnmatchedCall);
 router.post('/unmatched-calls/:id/create-lead', requireModule('SALES', 'EDIT'), callTrackingController.createLeadFromUnmatchedCall);
