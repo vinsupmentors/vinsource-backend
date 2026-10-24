@@ -14,6 +14,7 @@ import { salesCronService } from './services/salesCron.service';
 import { feeReminderService } from './services/feeReminder.service';
 import { salesAdvisorReportService } from './services/salesAdvisorReport.service';
 import { cutExpiredDemoGuests } from './controllers/demoSessions.controller';
+import { closeExpiredSalesDemos } from './controllers/salesDemoRoom.controller';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -46,6 +47,8 @@ const start = async () => {
     // Demo sit-ins: remove prospects whose 20-minute window is up.
     cron.schedule('* * * * *', async () => {
       try { await cutExpiredDemoGuests(); } catch (err) { console.error('Demo guest cut-off failed:', err); }
+      // Sales online demos: close rooms whose 60 minutes are up (reopen then needs Sales Admin approval).
+      try { await closeExpiredSalesDemos(); } catch (err) { console.error('Sales demo close failed:', err); }
     });
 
     // Password change reminder — runs every day at 9:00 AM, emails anyone with mustChangePassword=true

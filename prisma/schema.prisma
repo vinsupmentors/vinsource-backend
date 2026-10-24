@@ -252,6 +252,22 @@ enum LeadLostReason {
   OTHER
 }
 
+/// "Update Status" chosen by the BDA when logging an activity. Drives the
+/// lead stage (LeadStatus) automatically — see STATUS_TO_STAGE in sales.controller.
+enum LeadActivityStatus {
+  DNP
+  FOLLOW_UP
+  DEMO_BOOKED
+  DEMO_OVER
+  NOT_INTERESTED
+  DISQUALIFIED
+}
+
+enum LeadActivityType {
+  CALL
+  MEETING
+}
+
 enum CallLogSource {
   MANUAL // BDA typed this in themselves via "Log a Call"
   AUTO   // reported automatically by a SalesDevice (Android call-tracking app)
@@ -663,6 +679,7 @@ model Employee {
   demosConducted    Demo[]              @relation("DemoConductor")
   demosCoConducted  Demo[]              @relation("DemoCoConductor")
   leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
+  leadHistoryActed  LeadHistory[]       @relation("LeadHistoryActor")
   salesDevices      SalesDevice[]       @relation("SalesDeviceOwner")
   salesTargets      SalesTarget[]       @relation("SalesTargetOwner")
   salesTargetsSet   SalesTarget[]       @relation("SalesTargetSetBy")
@@ -1462,11 +1479,20 @@ model Lead {
   // next-follow-up date forward into nextFollowUpAt ("Reminder" column).
   lastContactAt  DateTime?
   nextFollowUpAt DateTime?
+  // Latest "Update Status" from Log Activity (DNP / Follow-up / ...). `status`
+  // above is the lead STAGE and is derived from this.
+  activityStatus LeadActivityStatus?
+  // Soft delete — a deleted lead disappears from every screen but stays in
+  // the database with its full history.
+  deletedAt      DateTime?
+  deletedById    String?
+  createdById    String?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
   assignedTo  Employee?           @relation("LeadAssignee", fields: [assignedToId], references: [id])
   campaign    Campaign?           @relation(fields: [campaignId], references: [id])
+  history     LeadHistory[]
   demos       Demo[]
   callLogs    LeadCallLog[]
   collections FeeCollection[]
@@ -1494,6 +1520,10 @@ model LeadCallLog {
   calledAt       DateTime      @default(now())
   createdAt      DateTime      @default(now())
 
+  // Log Activity fields (null on older rows / auto-tracked calls)
+  activityType   LeadActivityType?
+  activityStatus LeadActivityStatus?
+
   // Auto-logging fields (all null for ordinary MANUAL rows)
   source          CallLogSource @default(MANUAL)
   direction       CallDirection?
@@ -1508,6 +1538,27 @@ model LeadCallLog {
 
   @@index([leadId])
   @@index([deviceId])
+}
+
+/// Append-only audit trail for a lead, from the moment it is created:
+/// creation (with source), assignment changes, status/stage changes, every
+/// activity logged, follow-up changes, field edits, deletion. Never edited or
+/// removed — this is what Sales Admin monitors.
+model LeadHistory {
+  id        String   @id @default(uuid())
+  leadId    String
+  actorId   String?
+  type      String   // CREATED | ASSIGNED | STATUS | STAGE | ACTIVITY | FOLLOW_UP | EDIT | DELETED | RESTORED
+  summary   String   @db.Text
+  fromValue String?
+  toValue   String?
+  createdAt DateTime @default(now())
+
+  lead  Lead      @relation(fields: [leadId], references: [id])
+  actor Employee? @relation("LeadHistoryActor", fields: [actorId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([actorId])
 }
 
 /// One row per company/business-SIM phone enrolled in the SIM call-tracking
@@ -1604,6 +1655,21 @@ model Demo {
   // "was today's demo conducted or rescheduled" report has a real trail
   // instead of overwriting the original date.
   rescheduledFromId String? @unique
+
+  // ── Online demo room (portal-hosted, ONLINE demos only) ───────────────────
+  // The BDA hosts, the prospect joins with a code, Sales Admin can observe at
+  // any time. The clock (maxMinutes) starts when the host first enters; once
+  // it runs out the room is closed and only a Sales Admin can reopen it.
+  roomName           String?   @unique
+  accessCode         String?   @unique
+  maxMinutes         Int       @default(60)
+  startedAt          DateTime?
+  expiresAt          DateTime?
+  closedAt           DateTime?
+  reopenCount        Int       @default(0)
+  reopenRequestedAt  DateTime?
+  reopenNote         String?   @db.Text
+
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 

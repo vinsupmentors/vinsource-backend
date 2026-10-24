@@ -52,11 +52,11 @@ export async function computeSalesPulse(range?: { start: Date; end: Date }): Pro
     lostToday,
   ] = await Promise.all([
     prisma.leadCallLog.count({ where: { calledAt: { gte: dayStart, lt: dayEnd } } }),
-    prisma.lead.count({ where: { createdAt: { gte: dayStart, lt: dayEnd } } }),
+    prisma.lead.count({ where: { deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } } }),
     prisma.demo.count({ where: { createdAt: { gte: dayStart, lt: dayEnd }, rescheduledFromId: null } }),
     prisma.demo.findMany({ where: { scheduledAt: { gte: dayStart, lt: dayEnd } }, select: { status: true } }),
-    prisma.lead.count({ where: { nextFollowUpAt: { gte: dayStart, lt: dayEnd } } }),
-    prisma.lead.count({ where: { nextFollowUpAt: { lt: dayStart } } }),
+    prisma.lead.count({ where: { deletedAt: null, nextFollowUpAt: { gte: dayStart, lt: dayEnd } } }),
+    prisma.lead.count({ where: { deletedAt: null, nextFollowUpAt: { lt: dayStart } } }),
     prisma.lead.count({ where: { status: 'ENROLLED', updatedAt: { gte: dayStart, lt: dayEnd } } }),
     prisma.lead.count({ where: { status: 'LOST', updatedAt: { gte: dayStart, lt: dayEnd } } }),
   ]);

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { salesController } from '../controllers/sales.controller';
 import { callTrackingController } from '../controllers/callTracking.controller';
+import { salesDemoRoomController } from '../controllers/salesDemoRoom.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
 import { uploadDemoProof } from '../middleware/upload';
@@ -19,6 +20,8 @@ router.get('/leads/:id', salesController.getLead);
 router.put('/leads/:id', requireModule('SALES', 'EDIT'), salesController.updateLead);
 router.delete('/leads/:id', requireModule('SALES', 'ADMIN'), salesController.deleteLead);
 
+router.get('/courses', salesController.courses);
+router.get('/leads/:id/history', salesController.leadHistory);
 router.get('/leads/:id/calls', salesController.listCallLogs);
 router.post('/leads/:id/calls', requireModule('SALES', 'EDIT'), salesController.addCallLog);
 
@@ -36,6 +39,13 @@ router.post('/demos', requireModule('SALES', 'EDIT'), salesController.createDemo
 // through untouched.
 router.put('/demos/:id', requireModule('SALES', 'EDIT'), uploadDemoProof, salesController.updateDemo);
 router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesController.rescheduleDemo);
+
+// Portal-hosted online demo room — BDA hosts, Sales Admin observes / approves reopen.
+router.get('/demo-rooms', requireModule('SALES', 'ADMIN'), salesDemoRoomController.board);
+router.post('/demos/:id/room/host', requireModule('SALES', 'EDIT'), salesDemoRoomController.host);
+router.post('/demos/:id/room/observe', requireModule('SALES', 'ADMIN'), salesDemoRoomController.observe);
+router.post('/demos/:id/room/reopen-request', requireModule('SALES', 'EDIT'), salesDemoRoomController.requestReopen);
+router.post('/demos/:id/room/reopen', requireModule('SALES', 'ADMIN'), salesDemoRoomController.decideReopen);
 
 // Sales Pulse / Lead Quality are management-level views (aggregate numbers
 // across every rep) — restricted to SALES ADMIN. BDAs get their own

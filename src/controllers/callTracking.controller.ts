@@ -77,7 +77,7 @@ export const callTrackingController = {
       // in a hot path.
       let matchedLeadId: string | null = null;
       if (normalized) {
-        const leads = await prisma.lead.findMany({ select: { id: true, phone: true } });
+        const leads = await prisma.lead.findMany({ where: { deletedAt: null }, select: { id: true, phone: true } });
         const leadMatch = leads.find((l) => normalizePhone(l.phone) === normalized);
         if (leadMatch) {
           matchedLeadId = leadMatch.id;

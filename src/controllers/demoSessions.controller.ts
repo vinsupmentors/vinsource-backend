@@ -261,6 +261,32 @@ export const publicDemoController = {
       const email = String(req.body?.email || '').trim().toLowerCase();
       if (!code || !email) throw new AppError('Enter your access code and email.', 400);
 
+      // Sales online demo (hosted by a BDA in its own room) — checked before class sit-ins.
+      const sd = await prisma.demo.findUnique({
+        where: { accessCode: code },
+        include: { lead: { select: { name: true, email: true } } },
+      });
+      if (sd) {
+        if (sd.mode !== 'ONLINE' || !sd.roomName || (sd.lead.email || '').toLowerCase() !== email || sd.status === 'CANCELLED' || sd.status === 'RESCHEDULED') {
+          throw new AppError('That code and email do not match an approved demo.', 403);
+        }
+        if (sd.closedAt || (sd.expiresAt && sd.expiresAt.getTime() <= Date.now())) {
+          throw new AppError('This demo session has ended. Thank you for joining — please contact your advisor if you need more time.', 403);
+        }
+        const title = `Demo — ${sd.courseEnquired || 'Vinsup Skill Academy'}`;
+        // The host starts the clock; until then the prospect waits (the page keeps polling).
+        if (!sd.startedAt || !sd.expiresAt) return res.json({ success: true, data: { waiting: true, title } });
+        if (!req.body?.enter) {
+          return res.json({ success: true, data: { waiting: false, ready: true, title, course: sd.courseEnquired || 'Demo', maxMinutes: sd.maxMinutes, expiresAt: sd.expiresAt } });
+        }
+        const remaining = Math.max(30, Math.floor((sd.expiresAt.getTime() - Date.now()) / 1000));
+        const token = await mintAccessToken({
+          roomName: sd.roomName, identity: `guest-${sd.id}`, name: `${sd.lead.name} (Demo)`,
+          metadata: JSON.stringify({ role: 'STUDENT', demo: true }), ttlSeconds: remaining,
+        });
+        return res.json({ success: true, data: { waiting: false, token, url: getLiveKitUrl(), title, course: sd.courseEnquired || 'Demo', maxMinutes: sd.maxMinutes, expiresAt: sd.expiresAt } });
+      }
+
       const r = await prisma.demoSessionRequest.findUnique({ where: { accessCode: code } });
       // Same message for every mismatch so codes can't be probed.
       if (!r || r.mode !== 'ONLINE' || r.status !== 'APPROVED' || (r.attendeeEmail || '').toLowerCase() !== email) {
