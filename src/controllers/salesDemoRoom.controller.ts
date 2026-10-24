@@ -40,7 +40,7 @@ export async function salesAdmins(): Promise<{ userId: string; email: string | n
   const [grants, emps] = await Promise.all([
     prisma.userModuleAccess.findMany({ where: { module: 'SALES', accessLevel: 'ADMIN' }, include: { user: { include: { employee: true } } } }),
     prisma.employee.findMany({
-      where: { status: 'ACTIVE', userId: { not: null }, department: { moduleAccessDefaults: { some: { module: 'SALES', accessLevel: 'ADMIN' } } } },
+      where: { status: 'ACTIVE', department: { moduleAccessDefaults: { some: { module: 'SALES', accessLevel: 'ADMIN' } } } },
       select: { userId: true, email: true, firstName: true, lastName: true },
     }),
   ]);
