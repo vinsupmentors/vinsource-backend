@@ -15,6 +15,14 @@ async function isAdmin(req: AuthRequest): Promise<boolean> {
   return (await getEffectiveAccess(req.user.userId)).SALES === 'ADMIN';
 }
 
+/** A BDA may only touch leads assigned to them; Sales Admin may touch any. */
+async function assertLeadAccess(req: AuthRequest, leadId: string): Promise<void> {
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { assignedToId: true, deletedAt: true } });
+  if (!lead || lead.deletedAt) throw new AppError('Lead not found', 404);
+  if (await isAdmin(req)) return;
+  if (lead.assignedToId !== req.user?.employeeId) throw new AppError('You do not have access to this lead', 403);
+}
+
 function requireEmployee(req: AuthRequest): string {
   if (!req.user?.employeeId) throw new AppError('Your account is not linked to an employee record', 400);
   return req.user.employeeId;
@@ -58,15 +66,43 @@ export const salesWorkController = {
     } catch (err) { next(err); }
   },
 
+  // ── Lead notes (standalone — no status / follow-up change) ───────────────
+  async listNotes(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      await assertLeadAccess(req, req.params.id);
+      const rows = await prisma.leadNote.findMany({ where: { leadId: req.params.id }, include: { author: { select: empSelect } }, orderBy: { createdAt: 'desc' } });
+      res.json({ success: true, data: rows });
+    } catch (err) { next(err); }
+  },
+
+  async addNote(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      await assertLeadAccess(req, req.params.id);
+      const body = String(req.body?.body || '').trim();
+      if (!body) throw new AppError('Write a note first', 400);
+      const note = await prisma.leadNote.create({
+        data: { leadId: req.params.id, authorId: req.user?.employeeId || null, body },
+        include: { author: { select: empSelect } },
+      });
+      await prisma.leadHistory.create({ data: { leadId: req.params.id, actorId: req.user?.employeeId || null, type: 'NOTE', summary: `Note added: ${body.slice(0, 200)}` } }).catch(() => {});
+      res.status(201).json({ success: true, data: note });
+    } catch (err) { next(err); }
+  },
+
   // ── Tasks ─────────────────────────────────────────────────────────────────
   async listTasks(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const admin = await isAdmin(req);
-      const { status, assignedToId, page = 1, limit = 50 } = req.query;
+      const { status, assignedToId, leadId, page = 1, limit = 50 } = req.query;
       const p = Number(page), l = Math.min(Number(limit) || 50, 200);
       const where: Record<string, unknown> = {};
       if (status) where.status = status;
-      if (admin) { if (assignedToId) where.assignedToId = assignedToId; }
+      if (leadId) {
+        // On a lead's own screen: everyone with access to that lead sees every task on it.
+        await assertLeadAccess(req, String(leadId));
+        where.leadId = String(leadId);
+        if (admin && assignedToId) where.assignedToId = assignedToId;
+      } else if (admin) { if (assignedToId) where.assignedToId = assignedToId; }
       else where.assignedToId = requireEmployee(req);
 
       const [rows, total] = await Promise.all([

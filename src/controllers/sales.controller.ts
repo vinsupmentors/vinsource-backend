@@ -423,7 +423,8 @@ export const salesController = {
   async updateLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await assertLeadAccess(req, req.params.id);
-      const { name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes, lostReason } = req.body;
+      const { name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes, lostReason,
+        city, educationQualification, collegeName, passedOutYear, currentStatus } = req.body;
       if (status === 'LOST' && !lostReason) {
         throw new AppError('A reason is required when marking a lead as Lost', 400);
       }
@@ -436,6 +437,12 @@ export const salesController = {
         where: { id: req.params.id },
         data: {
           name, phone, email, source, courseInterest, status, assignedToId, campaignId, notes,
+          // Profile-tab edits: blank clears the value.
+          city: city !== undefined ? (city || null) : undefined,
+          educationQualification: educationQualification !== undefined ? (educationQualification || null) : undefined,
+          collegeName: collegeName !== undefined ? (collegeName || null) : undefined,
+          passedOutYear: passedOutYear !== undefined ? (passedOutYear ? Number(passedOutYear) : null) : undefined,
+          currentStatus: currentStatus !== undefined ? (currentStatus || null) : undefined,
           // Only a LOST lead carries a reason — clear it the moment status moves elsewhere,
           // so re-opened leads don't keep showing a stale "why it was lost" reason.
           lostReason: status === 'LOST' ? lostReason : status !== undefined ? null : undefined,
@@ -456,6 +463,8 @@ export const salesController = {
       const cmp: Record<string, [unknown, unknown]> = {
         name: [name, before.name], phone: [phone, before.phone], email: [email, before.email], source: [source, before.source],
         courseInterest: [courseInterest, before.courseInterest], notes: [notes, before.notes],
+        city: [city, before.city], educationQualification: [educationQualification, before.educationQualification],
+        collegeName: [collegeName, before.collegeName], currentStatus: [currentStatus, before.currentStatus],
       };
       for (const [k, [next_, prev]] of Object.entries(cmp)) {
         if (next_ !== undefined && (next_ || null) !== (prev || null)) changed.push(k);

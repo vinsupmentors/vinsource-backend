@@ -680,6 +680,7 @@ model Employee {
   demosCoConducted  Demo[]              @relation("DemoCoConductor")
   leadCallsLogged   LeadCallLog[]       @relation("LeadCallLogBy")
   leadHistoryActed  LeadHistory[]       @relation("LeadHistoryActor")
+  leadNotesWritten   LeadNote[]         @relation("LeadNoteAuthor")
   salesTasksAssigned SalesTask[]        @relation("SalesTaskAssignee")
   salesTasksCreated  SalesTask[]        @relation("SalesTaskCreator")
   salesDevices      SalesDevice[]       @relation("SalesDeviceOwner")
@@ -1496,6 +1497,7 @@ model Lead {
   campaign    Campaign?           @relation(fields: [campaignId], references: [id])
   history     LeadHistory[]
   tasks       SalesTask[]
+  leadNotes   LeadNote[]
   demos       Demo[]
   callLogs    LeadCallLog[]
   collections FeeCollection[]
@@ -1541,6 +1543,20 @@ model LeadCallLog {
 
   @@index([leadId])
   @@index([deviceId])
+}
+
+/// Standalone note on a lead — doesn't touch status or follow-up (unlike Log Activity).
+model LeadNote {
+  id        String   @id @default(uuid())
+  leadId    String
+  authorId  String?
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  lead   Lead      @relation(fields: [leadId], references: [id])
+  author Employee? @relation("LeadNoteAuthor", fields: [authorId], references: [id])
+
+  @@index([leadId, createdAt])
 }
 
 enum SalesTaskStatus {

@@ -43,6 +43,8 @@ router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesContro
 
 // Tasks / reminders (self-scoped inside the controller; Sales Admin can assign + see all).
 router.get('/reminders', salesWorkController.reminders);
+router.get('/leads/:id/notes', salesWorkController.listNotes);
+router.post('/leads/:id/notes', requireModule('SALES', 'EDIT'), salesWorkController.addNote);
 router.get('/tasks', salesWorkController.listTasks);
 router.post('/tasks', requireModule('SALES', 'EDIT'), salesWorkController.createTask);
 router.put('/tasks/:id', requireModule('SALES', 'EDIT'), salesWorkController.updateTask);
