@@ -1545,6 +1545,20 @@ model LeadCallLog {
   @@index([deviceId])
 }
 
+/// A saved advanced filter (see utils/filterTree.ts). Private to its owner unless an admin shares it.
+model SavedFilter {
+  id        String   @id @default(uuid())
+  scope     String   // leads | callLog | activity | comfort
+  name      String
+  tree      Json
+  ownerId   String?
+  shared    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scope, ownerId])
+}
+
 /// Standalone note on a lead — doesn't touch status or follow-up (unlike Log Activity).
 model LeadNote {
   id        String   @id @default(uuid())

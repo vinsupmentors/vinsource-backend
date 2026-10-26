@@ -5,6 +5,8 @@ import { AuthRequest } from '../types';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { notificationService } from '../services/notification.service';
 import { paginate, formatPagination } from '../utils/helpers';
+import { buildWhereFromFilter } from '../utils/filterTree';
+import { FEED_FILTER_FIELDS, LEAD_FILTER_FIELDS } from '../utils/salesFilterFields';
 
 const empSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 const fullName = (e?: { firstName: string; lastName: string } | null) => (e ? `${e.firstName} ${e.lastName}` : 'Unassigned');
@@ -247,6 +249,136 @@ export const salesWorkController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Sales report builder: group leads by one dimension (rows) and optionally split by a second (cols).
+   * Without cols → a metrics table (leads, open, demo, enrolled, lost, conversion, overdue).
+   * With cols → a cross-tab of lead counts with row/column totals.
+   */
+  async salesReport(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const rowsDim = String(req.query.rows || 'source');
+      const colsDim = req.query.cols ? String(req.query.cols) : '';
+      const IST = 5.5 * 3600 * 1000;
+      const iso = (d: Date) => new Date(d.getTime() + IST).toISOString();
+      type L = {
+        id: string; source: string | null; assignedToId: string | null; createdById: string | null; status: string; activityStatus: string | null;
+        courseInterest: string | null; city: string | null; collegeName: string | null; educationQualification: string | null;
+        createdAt: Date; nextFollowUpAt: Date | null; lastContactAt: Date | null;
+        calls: number; meetings: number; demos: number; demosDone: number; openTasks: number;
+      };
+      const DAY = 86400000;
+      const ageDays = (l: L) => Math.floor((Date.now() - l.createdAt.getTime()) / DAY);
+      const bucket = (n: number, edges: [number, string][], last: string) => { for (const [max, label] of edges) if (n <= max) return label; return last; };
+      const names = new Map((await prisma.employee.findMany({ select: empSelect })).map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
+      const txt = (v: string | null) => (v || '').trim() || 'Unknown';
+      const DIMS: Record<string, (l: L) => string> = {
+        source: (l) => txt(l.source),
+        assignedTo: (l) => (l.assignedToId ? names.get(l.assignedToId) || 'Unknown' : 'Unassigned'),
+        stage: (l) => l.status.replace(/_/g, ' '),
+        updateStatus: (l) => (l.activityStatus ? l.activityStatus.replace(/_/g, ' ') : 'No status yet'),
+        course: (l) => txt(l.courseInterest),
+        city: (l) => txt(l.city),
+        college: (l) => txt(l.collegeName),
+        qualification: (l) => txt(l.educationQualification),
+        createdMonth: (l) => iso(l.createdAt).slice(0, 7),
+        createdDay: (l) => iso(l.createdAt).slice(0, 10),
+        createdBy: (l) => (l.createdById ? names.get(l.createdById) || 'Unknown' : 'System / import'),
+        leadAge: (l) => bucket(ageDays(l), [[7, '0-7 days'], [30, '8-30 days'], [90, '31-90 days']], '90+ days'),
+        activityCount: (l) => bucket(l.calls + l.meetings, [[0, 'No activity'], [2, '1-2'], [5, '3-5']], '6+'),
+        lastContact: (l) => (l.lastContactAt ? bucket(Math.floor((Date.now() - l.lastContactAt.getTime()) / DAY), [[2, 'Last 2 days'], [7, '3-7 days'], [30, '8-30 days']], '30+ days ago') : 'Never contacted'),
+        followUp: (l) => (!l.nextFollowUpAt ? 'No follow-up set' : l.nextFollowUpAt < startOfToday() ? 'Overdue' : l.nextFollowUpAt.getTime() < startOfToday().getTime() + DAY ? 'Today' : 'Upcoming'),
+      };
+      const MEASURES: Record<string, (l: L) => number> = {
+        leads: () => 1,
+        activities: (l) => l.calls + l.meetings,
+        calls: (l) => l.calls,
+        meetings: (l) => l.meetings,
+        demos: (l) => l.demos,
+        demosDone: (l) => l.demosDone,
+        openTasks: (l) => l.openTasks,
+      };
+      const measure = String(req.query.measure || 'leads');
+      if (!MEASURES[measure]) throw new AppError('Unknown report measure', 400);
+      if (!DIMS[rowsDim]) throw new AppError('Unknown report grouping', 400);
+      if (colsDim && !DIMS[colsDim]) throw new AppError('Unknown report column grouping', 400);
+
+      const where: Record<string, unknown> = { deletedAt: null };
+      const range: Record<string, Date> = {};
+      if (req.query.from) range.gte = new Date(`${String(req.query.from)}T00:00:00+05:30`);
+      if (req.query.to) range.lte = new Date(`${String(req.query.to)}T23:59:59.999+05:30`);
+      if (range.gte || range.lte) where.createdAt = range;
+      if (req.query.assignedToId) where.assignedToId = String(req.query.assignedToId);
+      const advanced = buildWhereFromFilter(req.query.filter, LEAD_FILTER_FIELDS);
+      if (advanced) where.AND = [advanced];
+
+      const base = await prisma.lead.findMany({
+        where,
+        select: { id: true, source: true, assignedToId: true, createdById: true, status: true, activityStatus: true, courseInterest: true, city: true, collegeName: true, educationQualification: true, createdAt: true, nextFollowUpAt: true, lastContactAt: true },
+      });
+      // Activity / demo / task counts per lead, scoped to the same lead filter.
+      const [acts, demoRows, taskRows] = await Promise.all([
+        prisma.leadCallLog.groupBy({ by: ['leadId', 'activityType'], where: { lead: where }, _count: { _all: true } }),
+        prisma.demo.groupBy({ by: ['leadId', 'status'], where: { lead: where }, _count: { _all: true } }),
+        prisma.salesTask.groupBy({ by: ['leadId'], where: { lead: where, status: 'OPEN' }, _count: { _all: true } }),
+      ]);
+      const stats = new Map<string, { calls: number; meetings: number; demos: number; demosDone: number; openTasks: number }>();
+      const st = (id: string) => { if (!stats.has(id)) stats.set(id, { calls: 0, meetings: 0, demos: 0, demosDone: 0, openTasks: 0 }); return stats.get(id)!; };
+      for (const a of acts) { if (!a.leadId) continue; const s = st(a.leadId); if (a.activityType === 'MEETING') s.meetings += a._count._all; else s.calls += a._count._all; }
+      for (const d of demoRows) { const s = st(d.leadId); if (d.status !== 'RESCHEDULED') s.demos += d._count._all; if (d.status === 'COMPLETED') s.demosDone += d._count._all; }
+      for (const t of taskRows) { if (t.leadId) st(t.leadId).openTasks += t._count._all; }
+      const leads: L[] = base.map((b) => ({ ...b, ...(stats.get(b.id) || { calls: 0, meetings: 0, demos: 0, demosDone: 0, openTasks: 0 }) }));
+
+      const today = startOfToday();
+      const sortKey = (a: string, b: string) => (rowsDim.startsWith('created') ? b.localeCompare(a) : 0);
+
+      if (!colsDim) {
+        const map = new Map<string, { label: string; total: number; open: number; demoBooked: number; demoOver: number; enrolled: number; lost: number; overdue: number; calls: number; meetings: number; demos: number; demosDone: number; openTasks: number; noActivity: number; ageSum: number }>();
+        for (const l of leads) {
+          const k = DIMS[rowsDim](l);
+          if (!map.has(k)) map.set(k, { label: k, total: 0, open: 0, demoBooked: 0, demoOver: 0, enrolled: 0, lost: 0, overdue: 0, calls: 0, meetings: 0, demos: 0, demosDone: 0, openTasks: 0, noActivity: 0, ageSum: 0 });
+          const m = map.get(k)!;
+          m.total++;
+          m.calls += l.calls; m.meetings += l.meetings; m.demos += l.demos; m.demosDone += l.demosDone; m.openTasks += l.openTasks;
+          if (l.calls + l.meetings === 0) m.noActivity++;
+          m.ageSum += ageDays(l);
+          if (l.status === 'ENROLLED') m.enrolled++;
+          else if (l.status === 'LOST') m.lost++;
+          else {
+            m.open++;
+            if (l.nextFollowUpAt && l.nextFollowUpAt < today) m.overdue++;
+          }
+          if (l.activityStatus === 'DEMO_BOOKED') m.demoBooked++;
+          if (l.activityStatus === 'DEMO_OVER') m.demoOver++;
+        }
+        const data = Array.from(map.values())
+          .map(({ ageSum, ...m }) => ({
+            ...m,
+            conversion: m.total ? Math.round((m.enrolled / m.total) * 1000) / 10 : 0,
+            avgAgeDays: m.total ? Math.round(ageSum / m.total) : 0,
+            activities: m.calls + m.meetings,
+            avgActivities: m.total ? Math.round(((m.calls + m.meetings) / m.total) * 10) / 10 : 0,
+          }))
+          .sort((a, b) => (rowsDim.startsWith('created') ? sortKey(a.label, b.label) : b.total - a.total));
+        return res.json({ success: true, data: { mode: 'metrics', total: leads.length, rows: data } });
+      }
+
+      const colSet = new Set<string>();
+      const grid = new Map<string, Record<string, number>>();
+      for (const l of leads) {
+        const r = DIMS[rowsDim](l), c = DIMS[colsDim](l);
+        colSet.add(c);
+        if (!grid.has(r)) grid.set(r, {});
+        const row = grid.get(r)!;
+        row[c] = (row[c] || 0) + MEASURES[measure](l);
+      }
+      const cols = Array.from(colSet).sort((a, b) => (colsDim.startsWith('created') ? a.localeCompare(b) : a.localeCompare(b)));
+      const rows = Array.from(grid.entries())
+        .map(([label, cells]) => ({ label, cells, total: Object.values(cells).reduce((s, n) => s + n, 0) }))
+        .sort((a, b) => (rowsDim.startsWith('created') ? sortKey(a.label, b.label) : b.total - a.total));
+      res.json({ success: true, data: { mode: 'pivot', measure, total: rows.reduce((s, r) => s + r.total, 0), cols, rows } });
+    } catch (err) { next(err); }
+  },
+
   /** Distinct sources already used — feeds the Source filter and the Add Lead suggestions. */
   async sources(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -270,6 +402,8 @@ export const salesWorkController = {
         if (to) { const d = new Date(String(to)); d.setHours(23, 59, 59, 999); range.lte = d; }
         where.createdAt = range;
       }
+      const advanced = buildWhereFromFilter(req.query.filter, FEED_FILTER_FIELDS);
+      if (advanced) where.AND = [advanced];
       const [rows, total, byActor] = await Promise.all([
         prisma.leadHistory.findMany({
           where,

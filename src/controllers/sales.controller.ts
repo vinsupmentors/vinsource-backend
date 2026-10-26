@@ -8,6 +8,8 @@ import { computeSalesPulse } from '../services/salesPulse.service';
 import { computeSalesLeaderboard } from '../services/salesLeaderboard.service';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { announceOnlineDemo, newDemoCode } from './salesDemoRoom.controller';
+import { buildWhereFromFilter } from '../utils/filterTree';
+import { LEAD_FILTER_FIELDS, CALL_FILTER_FIELDS } from '../utils/salesFilterFields';
 import { normalizePhone } from '../utils/phone';
 import { computeRankCard } from '../utils/rankCard';
 import { getOnboardingStatus, reconcileFlagsBatch } from '../utils/onboardingStatus';
@@ -190,6 +192,9 @@ export const salesController = {
           ],
         });
       }
+      // Advanced filter builder (groups of AND/OR conditions) — applied on top of the quick filters.
+      const advanced = buildWhereFromFilter(req.query.filter, LEAD_FILTER_FIELDS);
+      if (advanced) and.push(advanced);
       if (and.length) where.AND = and;
       // "Reminder" column filter — leads whose next-follow-up is overdue or due today.
       if (followUp === 'overdue' || followUp === 'today') {
@@ -546,13 +551,17 @@ export const salesController = {
         where.calledById = employeeId;
       }
 
-      if (!phone) {
+      // With an advanced filter active, the daily view's date limit steps aside (the filter can set its own dates).
+      const advanced = buildWhereFromFilter(req.query.filter, CALL_FILTER_FIELDS);
+      if (!phone && !advanced) {
         const day = date ? new Date(String(date)) : new Date();
         if (isNaN(day.getTime())) throw new AppError('Invalid date', 400);
         const start = new Date(day); start.setHours(0, 0, 0, 0);
         const end = new Date(start); end.setDate(end.getDate() + 1);
         where.calledAt = { gte: start, lt: end };
       }
+
+      if (advanced) where.AND = [advanced];
 
       const include = {
         calledBy: { select: employeeSelect },

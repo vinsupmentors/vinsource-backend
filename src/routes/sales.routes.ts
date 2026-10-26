@@ -54,6 +54,7 @@ router.get('/sources', salesWorkController.sources);
 router.get('/insights/assignment', requireModule('SALES', 'ADMIN'), salesWorkController.assignmentSummary);
 router.get('/insights/stages', requireModule('SALES', 'ADMIN'), salesWorkController.stageSummary);
 router.get('/insights/sources', requireModule('SALES', 'ADMIN'), salesWorkController.sourceSummary);
+router.get('/insights/report', requireModule('SALES', 'ADMIN'), salesWorkController.salesReport);
 router.get('/activity-feed', requireModule('SALES', 'ADMIN'), salesWorkController.activityFeed);
 
 // Portal-hosted online demo room — BDA hosts, Sales Admin observes / approves reopen.
