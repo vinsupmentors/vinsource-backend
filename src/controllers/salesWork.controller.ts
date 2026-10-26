@@ -6,6 +6,8 @@ import { getEffectiveAccess } from '../utils/moduleAccess';
 import { notificationService } from '../services/notification.service';
 import { paginate, formatPagination } from '../utils/helpers';
 import { buildWhereFromFilter } from '../utils/filterTree';
+import { historyCutoff } from '../utils/leadHistoryVisibility';
+import { leadConfig } from '../utils/leadConfig';
 import { FEED_FILTER_FIELDS, LEAD_FILTER_FIELDS } from '../utils/salesFilterFields';
 
 const empSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
@@ -72,7 +74,8 @@ export const salesWorkController = {
   async listNotes(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await assertLeadAccess(req, req.params.id);
-      const rows = await prisma.leadNote.findMany({ where: { leadId: req.params.id }, include: { author: { select: empSelect } }, orderBy: { createdAt: 'desc' } });
+      const cutoff = await historyCutoff(await isAdmin(req), req.params.id);
+      const rows = await prisma.leadNote.findMany({ where: { leadId: req.params.id, ...(cutoff ? { createdAt: { gte: cutoff } } : {}) }, include: { author: { select: empSelect } }, orderBy: { createdAt: 'desc' } });
       res.json({ success: true, data: rows });
     } catch (err) { next(err); }
   },
@@ -103,6 +106,8 @@ export const salesWorkController = {
         // On a lead's own screen: everyone with access to that lead sees every task on it.
         await assertLeadAccess(req, String(leadId));
         where.leadId = String(leadId);
+        const cutoff = await historyCutoff(admin, String(leadId));
+        if (cutoff) where.createdAt = { gte: cutoff };
         if (admin && assignedToId) where.assignedToId = assignedToId;
       } else if (admin) { if (assignedToId) where.assignedToId = assignedToId; }
       else where.assignedToId = requireEmployee(req);
@@ -261,11 +266,12 @@ export const salesWorkController = {
       const IST = 5.5 * 3600 * 1000;
       const iso = (d: Date) => new Date(d.getTime() + IST).toISOString();
       type L = {
-        id: string; source: string | null; assignedToId: string | null; createdById: string | null; status: string; activityStatus: string | null;
+        id: string; source: string | null; assignedToId: string | null; createdById: string | null; status: string; activityStatus: string | null; stageKey: string | null; statusKey: string | null; scoutKey: string | null;
         courseInterest: string | null; city: string | null; collegeName: string | null; educationQualification: string | null;
         createdAt: Date; nextFollowUpAt: Date | null; lastContactAt: Date | null;
         calls: number; meetings: number; demos: number; demosDone: number; openTasks: number;
       };
+      const cfgR = await leadConfig();
       const DAY = 86400000;
       const ageDays = (l: L) => Math.floor((Date.now() - l.createdAt.getTime()) / DAY);
       const bucket = (n: number, edges: [number, string][], last: string) => { for (const [max, label] of edges) if (n <= max) return label; return last; };
@@ -274,8 +280,9 @@ export const salesWorkController = {
       const DIMS: Record<string, (l: L) => string> = {
         source: (l) => txt(l.source),
         assignedTo: (l) => (l.assignedToId ? names.get(l.assignedToId) || 'Unknown' : 'Unassigned'),
-        stage: (l) => l.status.replace(/_/g, ' '),
-        updateStatus: (l) => (l.activityStatus ? l.activityStatus.replace(/_/g, ' ') : 'No status yet'),
+        stage: (l) => cfgR.label('STAGE', l.stageKey || l.status),
+        updateStatus: (l) => (l.statusKey || l.activityStatus ? cfgR.label('STATUS', l.statusKey || l.activityStatus) : 'No status yet'),
+        scout: (l) => (l.scoutKey ? cfgR.label('SCOUT', l.scoutKey) : 'No scout'),
         course: (l) => txt(l.courseInterest),
         city: (l) => txt(l.city),
         college: (l) => txt(l.collegeName),
@@ -313,7 +320,7 @@ export const salesWorkController = {
 
       const base = await prisma.lead.findMany({
         where,
-        select: { id: true, source: true, assignedToId: true, createdById: true, status: true, activityStatus: true, courseInterest: true, city: true, collegeName: true, educationQualification: true, createdAt: true, nextFollowUpAt: true, lastContactAt: true },
+        select: { id: true, source: true, assignedToId: true, createdById: true, status: true, activityStatus: true, stageKey: true, statusKey: true, scoutKey: true, courseInterest: true, city: true, collegeName: true, educationQualification: true, createdAt: true, nextFollowUpAt: true, lastContactAt: true },
       });
       // Activity / demo / task counts per lead, scoped to the same lead filter.
       const [acts, demoRows, taskRows] = await Promise.all([

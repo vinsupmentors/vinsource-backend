@@ -67,6 +67,15 @@ export const config = {
   // needed, just a distinct bucket name with public access left off. Blank
   // bucket = recording is silently skipped (class still starts normally).
   R2_RECORDINGS_BUCKET: process.env.R2_RECORDINGS_BUCKET || '',
+  // Call / demo transcription — free self-hosted Whisper (see /whisper-service). Blank WHISPER_URL = transcription off.
+  WHISPER_URL: (process.env.WHISPER_URL || '').replace(/\/$/, ''),
+  WHISPER_TOKEN: process.env.WHISPER_TOKEN || '',
+  // Optional local LLM via Ollama (runs on your own server — nothing leaves the machine). Takes priority over Gemini.
+  OLLAMA_URL: (process.env.OLLAMA_URL || '').replace(/\/$/, ''),
+  OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'qwen2.5:7b',
+  // Optional free LLM (Google AI Studio free tier) for summary + action items. Blank = transcripts only.
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+  GEMINI_MODEL: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
   // Same LIVEKIT_API_KEY/SECRET sign the Egress webhook LiveKit posts back to
   // this server — no separate webhook secret to configure.
 

@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import prisma from '../config/database';
+import { leadPhoneKey } from '../utils/leadPhone';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { getEffectiveAccess } from '../utils/moduleAccess';
@@ -622,6 +623,7 @@ export const admissionController = {
           data: {
             name,
             phone,
+            phoneKey: leadPhoneKey(phone),
             email: newLead?.email || undefined,
             city: newLead?.city || undefined,
             passedOutYear: newLead?.passedOutYear ? Number(newLead.passedOutYear) : undefined,

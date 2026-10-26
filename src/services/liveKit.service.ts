@@ -219,6 +219,37 @@ export async function startEgress(roomName: string, liveClassId: string): Promis
   return { egressId: info.egressId };
 }
 
+/**
+ * Audio-only recording of a sales demo room (OGG), used purely for transcription.
+ * Same best-effort contract as startEgress: null when recording isn't configured.
+ */
+export async function startAudioEgress(roomName: string, demoId: string): Promise<{ egressId: string } | null> {
+  if (!isRecordingConfigured()) return null;
+  const filepath = `demo-audio/${demoId}/${Date.now()}.ogg`;
+  const info = await egressClient().startRoomCompositeEgress(
+    roomName,
+    {
+      file: {
+        fileType: EncodedFileType.OGG,
+        filepath,
+        output: {
+          case: 's3',
+          value: {
+            accessKey: config.R2_ACCESS_KEY_ID,
+            secret: config.R2_SECRET_ACCESS_KEY,
+            bucket: config.R2_RECORDINGS_BUCKET,
+            endpoint: config.R2_ENDPOINT,
+            region: 'auto',
+            forcePathStyle: true,
+          },
+        },
+      },
+    } as any,
+    { audioOnly: true } as any
+  );
+  return { egressId: info.egressId };
+}
+
 /** Best-effort — a recording that fails to stop cleanly still gets picked up by the `egress_ended` webhook once LiveKit notices the room closed. */
 export async function stopEgress(egressId: string): Promise<void> {
   if (!isConfigured()) return;

@@ -3,6 +3,12 @@ import { salesController } from '../controllers/sales.controller';
 import { callTrackingController } from '../controllers/callTracking.controller';
 import { salesDemoRoomController } from '../controllers/salesDemoRoom.controller';
 import { salesWorkController } from '../controllers/salesWork.controller';
+import { myBaseController } from '../controllers/myBase.controller';
+import { leadDuplicatesController } from '../controllers/leadDuplicates.controller';
+import { salesAlertsController } from '../controllers/salesAlerts.controller';
+import { salesToolsController } from '../controllers/salesTools.controller';
+import { leadConfigController } from '../controllers/leadConfig.controller';
+import { transcriptsController } from '../controllers/transcripts.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
 import { uploadDemoProof } from '../middleware/upload';
@@ -54,6 +60,44 @@ router.get('/sources', salesWorkController.sources);
 router.get('/insights/assignment', requireModule('SALES', 'ADMIN'), salesWorkController.assignmentSummary);
 router.get('/insights/stages', requireModule('SALES', 'ADMIN'), salesWorkController.stageSummary);
 router.get('/insights/sources', requireModule('SALES', 'ADMIN'), salesWorkController.sourceSummary);
+// Config lists (stages, update statuses, lost reasons, sources, lead scouts) — everyone reads, Sales Admin edits.
+router.get('/config', leadConfigController.get);
+router.post('/config/:kind', requireModule('SALES', 'ADMIN'), leadConfigController.save);
+router.put('/config/:kind/:id', requireModule('SALES', 'ADMIN'), leadConfigController.save);
+router.delete('/config/:kind/:id', requireModule('SALES', 'ADMIN'), leadConfigController.remove);
+
+// Transcripts of calls + online demos (free Whisper). Self-scoped inside the controller; Sales Admin sees all.
+router.get('/transcripts/status', transcriptsController.status);
+router.get('/transcripts', transcriptsController.list);
+router.get('/transcripts/:type/:id', transcriptsController.getOne);
+router.post('/transcripts/:type/:id/run', requireModule('SALES', 'EDIT'), transcriptsController.run);
+
+// Today view, call analytics, message templates (self-scoped inside the controller; Sales Admin sees all).
+router.get('/today', salesToolsController.today);
+router.get('/call-analytics', salesToolsController.callAnalytics);
+router.get('/message-templates', salesToolsController.listTemplates);
+router.post('/message-templates', requireModule('SALES', 'ADMIN'), salesToolsController.saveTemplate);
+router.put('/message-templates/:id', requireModule('SALES', 'ADMIN'), salesToolsController.saveTemplate);
+router.delete('/message-templates/:id', requireModule('SALES', 'ADMIN'), salesToolsController.deleteTemplate);
+router.get('/leads/:id/message-preview', salesToolsController.previewMessage);
+router.post('/leads/:id/message', requireModule('SALES', 'EDIT'), salesToolsController.sendMessage);
+router.get('/target-alerts', requireModule('SALES', 'ADMIN'), salesToolsController.targetConfig);
+router.put('/target-alerts', requireModule('SALES', 'ADMIN'), salesToolsController.saveTargetConfig);
+router.post('/target-alerts/send-now', requireModule('SALES', 'ADMIN'), salesToolsController.sendTargetAlertsNow);
+router.get('/mybase/batches', requireModule('SALES', 'ADMIN'), myBaseController.batches);
+router.get('/duplicates', requireModule('SALES', 'ADMIN'), leadDuplicatesController.list);
+router.post('/duplicates/merge', requireModule('SALES', 'ADMIN'), leadDuplicatesController.merge);
+router.post('/duplicates/dismiss', requireModule('SALES', 'ADMIN'), leadDuplicatesController.dismiss);
+router.get('/alert-rules', requireModule('SALES', 'ADMIN'), salesAlertsController.list);
+router.post('/alert-rules', requireModule('SALES', 'ADMIN'), salesAlertsController.create);
+router.put('/alert-rules/:id', requireModule('SALES', 'ADMIN'), salesAlertsController.update);
+router.delete('/alert-rules/:id', requireModule('SALES', 'ADMIN'), salesAlertsController.remove);
+router.get('/alert-rules/:id/preview', requireModule('SALES', 'ADMIN'), salesAlertsController.preview);
+router.post('/alert-rules/:id/send-now', requireModule('SALES', 'ADMIN'), salesAlertsController.sendNow);
+router.get('/mybase/summary', requireModule('SALES', 'ADMIN'), myBaseController.summary);
+router.post('/mybase/count', requireModule('SALES', 'ADMIN'), myBaseController.count);
+router.post('/mybase/assign', requireModule('SALES', 'ADMIN'), myBaseController.assign);
+router.post('/mybase/pull', requireModule('SALES', 'ADMIN'), myBaseController.pull);
 router.get('/insights/report', requireModule('SALES', 'ADMIN'), salesWorkController.salesReport);
 router.get('/activity-feed', requireModule('SALES', 'ADMIN'), salesWorkController.activityFeed);
 

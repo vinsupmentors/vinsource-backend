@@ -11,10 +11,13 @@ import { attendanceCronService } from './services/attendanceCron.service';
 import { passwordReminderService } from './services/passwordReminder.service';
 import { checkoutReminderService } from './services/checkoutReminder.service';
 import { salesCronService } from './services/salesCron.service';
+import { salesAlertsService } from './services/salesAlerts.service';
+import { salesTargetAlertsService } from './services/salesTargetAlerts.service';
 import { feeReminderService } from './services/feeReminder.service';
 import { salesAdvisorReportService } from './services/salesAdvisorReport.service';
 import { cutExpiredDemoGuests } from './controllers/demoSessions.controller';
 import { closeExpiredSalesDemos } from './controllers/salesDemoRoom.controller';
+import { processPending } from './services/transcription.service';
 
 const httpServer = createServer(app);
 initSocket(httpServer);
@@ -49,7 +52,22 @@ const start = async () => {
       try { await cutExpiredDemoGuests(); } catch (err) { console.error('Demo guest cut-off failed:', err); }
       // Sales online demos: close rooms whose 60 minutes are up (reopen then needs Sales Admin approval).
       try { await closeExpiredSalesDemos(); } catch (err) { console.error('Sales demo close failed:', err); }
+      // Call / demo transcription queue (no-op unless WHISPER_URL is set).
+      // Not awaited: a long audio file must not hold up the other per-minute jobs.
+      processPending(2).catch((err) => console.error('Transcription run failed:', err));
     });
+
+    // Sales lead alerts — each rule has its own send hour (IST); this hourly tick runs the ones due now.
+    cron.schedule('2 * * * *', async () => {
+      try {
+        const r = await salesAlertsService.runDue();
+        if (r.emails > 0) console.log(`📧 Sales alert emails: ${r.emails} (${r.rules} rules)`);
+      } catch (err) { console.error('Sales alert job failed:', err); }
+      try {
+        const t = await salesTargetAlertsService.runDue();
+        if (t.behind > 0) console.log(`🎯 Target alerts: ${t.behind} behind pace, ${t.emails} emails`);
+      } catch (err) { console.error('Target alert job failed:', err); }
+    }, { timezone: 'Asia/Kolkata' });
 
     // Password change reminder — runs every day at 9:00 AM, emails anyone with mustChangePassword=true
     cron.schedule('0 9 * * *', async () => {

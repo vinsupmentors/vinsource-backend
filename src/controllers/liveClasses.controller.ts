@@ -19,6 +19,7 @@ import {
   verifyWebhook,
 } from '../services/liveKit.service';
 import { storageService } from '../services/storage.service';
+import { enqueueDemoTranscript } from '../services/transcription.service';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true } as const;
 const studentSelect = { id: true, firstName: true, lastName: true, studentCode: true, photo: true } as const;
@@ -1361,6 +1362,15 @@ export const liveClassesController = {
               }
             : { status: 'FAILED', failReason: info.error || 'Recording did not complete successfully.', endedAt: new Date() },
         }).catch(() => {});
+
+        // Sales online-demo audio (started in salesDemoRoom.host) → keep the file key and queue transcription.
+        if (succeeded && fileResult) {
+          const demo = await prisma.demo.findFirst({ where: { audioEgressId: info.egressId }, select: { id: true } }).catch(() => null);
+          if (demo) {
+            await prisma.demo.update({ where: { id: demo.id }, data: { audioKey: fileResult.filename } }).catch(() => {});
+            enqueueDemoTranscript(demo.id, true).catch((e) => console.error('[transcribe] demo enqueue failed:', e));
+          }
+        }
       }
 
       res.json({ success: true });

@@ -18,6 +18,7 @@ export const LEAD_FILTER_FIELDS: FieldMap = {
   status: { type: 'select', path: ['status'], enumValues: STAGES },
   activityStatus: { type: 'select', path: ['activityStatus'], nullable: true, enumValues: ACTIVITY_STATUSES },
   assignedToId: { type: 'select', path: ['assignedToId'], nullable: true },
+  scoutKey: { type: 'select', path: ['scoutKey'], nullable: true },
   createdAt: { type: 'date', path: ['createdAt'] },
   lastContactAt: { type: 'date', path: ['lastContactAt'], nullable: true },
   nextFollowUpAt: { type: 'date', path: ['nextFollowUpAt'], nullable: true },

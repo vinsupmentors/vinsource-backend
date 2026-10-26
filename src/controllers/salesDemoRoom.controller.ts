@@ -7,7 +7,8 @@ import { config } from '../config/env';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { emailService } from '../services/email.service';
 import { notificationService } from '../services/notification.service';
-import { mintAccessToken, getLiveKitUrl, ensureRoom, closeRoom, listLiveParticipants } from '../services/liveKit.service';
+import { mintAccessToken, getLiveKitUrl, ensureRoom, closeRoom, listLiveParticipants, startAudioEgress } from '../services/liveKit.service';
+import { transcriptionEnabled } from '../services/transcription.service';
 
 /**
  * Sales online demos hosted inside the portal. The BDA hosts the room, the
@@ -115,6 +116,13 @@ export const salesDemoRoomController = {
         await prisma.demo.update({ where: { id: d.id }, data: { startedAt: now, expiresAt } });
       }
       await ensureRoom(d.roomName!);
+      // Audio-only recording for transcription — best effort, one per opening of the room, never blocks the demo.
+      if (transcriptionEnabled() && !d.audioEgressId) {
+        try {
+          const eg = await startAudioEgress(d.roomName!, d.id);
+          if (eg) await prisma.demo.update({ where: { id: d.id }, data: { audioEgressId: eg.egressId } });
+        } catch (e) { console.error('[transcribe] could not start demo audio recording:', e); }
+      }
       const remaining = Math.max(30, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
       const me = req.user!.employeeId
         ? await prisma.employee.findUnique({ where: { id: req.user!.employeeId }, select: { firstName: true, lastName: true } })
@@ -177,7 +185,8 @@ export const salesDemoRoomController = {
       if (approve) {
         await prisma.demo.update({
           where: { id: d.id },
-          data: { closedAt: null, expiresAt: new Date(Date.now() + d.maxMinutes * 60000), reopenRequestedAt: null, reopenNote: null, reopenCount: { increment: 1 } },
+          // audioEgressId reset → the reopened session is recorded too (as a separate file; the latest one is transcribed).
+          data: { closedAt: null, expiresAt: new Date(Date.now() + d.maxMinutes * 60000), reopenRequestedAt: null, reopenNote: null, reopenCount: { increment: 1 }, audioEgressId: null },
         });
       } else {
         await prisma.demo.update({ where: { id: d.id }, data: { reopenRequestedAt: null } });

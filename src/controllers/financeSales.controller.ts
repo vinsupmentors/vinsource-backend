@@ -1,5 +1,6 @@
 import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
+import { leadPhoneKey } from '../utils/leadPhone';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { paginate, formatPagination } from '../utils/helpers';
@@ -422,7 +423,7 @@ export const financeSalesController = {
         const email = (newLead?.email || '').trim();
         if (!name || !phone || !email) throw new AppError('New student intake requires name, phone, and email', 400);
         const lead = await prisma.lead.create({
-          data: { name, phone, email, status: 'ENROLLED', courseInterest: courseName, assignedToId: req.user?.employeeId || undefined },
+          data: { name, phone, phoneKey: leadPhoneKey(phone), email, status: 'ENROLLED', courseInterest: courseName, assignedToId: req.user?.employeeId || undefined },
         });
         leadId = lead.id;
       } else {
@@ -431,7 +432,7 @@ export const financeSalesController = {
         const existing = await prisma.lead.findUnique({ where: { id: leadId }, select: { assignedToId: true } });
         await prisma.lead.update({
           where: { id: leadId },
-          data: { status: 'ENROLLED', assignedToId: existing?.assignedToId ?? (req.user?.employeeId || undefined) },
+          data: { status: 'ENROLLED', stageKey: null, assignedToId: existing?.assignedToId ?? (req.user?.employeeId || undefined) },
         }).catch(() => {});
       }
 

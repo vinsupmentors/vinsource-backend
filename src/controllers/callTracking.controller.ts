@@ -10,6 +10,7 @@ import { DeviceRequest } from '../middleware/deviceAuth';
 import { normalizePhone } from '../utils/phone';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { CALL_RECORDING_DIR } from '../middleware/upload';
+import { enqueueCallTranscript } from '../services/transcription.service';
 
 const employeeSelect = { id: true, firstName: true, lastName: true } as const;
 
@@ -140,6 +141,8 @@ export const callTrackingController = {
       const finalName = `${log.id}${path.extname(tmp.filename).toLowerCase()}`;
       fs.renameSync(tmp.path, path.join(CALL_RECORDING_DIR, finalName));
       await prisma.leadCallLog.update({ where: { id: log.id }, data: { recordingUrl: `/api/call-tracking/recordings/${log.id}` } });
+      // Auto-transcribe (no-op when WHISPER_URL isn't set). Never blocks the phone's upload.
+      enqueueCallTranscript(log.id, true).catch((e) => console.error('[transcribe] enqueue failed:', e));
       res.status(201).json({ success: true, data: { id: log.id } });
     } catch (err) {
       if (tmp?.path) { try { fs.unlinkSync(tmp.path); } catch { /* already gone */ } }

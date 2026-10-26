@@ -1490,6 +1490,22 @@ model Lead {
   deletedAt      DateTime?
   deletedById    String?
   createdById    String?
+  // MyBase: when the lead was last given to its current owner, the batch it
+  // was handed out in, and (when Admin unticked "show history") the cut-off —
+  // a non-admin owner only sees calls/notes/tasks/history created after it.
+  assignedAt        DateTime?
+  batchLabel        String?
+  historyHiddenBefore DateTime?
+  // Last 10 digits of `phone` — the duplicate-control key (see utils/leadPhone.ts).
+  phoneKey          String?
+  // Config-driven overrides (see LeadConfigItem). `status` / `activityStatus` / `lostReason`
+  // above always hold the BASE value the custom item behaves as; these hold the custom
+  // item's key when Admin created one (null = the built-in item).
+  stageKey          String?
+  statusKey         String?
+  lostReasonKey     String?
+  // The "Lead Scout" — the person who gave/generated this lead (key of a SCOUT config item).
+  scoutKey          String?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
@@ -1500,6 +1516,9 @@ model Lead {
   leadNotes   LeadNote[]
   demos       Demo[]
   callLogs    LeadCallLog[]
+  @@index([batchLabel])
+  @@index([phoneKey])
+  @@index([scoutKey])
   collections FeeCollection[]
   students    Student[]
   feePaymentPlans FeePaymentPlan[]
@@ -1528,6 +1547,7 @@ model LeadCallLog {
   // Log Activity fields (null on older rows / auto-tracked calls)
   activityType   LeadActivityType?
   activityStatus LeadActivityStatus?
+  statusKey      String?   // custom Update Status key (activityStatus holds its base)
 
   // Auto-logging fields (all null for ordinary MANUAL rows)
   source          CallLogSource @default(MANUAL)
@@ -1543,6 +1563,92 @@ model LeadCallLog {
 
   @@index([leadId])
   @@index([deviceId])
+}
+
+/// Admin-managed lists for the Sales module (Config tab). One table for all kinds:
+///   STAGE        lead stages        — base = LeadStatus the stage counts as in reports (e.g. ENROLLED = won)
+///   STATUS       update statuses    — base = LeadActivityStatus it behaves as; targetStageKey = stage it moves the lead to
+///   LOST_REASON  lost reasons       — base = LeadLostReason it counts as
+///   SOURCE       lead sources       — key = label
+///   SCOUT        lead scouts        — the people who give/generate leads (e.g. Meta lead givers)
+/// Built-in items (system = true) can be renamed/recoloured/reordered but not deleted.
+model LeadConfigItem {
+  id             String   @id @default(uuid())
+  kind           String
+  key            String
+  label          String
+  color          String?
+  base           String?
+  targetStageKey String?
+  needsFollowUp  Boolean  @default(false)
+  notesRequired  Boolean  @default(true)
+  active         Boolean  @default(true)
+  system         Boolean  @default(false)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([kind, key])
+  @@index([kind, active])
+}
+
+/// Phone numbers Admin has reviewed and decided are NOT duplicates (e.g. two siblings sharing a parent's number).
+model LeadDuplicateDismissal {
+  phoneKey      String   @id
+  dismissedById String?
+  createdAt     DateTime @default(now())
+}
+
+/// An email alert rule for leads that need attention (see services/salesAlerts.service.ts).
+/// type: NO_ACTIVITY (no call/meeting for N days) | STATUS_STALE (stuck on `activityStatus` for N days)
+///       | FOLLOWUP_OVERDUE (follow-up date passed by N days) | NOT_CONTACTED (assigned N days ago, never contacted)
+model SalesAlertRule {
+  id             String   @id @default(uuid())
+  name           String
+  type           String
+  days           Int      @default(14)
+  activityStatus String?
+  includeMyBase  Boolean  @default(true)
+  notifyOwner    Boolean  @default(true)
+  notifyAdmins   Boolean  @default(true)
+  adminEmails    String?  @db.Text
+  sendHour       Int      @default(9)
+  active         Boolean  @default(true)
+  lastSentOn     String?
+  lastSentCount  Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+/// Admin-written WhatsApp / email text a salesperson sends from a lead in one click.
+/// Placeholders: {{name}} {{firstName}} {{course}} {{phone}} {{city}} {{salesperson}} {{demoDate}} {{demoTime}} {{demoMode}}
+model MessageTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  channel     String   // WHATSAPP | EMAIL
+  category    String?  // e.g. Demo, Fees, Brochure
+  subject     String?
+  body        String   @db.Text
+  active      Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([channel, active])
+}
+
+/// Single-row setting: warn people who are behind their monthly target on chosen days of the month.
+model SalesTargetAlertConfig {
+  id            String   @id @default(uuid())
+  active        Boolean  @default(true)
+  checkDays     String   @default("10,15,20,25") // days of month (IST) on which to check
+  behindPercent Int      @default(80)             // alert if achieved < this % of the pro-rata target
+  notifyOwner   Boolean  @default(true)
+  notifyAdmins  Boolean  @default(true)
+  adminEmails   String?  @db.Text
+  sendHour      Int      @default(10)
+  lastSentOn    String?
+  updatedAt     DateTime @updatedAt
 }
 
 /// A saved advanced filter (see utils/filterTree.ts). Private to its owner unless an admin shares it.
@@ -1731,6 +1837,10 @@ model Demo {
   reopenCount        Int       @default(0)
   reopenRequestedAt  DateTime?
   reopenNote         String?   @db.Text
+
+  // Audio-only recording of the online room (LiveKit Egress → private R2 bucket), used for transcription.
+  audioEgressId      String?
+  audioKey           String?
 
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -4174,4 +4284,33 @@ model DemoSessionRequest {
   @@index([liveClassId])
   @@index([scheduleId])
   @@index([requestedById])
+}
+
+/// Speech-to-text of a phone call (sourceType CALL, sourceId = LeadCallLog.id) or an online demo
+/// (sourceType DEMO, sourceId = Demo.id). Produced by the free self-hosted Whisper service; the
+/// summary / action items come from an optional free LLM (Gemini free tier).
+model CallTranscript {
+  id          String    @id @default(uuid())
+  sourceType  String                       // CALL | DEMO
+  sourceId    String
+  leadId      String?
+  ownerId     String?                      // employee who made the call / hosted the demo
+  status      String    @default("PENDING") // PENDING | PROCESSING | DONE | FAILED
+  attempts    Int       @default(0)
+  language    String?
+  durationSec Int?
+  text        String?   @db.LongText
+  segments    Json?                        // [{ start, end, text }]
+  summary     String?   @db.Text
+  actionItems Json?                        // string[]
+  topics      Json?                        // string[]
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  finishedAt  DateTime?
+
+  @@unique([sourceType, sourceId])
+  @@index([status])
+  @@index([leadId])
+  @@index([ownerId])
 }
