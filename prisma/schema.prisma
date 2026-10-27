@@ -1697,6 +1697,9 @@ model SalesTask {
   dueAt        DateTime?
   status       SalesTaskStatus @default(OPEN)
   completedAt  DateTime?
+  /// MANUAL (typed by a person) | FOLLOW_UP (auto, from the lead's follow-up date) | DEMO (auto, from a booked demo)
+  kind         String          @default("MANUAL")
+  demoId       String?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
@@ -1706,6 +1709,7 @@ model SalesTask {
 
   @@index([assignedToId, status])
   @@index([leadId])
+  @@index([demoId])
 }
 
 /// Append-only audit trail for a lead, from the moment it is created:
@@ -1841,6 +1845,8 @@ model Demo {
   // Audio-only recording of the online room (LiveKit Egress → private R2 bucket), used for transcription.
   audioEgressId      String?
   audioKey           String?
+  /// Set once the "starts in 10 minutes" email/notification went out.
+  reminderSentAt     DateTime?
 
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt

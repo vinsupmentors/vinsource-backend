@@ -11,7 +11,7 @@ import { getEffectiveAccess } from '../utils/moduleAccess';
 const router = Router();
 router.use(authenticate);
 
-const SCOPES = ['leads', 'callLog', 'activity', 'comfort'];
+const SCOPES = ['leads', 'callLog', 'activity', 'comfort', 'mybase'];
 
 async function canShare(req: AuthRequest): Promise<boolean> {
   if (req.user!.role === 'SUPER_ADMIN' || req.user!.role === 'ADMIN') return true;

@@ -94,6 +94,7 @@ router.put('/alert-rules/:id', requireModule('SALES', 'ADMIN'), salesAlertsContr
 router.delete('/alert-rules/:id', requireModule('SALES', 'ADMIN'), salesAlertsController.remove);
 router.get('/alert-rules/:id/preview', requireModule('SALES', 'ADMIN'), salesAlertsController.preview);
 router.post('/alert-rules/:id/send-now', requireModule('SALES', 'ADMIN'), salesAlertsController.sendNow);
+router.get('/mybase/pool', requireModule('SALES', 'ADMIN'), myBaseController.pool);
 router.get('/mybase/summary', requireModule('SALES', 'ADMIN'), myBaseController.summary);
 router.post('/mybase/count', requireModule('SALES', 'ADMIN'), myBaseController.count);
 router.post('/mybase/assign', requireModule('SALES', 'ADMIN'), myBaseController.assign);
@@ -104,6 +105,7 @@ router.get('/activity-feed', requireModule('SALES', 'ADMIN'), salesWorkControlle
 // Portal-hosted online demo room — BDA hosts, Sales Admin observes / approves reopen.
 router.get('/demo-rooms', requireModule('SALES', 'ADMIN'), salesDemoRoomController.board);
 router.post('/demos/:id/room/host', requireModule('SALES', 'EDIT'), salesDemoRoomController.host);
+router.post('/demos/:id/room/end', requireModule('SALES', 'EDIT'), salesDemoRoomController.end);
 router.post('/demos/:id/room/observe', requireModule('SALES', 'ADMIN'), salesDemoRoomController.observe);
 router.post('/demos/:id/room/reopen-request', requireModule('SALES', 'EDIT'), salesDemoRoomController.requestReopen);
 router.post('/demos/:id/room/reopen', requireModule('SALES', 'ADMIN'), salesDemoRoomController.decideReopen);

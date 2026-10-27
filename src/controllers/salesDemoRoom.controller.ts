@@ -9,6 +9,8 @@ import { emailService } from '../services/email.service';
 import { notificationService } from '../services/notification.service';
 import { mintAccessToken, getLiveKitUrl, ensureRoom, closeRoom, listLiveParticipants, startAudioEgress } from '../services/liveKit.service';
 import { transcriptionEnabled } from '../services/transcription.service';
+import { closeDemoTask, applyDemoOutcome, OUTCOME_PLAN, fmtIST } from '../utils/salesFlow';
+import { resolveStage } from '../utils/leadConfig';
 
 /**
  * Sales online demos hosted inside the portal. The BDA hosts the room, the
@@ -135,6 +137,36 @@ export const salesDemoRoomController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Host ends the demo: room closes for everyone, the demo is marked conducted (the portal session is its own proof),
+   * the demo task is completed and — if an outcome is given — the lead moves on (see OUTCOME_PLAN).
+   */
+  async end(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const d = await loadDemo(req, req.params.id);
+      await assertHost(req, d);
+      const { outcome, feedback, followUpAt } = req.body || {};
+      if (outcome && !OUTCOME_PLAN[String(outcome)]) throw new AppError('Unknown demo outcome', 400);
+      if (followUpAt && isNaN(new Date(followUpAt).getTime())) throw new AppError('Invalid follow-up date', 400);
+      await closeRoom(d.roomName!).catch(() => {});
+      await prisma.demo.update({
+        where: { id: d.id },
+        data: {
+          closedAt: d.closedAt ?? new Date(), expiresAt: new Date(), status: 'COMPLETED',
+          startedAt: d.startedAt ?? new Date(),
+          feedback: feedback ? String(feedback).slice(0, 2000) : undefined, outcome: outcome || undefined,
+          reopenRequestedAt: null,
+        },
+      });
+      await closeDemoTask(d.id, 'DONE');
+      const stage = await resolveStage('DEMO_DONE');
+      await prisma.lead.update({ where: { id: d.leadId }, data: { status: stage.status as never, stageKey: stage.stageKey, activityStatus: 'DEMO_OVER', statusKey: null, lastContactAt: new Date() } });
+      await prisma.leadHistory.create({ data: { leadId: d.leadId, actorId: req.user?.employeeId || null, type: 'DEMO', summary: `Online demo ${d.bookingNumber} ended by host` } }).catch(() => {});
+      if (outcome) await applyDemoOutcome(d.leadId, String(outcome), req.user?.employeeId, followUpAt ? new Date(followUpAt) : null);
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
   /** Sales Admin watches silently — can't publish audio/video, works any time the room exists. */
   async observe(req: AuthRequest, res: Response, next: NextFunction) {
     try {
@@ -245,6 +277,50 @@ export async function closeExpiredSalesDemos(): Promise<number> {
   for (const d of due) {
     await closeRoom(d.roomName!).catch(() => {});
     await prisma.demo.update({ where: { id: d.id }, data: { closedAt: new Date() } });
+  }
+  return due.length;
+}
+
+/**
+ * Cron (every minute): "starts in 10 minutes" reminder to the student (email, with join details) and to the
+ * advisor (email + bell). Sent once per demo (Demo.reminderSentAt).
+ */
+export async function sendDemoReminders(): Promise<number> {
+  const now = new Date();
+  const due = await prisma.demo.findMany({
+    where: { status: 'SCHEDULED', reminderSentAt: null, scheduledAt: { lte: new Date(now.getTime() + 10 * 60000), gt: new Date(now.getTime() - 30 * 60000) } },
+    include: {
+      lead: { select: { name: true, email: true, assignedTo: { select: { userId: true, email: true, firstName: true } } } },
+      conductedBy: { select: { userId: true, email: true, firstName: true } },
+    },
+  });
+  for (const d of due) {
+    // Claim first so an overlapping tick can't double-send.
+    const claimed = await prisma.demo.updateMany({ where: { id: d.id, reminderSentAt: null }, data: { reminderSentAt: new Date() } });
+    if (claimed.count === 0) continue;
+    const when = fmtIST(d.scheduledAt);
+    const online = d.mode === 'ONLINE' && !!d.accessCode;
+    const course = d.courseEnquired || 'your course';
+    const advisor = d.conductedBy || d.lead.assignedTo;
+    if (d.lead.email) {
+      await emailService.send({
+        to: d.lead.email, subject: `Reminder: your demo starts in 10 minutes — ${course}`, template: 'sales-demo-reminder',
+        html: `<p>Hi ${d.lead.name},</p><p>Your demo for <b>${course}</b> starts at <b>${when}</b> (IST) — in about 10 minutes.</p>${
+          online ? `<p><b>Join link:</b> <a href="${joinLink(d.accessCode!)}">${joinLink(d.accessCode!)}</a><br/><b>Access code:</b> <span style="font-size:18px;letter-spacing:2px">${d.accessCode}</span><br/>Enter this email address (<b>${d.lead.email}</b>) and the code. Please keep your camera and microphone ready.</p>` : '<p>Please reach the academy a few minutes early.</p>'
+        }<p>Team Vinsup Skill Academy</p>`,
+      }).catch(() => {});
+    }
+    if (advisor) {
+      const title = `Demo in 10 minutes — ${d.lead.name}`;
+      const msg = `${d.lead.name}'s ${online ? 'online ' : ''}demo (${course}) starts at ${when}.`;
+      if (advisor.userId) await notificationService.create({ userId: advisor.userId, type: 'SYSTEM', title, message: msg, data: { demoId: d.id } }).catch(() => {});
+      if (advisor.email) {
+        await emailService.send({
+          to: advisor.email, subject: title, template: 'sales-demo-reminder-advisor',
+          html: `<p>Hi ${advisor.firstName},</p><p>${msg}</p>${online ? `<p>Start the room: <a href="${hostLink(d.id)}">${hostLink(d.id)}</a> (the 60-minute clock starts when you enter).</p>` : ''}`,
+        }).catch(() => {});
+      }
+    }
   }
   return due.length;
 }

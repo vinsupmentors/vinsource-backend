@@ -60,10 +60,12 @@ export const salesWorkController = {
       const today = startOfToday();
       const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
       const bucket = (d: Date | null) => (!d ? 'later' : d < today ? 'overdue' : d < tomorrow ? 'today' : 'upcoming');
+      // Follow-ups are tasks now; only show the bare lead date for leads that have no follow-up task (older data).
+      const withTask = new Set(tasks.filter((t) => t.kind === 'FOLLOW_UP' && t.leadId).map((t) => t.leadId as string));
       res.json({
         success: true,
         data: {
-          followUps: leads.map((l) => ({ ...l, bucket: bucket(l.nextFollowUpAt) })),
+          followUps: leads.filter((l) => !withTask.has(l.id)).map((l) => ({ ...l, bucket: bucket(l.nextFollowUpAt) })),
           tasks: tasks.map((t) => ({ ...t, bucket: bucket(t.dueAt) })),
         },
       });
@@ -182,6 +184,11 @@ export const salesWorkController = {
       if (admin && assignedToId) data.assignedToId = String(assignedToId);
 
       const updated = await prisma.salesTask.update({ where: { id: t.id }, data });
+      // Ticking off a follow-up task clears the lead's pending follow-up date (it no longer shows as overdue).
+      if (status === 'DONE' && t.kind === 'FOLLOW_UP' && t.leadId) {
+        await prisma.lead.updateMany({ where: { id: t.leadId, nextFollowUpAt: t.dueAt ?? undefined }, data: { nextFollowUpAt: null } }).catch(() => {});
+      }
+      // A demo task is closed by the demo itself (End demo / Mark conducted) — completing it by hand does not change the demo.
       if (t.leadId && status && status !== t.status) {
         await prisma.leadHistory.create({ data: { leadId: t.leadId, actorId: me, type: 'TASK', summary: `Task "${t.title}" marked ${String(status).toLowerCase()}` } }).catch(() => {});
       }

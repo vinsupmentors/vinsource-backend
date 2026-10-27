@@ -16,6 +16,7 @@ import { LEAD_FILTER_FIELDS, CALL_FILTER_FIELDS } from '../utils/salesFilterFiel
 import { normalizePhone } from '../utils/phone';
 import { computeRankCard } from '../utils/rankCard';
 import { getOnboardingStatus, reconcileFlagsBatch } from '../utils/onboardingStatus';
+import { syncFollowUpTask, moveOpenTasks, upsertDemoTask, closeDemoTask, applyDemoOutcome, completeScheduledDemos, OUTCOME_PLAN } from '../utils/salesFlow';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -247,6 +248,17 @@ export const salesController = {
       if (!Array.isArray(leads) || !leads.length) {
         throw new AppError('leads array is required', 400);
       }
+      // File-wide defaults (a row's own value always wins) + dry-run so the screen can show exactly what will happen first.
+      const dryRun = req.body.validateOnly === true;
+      const admin = await isSalesAdmin(req);
+      const defaults = (req.body.defaults || {}) as Record<string, string | undefined>;
+      const defSource = String(defaults.source || '').trim();
+      const defCourse = String(defaults.courseInterest || '').trim();
+      const defAssignee = String(defaults.assignedToId || '').trim();
+      const defBatch = String(defaults.batchLabel || '').trim().slice(0, 120);
+      const defScout = admin ? String(defaults.scoutKey || '').trim() : '';
+      if (defScout && !(await leadConfig()).find('SCOUT', defScout)) throw new AppError('Unknown Lead Scout', 400);
+      if (defSource) await ensureSource(defSource);
 
       const [allEmployees, allCampaigns, existingLeads] = await Promise.all([
         prisma.employee.findMany({ select: { id: true, employeeCode: true, firstName: true, lastName: true } }),
@@ -298,10 +310,12 @@ export const salesController = {
           }
 
           const warnings: string[] = [];
-          const scoutRaw = field(row, 'leadscout', 'scout', 'leadgivenby');
-          const scoutKeyForRow = scoutRaw ? await scoutKeyByName(scoutRaw) : null;
+          // Lead Scout is admin-only: a salesperson's file cannot set it.
+          const scoutRaw = admin ? field(row, 'leadscout', 'scout', 'leadgivenby') : '';
+          const scoutKeyForRow = (scoutRaw ? await scoutKeyByName(scoutRaw) : null) || defScout || null;
           if (scoutRaw && !scoutKeyForRow) warnings.push(`Lead Scout "${scoutRaw}" not in Config — left blank`);
-          await ensureSource(field(row, 'source'));
+          const rowSource = field(row, 'source') || defSource;
+          if (!dryRun) await ensureSource(rowSource);
 
           const assignedCode = field(row, 'assignedtocode');
           const assignedName = field(row, 'assigned', 'assignedto');
@@ -314,8 +328,11 @@ export const salesController = {
             }
           } else if (assignedName) {
             assignedToId = resolveEmployeeByName(assignedName);
-            if (!assignedToId) warnings.push(`rep "${assignedName}" not matched — left unassigned`);
+            if (!assignedToId) warnings.push(`rep "${assignedName}" not matched — left unassigned (goes to My Base)`);
           }
+          // A salesperson's own upload belongs to them; an admin's file falls back to the chosen default (or My Base).
+          if (!assignedToId) assignedToId = admin ? (defAssignee || undefined) : req.user?.employeeId || undefined;
+          if (!admin && assignedToId !== req.user?.employeeId) assignedToId = req.user?.employeeId || undefined;
 
           const campaignRaw = field(row, 'campaign');
           let campaignId: string | undefined;
@@ -341,6 +358,11 @@ export const salesController = {
           if (notesField) notesParts.push(notesField);
           if (legacyStatusRaw) notesParts.push(`Imported from legacy CRM — original status: "${legacyStatusRaw}"`);
 
+          if (dryRun) {
+            existingPhones.add(key);
+            results.push({ row: rowNum, status: 'created', message: warnings.length ? warnings.join('; ') : undefined });
+            continue;
+          }
           const lead = await prisma.lead.create({
             data: {
               name,
@@ -348,10 +370,13 @@ export const salesController = {
               phoneKey: key,
               scoutKey: scoutKeyForRow || undefined,
               email: field(row, 'email') || undefined,
-              source: field(row, 'source') || undefined,
-              courseInterest: field(row, 'courseinterest') || undefined,
+              source: rowSource || undefined,
+              courseInterest: field(row, 'courseinterest') || defCourse || undefined,
               notes: notesParts.length ? notesParts.join(' — ') : undefined,
               assignedToId,
+              assignedAt: assignedToId ? new Date() : undefined,
+              batchLabel: defBatch || undefined,
+              createdById: req.user?.employeeId,
               campaignId,
               status,
               lostReason,
@@ -384,6 +409,7 @@ export const salesController = {
             });
           }
 
+          await logLeadHistory(lead.id, req.user?.employeeId, 'CREATED', `Lead imported${defBatch ? ` (batch "${defBatch}")` : ''}${rowSource ? `, source: ${rowSource}` : ''}${assignedToId ? '' : ', placed in My Base'}`, null, rowSource || null);
           existingPhones.add(key);
           results.push({
             row: rowNum,
@@ -397,7 +423,7 @@ export const salesController = {
       }
 
       const created = results.filter((r) => r.status === 'created').length;
-      res.status(201).json({ success: true, data: { results, created, failed: results.length - created } });
+      res.status(dryRun ? 200 : 201).json({ success: true, data: { results, created, failed: results.length - created, dryRun } });
     } catch (err) { next(err); }
   },
 
@@ -426,14 +452,16 @@ export const salesController = {
 
   async createLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { name, phone, email, source, courseInterest, assignedToId, campaignId, notes, scoutKey } = req.body;
+      const { name, phone, email, source, courseInterest, assignedToId, campaignId, notes, city } = req.body;
+      // Lead Scout is an accountability field — only Sales Admin may set it.
+      const scoutKey = (await isSalesAdmin(req)) ? req.body.scoutKey : undefined;
       if (!name || !phone) throw new AppError('Name and phone are required', 400);
       await assertNoDuplicateLead(phone);
       if (scoutKey && !(await leadConfig()).find('SCOUT', String(scoutKey))) throw new AppError('Unknown Lead Scout', 400);
       await ensureSource(source);
 
       const lead = await prisma.lead.create({
-        data: { name, phone, phoneKey: leadPhoneKey(phone), email, source, courseInterest, assignedToId, campaignId, notes, scoutKey: scoutKey || null, createdById: req.user?.employeeId },
+        data: { name, phone, phoneKey: leadPhoneKey(phone), email, source, courseInterest, city: city || null, assignedToId, campaignId, notes, scoutKey: scoutKey || null, createdById: req.user?.employeeId },
         include: { assignedTo: { select: employeeSelect } },
       });
       const assignee = lead.assignedTo ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}` : 'nobody';
@@ -446,8 +474,10 @@ export const salesController = {
   async updateLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await assertLeadAccess(req, req.params.id);
-      const { name, phone, email, source, courseInterest, status, stageKey, scoutKey, assignedToId, campaignId, notes, lostReason,
+      const { name, phone, email, source, courseInterest, status, stageKey, assignedToId, campaignId, notes, lostReason,
         city, educationQualification, collegeName, passedOutYear, currentStatus } = req.body;
+      // Lead Scout is an accountability field — only Sales Admin may change it (ignored for everyone else).
+      const scoutKey = (await isSalesAdmin(req)) ? req.body.scoutKey : undefined;
       // Stage can be a built-in stage or an Admin-created one (Config tab).
       const wantedStage = stageKey ?? status;
       const newStage = wantedStage !== undefined ? await resolveStage(String(wantedStage)) : null;
@@ -487,8 +517,12 @@ export const salesController = {
       const actor = req.user?.employeeId;
       const fullName = (e?: { firstName: string; lastName: string } | null) => (e ? `${e.firstName} ${e.lastName}` : 'Unassigned');
       if (assignedToId !== undefined && (assignedToId || null) !== before.assignedToId) {
+        await moveOpenTasks(lead.id, assignedToId || null); // follow-up / demo tasks follow the lead to its new owner
         await logLeadHistory(lead.id, actor, 'ASSIGNED', `Reassigned from ${fullName(before.assignedTo)} to ${fullName(lead.assignedTo)}`, fullName(before.assignedTo), fullName(lead.assignedTo));
       }
+      // Moving the lead to Demo done by hand finishes its scheduled demo so the Demo tab agrees.
+      if (newStage && newStage.status === 'DEMO_DONE' && before.status !== 'DEMO_DONE') await completeScheduledDemos(lead.id, actor);
+      if (newStage && (newStage.status === 'LOST' || newStage.status === 'ENROLLED')) await syncFollowUpTask(lead.id, null, null, actor);
       if (newStage) {
         const beforeKey = before.stageKey || before.status;
         const afterKey = newStage.stageKey || newStage.status;
@@ -633,13 +667,19 @@ export const salesController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Log Activity.
+   *  - A *call* update must point at a real call from the call log (`callLogId`): the call's duration and
+   *    recording stay the call's own, and the activity is attached to it. No new call-log row is invented.
+   *  - A status update with no call (`callLogId` empty) changes the lead and writes History + a note, but
+   *    never appears in the call log and does not count as a contact.
+   *  - A *meeting / visit* is a real contact without a phone call, so it is logged as its own activity row.
+   * Student intake (city, college…) is edited in the Profile tab only — it is not asked here.
+   */
   async addCallLog(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await assertLeadAccess(req, req.params.id);
-      const {
-        notes, nextFollowUpAt, status, lostReason, activityType, activityStatus, courseInterest,
-        city, educationQualification, collegeName, passedOutYear, currentStatus,
-      } = req.body;
+      const { notes, nextFollowUpAt, status, lostReason, activityType, activityStatus, courseInterest, callLogId } = req.body;
 
       // Order of the flow: Update Status first, then follow-up date+time, then lead stage.
       // The status list is Admin-managed (Config tab): each status knows its stage, whether a follow-up is needed and whether notes are.
@@ -679,51 +719,68 @@ export const salesController = {
       }
 
       const leadId = req.params.id;
-      const before = await prisma.lead.findUnique({ where: { id: leadId }, select: { status: true, stageKey: true, activityStatus: true, statusKey: true, nextFollowUpAt: true, deletedAt: true, courseInterest: true } });
+      const before = await prisma.lead.findUnique({ where: { id: leadId }, select: { status: true, stageKey: true, activityStatus: true, statusKey: true, nextFollowUpAt: true, deletedAt: true, courseInterest: true, assignedToId: true } });
       if (!before || before.deletedAt) throw new AppError('Lead not found', 404);
 
-      const calledAt = new Date();
+      // Which call (if any) is this update about?
+      let linkedCall: { id: string; calledAt: Date } | null = null;
+      if (callLogId) {
+        const c = await prisma.leadCallLog.findUnique({ where: { id: String(callLogId) }, select: { id: true, leadId: true, calledAt: true, activityStatus: true } });
+        if (!c || c.leadId !== leadId) throw new AppError('That call does not belong to this lead', 400);
+        if (c.activityStatus) throw new AppError('That call already has an update attached', 400);
+        linkedCall = { id: c.id, calledAt: c.calledAt };
+      }
+      const isMeeting = type === 'MEETING';
+      const touched = isMeeting ? new Date() : linkedCall?.calledAt ?? null; // a real contact happened
       // Closed-out statuses clear the reminder; open ones set the chosen date+time.
       const followUpValue = sdef.needsFollowUp ? new Date(nextFollowUpAt) : null;
+      const noteText = notes ? String(notes) : null;
 
-      const [log] = await prisma.$transaction([
-        prisma.leadCallLog.create({
-          data: {
-            leadId, calledById: req.user?.employeeId, notes: notes ? String(notes) : null, nextFollowUpAt: followUpValue, calledAt,
-            activityType: type, activityStatus: baseStatus, statusKey: customStatusKey,
-          },
-          include: { calledBy: { select: employeeSelect } },
-        }),
-        prisma.lead.update({
-          where: { id: leadId },
-          data: {
-            lastContactAt: calledAt,
-            nextFollowUpAt: followUpValue,
-            activityStatus: baseStatus,
-            statusKey: customStatusKey,
-            status: stage.status as LeadStatus,
-            stageKey: stage.stageKey,
-            lostReason: finalLostReason,
-            lostReasonKey: finalLostReasonKey,
-            courseInterest: courseInterest ? String(courseInterest) : undefined,
-            // Student intake — collected during the call itself; whatever's
-            // sent here overwrites what's on file (a BDA correcting/filling in
-            // a detail on a later call), left untouched if omitted.
-            city: city !== undefined ? (city || null) : undefined,
-            educationQualification: educationQualification !== undefined ? (educationQualification || null) : undefined,
-            collegeName: collegeName !== undefined ? (collegeName || null) : undefined,
-            passedOutYear: passedOutYear !== undefined ? (passedOutYear ? Number(passedOutYear) : null) : undefined,
-            currentStatus: currentStatus !== undefined ? (currentStatus || null) : undefined,
-          },
-        }),
-      ]);
+      const leadData = {
+        ...(touched ? { lastContactAt: touched } : {}),
+        nextFollowUpAt: followUpValue,
+        activityStatus: baseStatus,
+        statusKey: customStatusKey,
+        status: stage.status as LeadStatus,
+        stageKey: stage.stageKey,
+        lostReason: finalLostReason,
+        lostReasonKey: finalLostReasonKey,
+        courseInterest: courseInterest ? String(courseInterest) : undefined,
+      };
+
+      let log: unknown = null;
+      if (linkedCall) {
+        const [updated] = await prisma.$transaction([
+          prisma.leadCallLog.update({
+            where: { id: linkedCall.id },
+            data: { notes: noteText, nextFollowUpAt: followUpValue, activityType: 'CALL', activityStatus: baseStatus, statusKey: customStatusKey },
+            include: { calledBy: { select: employeeSelect } },
+          }),
+          prisma.lead.update({ where: { id: leadId }, data: leadData }),
+        ]);
+        log = updated;
+      } else if (isMeeting) {
+        const [created] = await prisma.$transaction([
+          prisma.leadCallLog.create({
+            data: { leadId, calledById: req.user?.employeeId, notes: noteText, nextFollowUpAt: followUpValue, calledAt: new Date(), activityType: 'MEETING', activityStatus: baseStatus, statusKey: customStatusKey },
+            include: { calledBy: { select: employeeSelect } },
+          }),
+          prisma.lead.update({ where: { id: leadId }, data: leadData }),
+        ]);
+        log = created;
+      } else {
+        // Status update without a call: lead + history + note only — nothing in the call log.
+        await prisma.lead.update({ where: { id: leadId }, data: leadData });
+        if (noteText) await prisma.leadNote.create({ data: { leadId, authorId: req.user?.employeeId || null, body: noteText } }).catch(() => {});
+      }
 
       const actor = req.user?.employeeId;
       const fmt = (d: Date | null) => (d ? d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'none');
       const beforeStatusKey = before.statusKey || before.activityStatus;
       const beforeStageKey = before.stageKey || before.status;
+      const what = isMeeting ? 'Meeting logged' : linkedCall ? 'Call update logged' : 'Status updated (no call)';
       await logLeadHistory(leadId, actor, 'ACTIVITY',
-        `${type === 'MEETING' ? 'Meeting' : 'Call'} logged — status ${sdef.label}${notes ? `: ${String(notes).slice(0, 300)}` : ' (no notes)'}`,
+        `${what} — status ${sdef.label}${notes ? `: ${String(notes).slice(0, 300)}` : ' (no notes)'}`,
         beforeStatusKey, sdef.key);
       if (beforeStatusKey !== sdef.key) {
         await logLeadHistory(leadId, actor, 'STATUS', `Status changed from ${beforeStatusKey ? cfg.label('STATUS', beforeStatusKey) : 'none'} to ${sdef.label}`, beforeStatusKey, sdef.key);
@@ -736,7 +793,12 @@ export const salesController = {
         await logLeadHistory(leadId, actor, 'FOLLOW_UP', `Follow-up ${followUpValue ? `set to ${fmt(followUpValue)}` : 'cleared'}`, fmt(before.nextFollowUpAt), fmt(followUpValue));
       }
 
-      res.status(201).json({ success: true, data: log });
+      // Follow-up date → task (the previous follow-up task is closed). Demo over → the booked demo is finished too.
+      // DEMO_BOOKED's own slot is a demo task created by the demo booking, not a follow-up.
+      await syncFollowUpTask(leadId, before.assignedToId, baseStatus === 'DEMO_BOOKED' ? null : followUpValue, actor, noteText || undefined);
+      if (baseStatus === 'DEMO_OVER' || stage.status === 'DEMO_DONE') await completeScheduledDemos(leadId, actor);
+
+      res.status(201).json({ success: true, data: log, meta: { loggedInCallLog: !!log } });
     } catch (err) { next(err); }
   },
 
@@ -826,6 +888,9 @@ export const salesController = {
         }),
       ]);
 
+      await upsertDemoTask(demo.id, req.user?.employeeId).catch((e) => console.error('Demo task failed', e));
+      // A demo booking replaces any open follow-up — the demo itself is now the next thing to do.
+      await syncFollowUpTask(leadId, null, null, req.user?.employeeId).catch(() => {});
       await logLeadHistory(leadId, req.user?.employeeId, 'DEMO', `Demo ${bookingNumber} booked (${online ? 'online' : 'offline'}) for ${course} on ${new Date(scheduledAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}`);
       if (online) {
         const me = req.user?.employeeId ? await prisma.employee.findUnique({ where: { id: req.user.employeeId }, select: { firstName: true, lastName: true } }) : null;
@@ -845,22 +910,26 @@ export const salesController = {
     try {
       const existingDemo = await prisma.demo.findUnique({
         where: { id: req.params.id },
-        select: { leadId: true, proofUrl: true },
+        select: { leadId: true, proofUrl: true, mode: true, startedAt: true, roomName: true, status: true },
       });
       if (!existingDemo) throw new AppError('Demo not found', 404);
       await assertLeadAccess(req, existingDemo.leadId);
 
-      const { scheduledAt, mode, conductedById, status, feedback, outcome, coConductedById } = req.body;
+      const { scheduledAt, mode, conductedById, status, feedback, outcome, coConductedById, followUpAt } = req.body;
       const proofFile = req.file as Express.Multer.File | undefined;
 
+      if (outcome && !OUTCOME_PLAN[String(outcome)]) throw new AppError('Unknown demo outcome', 400);
       if (status === 'COMPLETED') {
         if (!outcome) {
           throw new AppError('Pick an outcome (Not Interested / Interested / 50-50 / Need Follow-up) when marking a demo Conducted', 400);
         }
-        if (!proofFile && !existingDemo.proofUrl) {
+        // An online demo that really ran in the portal room is its own proof; everything else needs a photo/screenshot.
+        const heldInPortal = existingDemo.mode === 'ONLINE' && !!existingDemo.roomName && !!existingDemo.startedAt;
+        if (!proofFile && !existingDemo.proofUrl && !heldInPortal) {
           throw new AppError('A photo/screenshot proof is required to mark a demo Conducted', 400);
         }
       }
+      if (followUpAt && isNaN(new Date(followUpAt).getTime())) throw new AppError('Invalid follow-up date', 400);
 
       const demo = await prisma.demo.update({
         where: { id: req.params.id },
@@ -878,8 +947,23 @@ export const salesController = {
         },
       });
 
+      const actor = req.user?.employeeId;
       if (status === 'COMPLETED') {
+        await closeDemoTask(demo.id, 'DONE');
         await prisma.lead.update({ where: { id: demo.leadId }, data: { status: 'DEMO_DONE', stageKey: null } });
+        // The outcome decides where the lead goes next (and sets the follow-up task where one is needed).
+        await applyDemoOutcome(demo.leadId, String(outcome), actor, followUpAt ? new Date(followUpAt) : null);
+      } else if (status === 'NO_SHOW') {
+        await closeDemoTask(demo.id, 'DONE');
+        await logLeadHistory(demo.leadId, actor, 'DEMO', `Demo ${demo.bookingNumber} marked No Show`);
+      } else if (status === 'CANCELLED') {
+        await closeDemoTask(demo.id, 'CANCELLED');
+        await logLeadHistory(demo.leadId, actor, 'DEMO', `Demo ${demo.bookingNumber} cancelled`);
+      } else if (!status && outcome && existingDemo.status === 'COMPLETED') {
+        // Outcome filled in later for a demo that was finished without one (e.g. lead moved to Demo over by hand).
+        await applyDemoOutcome(demo.leadId, String(outcome), actor, followUpAt ? new Date(followUpAt) : null);
+      } else if (scheduledAt || conductedById) {
+        await upsertDemoTask(demo.id, actor);
       }
 
       res.json({ success: true, data: demo });
@@ -905,6 +989,11 @@ export const salesController = {
       await assertLeadAccess(req, original.leadId);
 
       const bookingNumber = await nextDemoBookingNumber(prisma);
+      const newMode = mode || original.mode;
+      // An online demo needs its own room + access code (the old ones belonged to the frozen booking).
+      const roomFields = newMode === 'ONLINE'
+        ? { roomName: `salesdemo-${bookingNumber.toLowerCase()}-${newDemoCode().slice(0, 4).toLowerCase()}`, accessCode: newDemoCode(), maxMinutes: original.maxMinutes }
+        : {};
 
       const [, , newDemo] = await prisma.$transaction([
         prisma.demo.update({ where: { id: original.id }, data: { status: 'RESCHEDULED', rescheduleReason: reason } }),
@@ -913,10 +1002,12 @@ export const salesController = {
           data: {
             leadId: original.leadId,
             scheduledAt: new Date(scheduledAt),
-            mode: mode || original.mode,
+            mode: newMode,
             status: 'SCHEDULED',
             rescheduledFromId: original.id,
             bookingNumber,
+            conductedById: original.conductedById,
+            ...roomFields,
             city: original.city,
             educationQualification: original.educationQualification,
             collegeName: original.collegeName,
@@ -929,6 +1020,13 @@ export const salesController = {
         }),
       ]);
 
+      await closeDemoTask(original.id, 'CANCELLED');
+      await upsertDemoTask(newDemo.id, req.user?.employeeId).catch((e) => console.error('Demo task failed', e));
+      await logLeadHistory(original.leadId, req.user?.employeeId, 'DEMO', `Demo ${original.bookingNumber} rescheduled to ${new Date(scheduledAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} (${newDemo.bookingNumber}): ${reason}`);
+      if (newMode === 'ONLINE') {
+        const me = req.user?.employeeId ? await prisma.employee.findUnique({ where: { id: req.user.employeeId }, select: { firstName: true, lastName: true } }) : null;
+        announceOnlineDemo(newDemo.id, me ? `${me.firstName} ${me.lastName}` : 'Sales').catch((e) => console.error('Online demo announce failed', e));
+      }
       res.status(201).json({ success: true, data: newDemo });
     } catch (err) { next(err); }
   },

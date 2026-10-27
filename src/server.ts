@@ -16,7 +16,7 @@ import { salesTargetAlertsService } from './services/salesTargetAlerts.service';
 import { feeReminderService } from './services/feeReminder.service';
 import { salesAdvisorReportService } from './services/salesAdvisorReport.service';
 import { cutExpiredDemoGuests } from './controllers/demoSessions.controller';
-import { closeExpiredSalesDemos } from './controllers/salesDemoRoom.controller';
+import { closeExpiredSalesDemos, sendDemoReminders } from './controllers/salesDemoRoom.controller';
 import { processPending } from './services/transcription.service';
 
 const httpServer = createServer(app);
@@ -52,6 +52,8 @@ const start = async () => {
       try { await cutExpiredDemoGuests(); } catch (err) { console.error('Demo guest cut-off failed:', err); }
       // Sales online demos: close rooms whose 60 minutes are up (reopen then needs Sales Admin approval).
       try { await closeExpiredSalesDemos(); } catch (err) { console.error('Sales demo close failed:', err); }
+      // "Demo starts in 10 minutes" emails to the student and the advisor.
+      try { await sendDemoReminders(); } catch (err) { console.error('Demo reminders failed:', err); }
       // Call / demo transcription queue (no-op unless WHISPER_URL is set).
       // Not awaited: a long audio file must not hold up the other per-minute jobs.
       processPending(2).catch((err) => console.error('Transcription run failed:', err));
