@@ -16,7 +16,7 @@ import { LEAD_FILTER_FIELDS, CALL_FILTER_FIELDS } from '../utils/salesFilterFiel
 import { normalizePhone } from '../utils/phone';
 import { computeRankCard } from '../utils/rankCard';
 import { getOnboardingStatus, reconcileFlagsBatch } from '../utils/onboardingStatus';
-import { syncFollowUpTask, moveOpenTasks, upsertDemoTask, closeDemoTask, applyDemoOutcome, completeScheduledDemos, OUTCOME_PLAN } from '../utils/salesFlow';
+import { moveDemoReminder, syncFollowUpTask, moveOpenTasks, upsertDemoTask, closeDemoTask, applyDemoOutcome, completeScheduledDemos, OUTCOME_PLAN } from '../utils/salesFlow';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -134,12 +134,24 @@ async function listStudentsSummary(studentWhere: Record<string, unknown>) {
   return reconcileFlagsBatch(students);
 }
 
+/** Whitelisted column sorts for the Leads table; always tie-break on newest so paging is stable. */
+function leadOrderBy(sortBy: unknown, sortDir: unknown) {
+  const dir = String(sortDir) === 'asc' ? 'asc' : 'desc';
+  const col = String(sortBy || '');
+  const plain = ['name', 'phone', 'email', 'status', 'source', 'courseInterest', 'scoutKey', 'createdAt', 'nextFollowUpAt', 'lastContactAt'];
+  if (plain.includes(col)) return [{ [col]: dir }, { createdAt: 'desc' as const }] as never;
+  if (col === 'assignedTo') return [{ assignedTo: { firstName: dir } }, { createdAt: 'desc' as const }] as never;
+  return { createdAt: 'desc' as const } as never;
+}
+
 export const salesController = {
   // ── Leads ────────────────────────────────────────────────────────────────
   async listLeads(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { page = 1, limit = 20, status, search, assignedToId, followUp, activityStatus, source, createdFrom, createdTo, followUpFrom, followUpTo, course, scoutKey } = req.query;
-      const p = Number(page), l = Number(limit);
+      const { page = 1, limit = 20, status, search, assignedToId, followUp, activityStatus, source, createdFrom, createdTo, followUpFrom, followUpTo, course, scoutKey, sortBy, sortDir, nameLike, phoneLike, emailLike } = req.query;
+      // limit=all → one big page (capped so a huge table cannot take the server down).
+      const allRows = String(limit) === 'all';
+      const p = allRows ? 1 : Number(page), l = allRows ? 5000 : Math.min(500, Number(limit) || 20);
 
       const where: Record<string, unknown> = { deletedAt: null };
       // Every list filter accepts a comma list, so several values can be ticked at once.
@@ -179,6 +191,10 @@ export const salesController = {
         else where.source = multi(source);
       }
       if (course) where.courseInterest = multi(course);
+      // Excel-style column text filters
+      if (nameLike) and.push({ name: { contains: String(nameLike) } });
+      if (phoneLike) and.push({ phone: { contains: String(phoneLike) } });
+      if (emailLike) and.push({ email: { contains: String(emailLike) } });
       if (assignedToId) where.assignedToId = list(assignedToId).includes('NONE') ? null : multi(assignedToId);
       const range = (from: unknown, to: unknown) => {
         const r: Record<string, Date> = {};
@@ -224,7 +240,7 @@ export const salesController = {
             demos: { orderBy: { scheduledAt: 'desc' }, take: 1 },
             _count: { select: { demos: true, callLogs: true } },
           },
-          orderBy: { createdAt: 'desc' },
+          orderBy: leadOrderBy(sortBy, sortDir),
           ...paginate(p, l),
         }),
         prisma.lead.count({ where }),
@@ -481,8 +497,9 @@ export const salesController = {
       // Stage can be a built-in stage or an Admin-created one (Config tab).
       const wantedStage = stageKey ?? status;
       const newStage = wantedStage !== undefined ? await resolveStage(String(wantedStage)) : null;
+      // Picking a Lost-type stage (Not Interested / Unresponsive) needs no extra prompt: the reason follows the stage unless one is given.
       const newReason = newStage?.status === 'LOST'
-        ? (lostReason ? await resolveLostReason(String(lostReason)) : (() => { throw new AppError('A reason is required when marking a lead as Lost', 400); })())
+        ? await resolveLostReason(String(lostReason || (newStage.stageKey === 'CUSTOM_NOT_INTERESTED' ? 'NOT_INTERESTED' : newStage.stageKey === 'CUSTOM_UNRESPONSIVE' ? 'UNREACHABLE' : 'OTHER')))
         : null;
       if (scoutKey && !(await leadConfig()).find('SCOUT', String(scoutKey))) throw new AppError('Unknown Lead Scout', 400);
       if (source) await ensureSource(source);
@@ -703,19 +720,16 @@ export const salesController = {
       }
 
       // The stage follows the status; an explicit stage from the form (e.g. Negotiation) wins unless it is Lost.
-      const target = await resolveStage(sdef.targetStageKey || 'CONTACTED');
+      const target = await resolveStage(sdef.targetStageKey || 'CUSTOM_FOLLOW_UP');
       let stage = target;
-      if (status && String(status) !== 'LOST') {
-        const picked = await resolveStage(String(status));
-        if (picked.status !== 'LOST') stage = picked;
-      }
+      if (status) stage = await resolveStage(String(status)); // an explicit stage from the form always wins
       let finalLostReason: LeadLostReason | null = null;
       let finalLostReasonKey: string | null = null;
       if (stage.status === 'LOST') {
         if (lostReason) {
           const r = await resolveLostReason(String(lostReason));
           finalLostReason = r.lostReason as LeadLostReason; finalLostReasonKey = r.lostReasonKey;
-        } else finalLostReason = baseStatus === 'NOT_INTERESTED' ? LeadLostReason.NOT_INTERESTED : LeadLostReason.OTHER;
+        } else finalLostReason = baseStatus === 'NOT_INTERESTED' || stage.stageKey === 'CUSTOM_NOT_INTERESTED' ? LeadLostReason.NOT_INTERESTED : stage.stageKey === 'CUSTOM_UNRESPONSIVE' ? LeadLostReason.UNREACHABLE : LeadLostReason.OTHER;
       }
 
       const leadId = req.params.id;
@@ -733,7 +747,7 @@ export const salesController = {
       const isMeeting = type === 'MEETING';
       const touched = isMeeting ? new Date() : linkedCall?.calledAt ?? null; // a real contact happened
       // Closed-out statuses clear the reminder; open ones set the chosen date+time.
-      const followUpValue = sdef.needsFollowUp ? new Date(nextFollowUpAt) : null;
+      const followUpValue = sdef.needsFollowUp && stage.status !== 'LOST' && stage.status !== 'ENROLLED' ? new Date(nextFollowUpAt) : null;
       const noteText = notes ? String(notes) : null;
 
       const leadData = {
@@ -910,7 +924,7 @@ export const salesController = {
     try {
       const existingDemo = await prisma.demo.findUnique({
         where: { id: req.params.id },
-        select: { leadId: true, proofUrl: true, mode: true, startedAt: true, roomName: true, status: true },
+        select: { leadId: true, proofUrl: true, mode: true, startedAt: true, roomName: true, status: true, scheduledAt: true },
       });
       if (!existingDemo) throw new AppError('Demo not found', 404);
       await assertLeadAccess(req, existingDemo.leadId);
@@ -923,11 +937,7 @@ export const salesController = {
         if (!outcome) {
           throw new AppError('Pick an outcome (Not Interested / Interested / 50-50 / Need Follow-up) when marking a demo Conducted', 400);
         }
-        // An online demo that really ran in the portal room is its own proof; everything else needs a photo/screenshot.
-        const heldInPortal = existingDemo.mode === 'ONLINE' && !!existingDemo.roomName && !!existingDemo.startedAt;
-        if (!proofFile && !existingDemo.proofUrl && !heldInPortal) {
-          throw new AppError('A photo/screenshot proof is required to mark a demo Conducted', 400);
-        }
+        // Proof of demo is optional for now (a photo can still be attached).
       }
       if (followUpAt && isNaN(new Date(followUpAt).getTime())) throw new AppError('Invalid follow-up date', 400);
 
@@ -948,6 +958,9 @@ export const salesController = {
       });
 
       const actor = req.user?.employeeId;
+      // The demo slot doubles as the lead's reminder: finishing/cancelling clears it, a new slot moves it.
+      if (status === 'COMPLETED' || status === 'NO_SHOW' || status === 'CANCELLED') await moveDemoReminder(demo.leadId, existingDemo.scheduledAt, null);
+      else if (scheduledAt) await moveDemoReminder(demo.leadId, existingDemo.scheduledAt, new Date(scheduledAt));
       if (status === 'COMPLETED') {
         await closeDemoTask(demo.id, 'DONE');
         await prisma.lead.update({ where: { id: demo.leadId }, data: { status: 'DEMO_DONE', stageKey: null } });
@@ -1021,6 +1034,7 @@ export const salesController = {
       ]);
 
       await closeDemoTask(original.id, 'CANCELLED');
+      await moveDemoReminder(original.leadId, original.scheduledAt, new Date(scheduledAt));
       await upsertDemoTask(newDemo.id, req.user?.employeeId).catch((e) => console.error('Demo task failed', e));
       await logLeadHistory(original.leadId, req.user?.employeeId, 'DEMO', `Demo ${original.bookingNumber} rescheduled to ${new Date(scheduledAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} (${newDemo.bookingNumber}): ${reason}`);
       if (newMode === 'ONLINE') {

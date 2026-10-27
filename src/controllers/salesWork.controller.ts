@@ -100,8 +100,8 @@ export const salesWorkController = {
   async listTasks(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const admin = await isAdmin(req);
-      const { status, assignedToId, leadId, page = 1, limit = 50 } = req.query;
-      const p = Number(page), l = Math.min(Number(limit) || 50, 200);
+      const { status, assignedToId, leadId, page = 1, limit = 50, from, to } = req.query;
+      const p = Number(page), l = Math.min(Number(limit) || 50, 300);
       const where: Record<string, unknown> = {};
       if (status) where.status = status;
       if (leadId) {
@@ -111,8 +111,23 @@ export const salesWorkController = {
         const cutoff = await historyCutoff(admin, String(leadId));
         if (cutoff) where.createdAt = { gte: cutoff };
         if (admin && assignedToId) where.assignedToId = assignedToId;
-      } else if (admin) { if (assignedToId) where.assignedToId = assignedToId; }
-      else where.assignedToId = requireEmployee(req);
+      } else if (admin) {
+        // 'ME' = the admin's own tasks; empty = the whole team; otherwise one person.
+        if (assignedToId === 'ME') where.assignedToId = requireEmployee(req);
+        else if (assignedToId) where.assignedToId = assignedToId;
+      } else where.assignedToId = requireEmployee(req);
+
+      // Date range (IST days). Open/cancelled tasks are matched on their due date, finished ones on when they were completed.
+      // With no range, finished tasks are limited to the last 14 days so the list stays light.
+      if (!leadId) {
+        const day = (v: unknown, end: boolean) => new Date(`${String(v)}T${end ? '23:59:59.999' : '00:00:00.000'}+05:30`);
+        const rng: Record<string, Date> = {};
+        if (from) rng.gte = day(from, false);
+        if (to) rng.lte = day(to, true);
+        const doneRange = Object.keys(rng).length ? rng : { gte: new Date(Date.now() - 14 * 86400000) };
+        const dueRange = Object.keys(rng).length ? { dueAt: rng } : {};
+        where.AND = [{ OR: [{ status: 'OPEN', ...dueRange }, { status: 'CANCELLED', ...dueRange }, { status: 'DONE', completedAt: doneRange }] }];
+      }
 
       const [rows, total] = await Promise.all([
         prisma.salesTask.findMany({

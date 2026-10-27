@@ -163,6 +163,8 @@ export const salesToolsController = {
       }
       for (const l of followUps) {
         const at = l.nextFollowUpAt!;
+        // A booked demo's slot is already listed as the demo — don't repeat it as a follow-up at the same time.
+        if (demos.some((d) => d.lead.id === l.id && Math.abs(d.scheduledAt.getTime() - at.getTime()) < 120000)) continue;
         if (at < start) {
           const days = Math.floor((start.getTime() - at.getTime()) / DAY) + 1;
           summary.overdue++; add(l, { type: 'OVERDUE', label: `Follow-up overdue ${days} day${days === 1 ? '' : 's'}`, at, score: 800 + Math.min(days, 30) * 5 });

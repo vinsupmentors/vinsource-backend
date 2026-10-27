@@ -8,6 +8,7 @@ import { leadDuplicatesController } from '../controllers/leadDuplicates.controll
 import { salesAlertsController } from '../controllers/salesAlerts.controller';
 import { salesToolsController } from '../controllers/salesTools.controller';
 import { leadConfigController } from '../controllers/leadConfig.controller';
+import { salesDashboardController } from '../controllers/salesDashboard.controller';
 import { transcriptsController } from '../controllers/transcripts.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
@@ -18,6 +19,7 @@ router.use(authenticate);
 router.use(requireModule('SALES', 'VIEW'));
 
 router.get('/stats', salesController.stats);
+router.get('/dashboard', salesDashboardController.get);
 router.get('/team', salesController.listTeam);
 
 router.get('/leads', salesController.listLeads);

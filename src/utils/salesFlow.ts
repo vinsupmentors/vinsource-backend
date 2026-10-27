@@ -64,11 +64,17 @@ export async function closeDemoTask(demoId: string, outcome: 'DONE' | 'CANCELLED
 
 /** What each outcome does to the lead. followUpDays = default follow-up if the caller did not pick a date. */
 export const OUTCOME_PLAN: Record<string, { stage: string; status: LeadActivityStatus; followUpDays: number | null; label: string }> = {
-  INTERESTED:     { stage: 'NEGOTIATION', status: 'DEMO_OVER',      followUpDays: null, label: 'Interested' },
-  FIFTY_FIFTY:    { stage: 'NEGOTIATION', status: 'DEMO_OVER',      followUpDays: 2,    label: '50-50' },
+  INTERESTED:     { stage: 'CUSTOM_POSITIVE', status: 'DEMO_OVER',      followUpDays: null, label: 'Interested' },
+  FIFTY_FIFTY:    { stage: 'CUSTOM_FOLLOW_UP', status: 'DEMO_OVER',      followUpDays: 2,    label: '50-50' },
   NEED_FOLLOWUP:  { stage: 'DEMO_DONE',   status: 'DEMO_OVER',      followUpDays: 1,    label: 'Needs follow-up' },
-  NOT_INTERESTED: { stage: 'LOST',        status: 'NOT_INTERESTED', followUpDays: null, label: 'Not interested' },
+  NOT_INTERESTED: { stage: 'CUSTOM_NOT_INTERESTED',        status: 'NOT_INTERESTED', followUpDays: null, label: 'Not interested' },
 };
+
+/** A demo's slot doubles as the lead's reminder — keep that reminder in step when the demo moves or finishes. */
+export async function moveDemoReminder(leadId: string, oldAt: Date | null | undefined, newAt: Date | null) {
+  if (!oldAt) return;
+  await prisma.lead.updateMany({ where: { id: leadId, nextFollowUpAt: oldAt }, data: { nextFollowUpAt: newAt } });
+}
 
 export async function applyDemoOutcome(leadId: string, outcome: string, actorId?: string | null, followUpAt?: Date | null) {
   const plan = OUTCOME_PLAN[outcome];
@@ -98,8 +104,9 @@ export async function applyDemoOutcome(leadId: string, outcome: string, actorId?
  * tab agrees. (Outcome stays empty — the demo card will ask for it.)
  */
 export async function completeScheduledDemos(leadId: string, actorId?: string | null) {
-  const open = await prisma.demo.findMany({ where: { leadId, status: 'SCHEDULED' }, select: { id: true, roomName: true, mode: true, startedAt: true } });
+  const open = await prisma.demo.findMany({ where: { leadId, status: 'SCHEDULED' }, select: { id: true, roomName: true, mode: true, startedAt: true, scheduledAt: true } });
   for (const d of open) {
+    await moveDemoReminder(leadId, d.scheduledAt, null);
     await prisma.demo.update({ where: { id: d.id }, data: { status: 'COMPLETED', closedAt: d.roomName ? new Date() : undefined } });
     if (d.roomName) await closeRoom(d.roomName).catch(() => {});
     await closeDemoTask(d.id, 'DONE');
