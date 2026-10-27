@@ -20,6 +20,8 @@ router.use(requireModule('SALES', 'VIEW'));
 
 router.get('/stats', salesController.stats);
 router.get('/dashboard', salesDashboardController.get);
+router.get('/collections', salesDashboardController.collections);
+router.get('/leads/:id/fees', salesDashboardController.leadFees);
 router.get('/team', salesController.listTeam);
 
 router.get('/leads', salesController.listLeads);

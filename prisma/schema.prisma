@@ -285,6 +285,7 @@ enum PaymentMode {
   CARD
   NET_BANKING
   CHEQUE
+  JODO
   OTHER
 }
 
@@ -1990,6 +1991,7 @@ model FeeInstallment {
   status       FeeInstallmentStatus @default(PENDING)
   paidAt       DateTime?
   mode         PaymentMode?
+  reference    String?              // UTR / JODO / transaction id, for finance to match
   receivedById String?
   approvedById String?
   approvedAt   DateTime?

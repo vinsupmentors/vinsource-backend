@@ -3,6 +3,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { getEffectiveAccess } from '../utils/moduleAccess';
+import { feeSummaryForLead } from '../utils/salesFlow';
 
 const DAY = 86400000;
 const IST_OFFSET = 5.5 * 3600 * 1000;
@@ -41,7 +42,7 @@ export const salesDashboardController = {
       const [
         callsToday, talkAgg, demosToday, followUpsDue, overdue, tasksDue, pendingOutcome,
         newThisMonth, enrolledMonth, demosDoneMonth, byStage, openTotal, calls7, targets,
-        sourceRows, enrolledSource, pool, untouchedNew,
+        sourceRows, enrolledSource, pool, untouchedNew, collectedAgg, awaitingAgg, overdueFeeAgg,
       ] = await Promise.all([
         prisma.leadCallLog.count({ where: { ...callScope, calledAt: { gte: today, lt: tomorrow }, OR: [{ source: 'AUTO' }, { activityType: { not: null } }] } }),
         prisma.leadCallLog.aggregate({ where: { ...callScope, source: 'AUTO', calledAt: { gte: today, lt: tomorrow } }, _sum: { durationSeconds: true } }),
@@ -61,6 +62,10 @@ export const salesDashboardController = {
         prisma.lead.groupBy({ by: ['source'], where: { ...leadScope, status: 'ENROLLED', createdAt: { gte: new Date(today.getTime() - 29 * DAY) } }, _count: { _all: true } }),
         admin && !scopeEmp ? prisma.lead.count({ where: { deletedAt: null, assignedToId: null } }) : Promise.resolve(0),
         prisma.lead.count({ where: { ...leadScope, status: 'NEW', lastContactAt: null } }),
+        // Money: verified collections this month, payments waiting for Finance, and instalments past their due date.
+        prisma.feeCollection.aggregate({ where: { collectedAt: { gte: monthStart }, ...(scopeEmp ? { OR: [{ receivedById: scopeEmp }, { lead: { assignedToId: scopeEmp } }] } : {}) }, _sum: { amount: true } }),
+        prisma.feeInstallment.aggregate({ where: { status: 'PENDING_APPROVAL', plan: { status: 'ACTIVE', ...(scopeEmp ? { lead: { assignedToId: scopeEmp } } : {}) } }, _sum: { amount: true }, _count: { _all: true } }),
+        prisma.feeInstallment.aggregate({ where: { status: { in: ['PENDING', 'OVERDUE'] }, dueDate: { lt: today }, plan: { status: 'ACTIVE', ...(scopeEmp ? { lead: { assignedToId: scopeEmp } } : {}) } }, _sum: { amount: true }, _count: { _all: true } }),
       ]);
 
       // Calls per day, last 7 days (IST)
@@ -114,9 +119,67 @@ export const salesDashboardController = {
             goal: targets.reduce((n, t) => n + t.enrollmentGoal, 0), revenueGoal: targets.reduce((n, t) => n + t.revenueGoal, 0),
             dayOfMonth: ist.getUTCDate(), daysInMonth: new Date(ist.getUTCFullYear(), ist.getUTCMonth() + 1, 0).getDate(),
           },
+          money: { collectedMonth: collectedAgg._sum.amount || 0, awaitingAmount: awaitingAgg._sum.amount || 0, awaitingCount: awaitingAgg._count._all, overdueAmount: overdueFeeAgg._sum.amount || 0, overdueCount: overdueFeeAgg._count._all },
           funnel: stageCounts, openTotal,
           callsTrend: Array.from(perDay.entries()).map(([date, count]) => ({ date, count })),
           sources, pool, team,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /** Fee picture for one lead: totals + every plan's instalments. */
+  async leadFees(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { id: true, deletedAt: true, assignedToId: true } });
+      if (!lead || lead.deletedAt) throw new AppError('Lead not found', 404);
+      if (!(await isAdmin(req)) && lead.assignedToId !== req.user?.employeeId) throw new AppError('You do not have access to this lead', 403);
+      const { plans, ...totals } = await feeSummaryForLead(lead.id);
+      res.json({
+        success: true,
+        data: {
+          ...totals,
+          plans: plans.map((p) => ({
+            id: p.id, courseName: p.courseName, totalFee: p.totalFee, planType: p.planType, admissionId: p.admissionId, status: p.status,
+            installments: p.installments.map((i) => ({ id: i.id, dueDate: i.dueDate, amount: i.amount, status: i.status, paidAt: i.paidAt, mode: i.mode, reference: i.reference, kind: i.kind })),
+          })),
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /** Collections board: payments waiting for Finance, instalments overdue and due soon. Salespeople see their own leads. */
+  async collections(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const admin = await isAdmin(req);
+      const me = req.user?.employeeId;
+      if (!admin && !me) throw new AppError('Your account is not linked to an employee record', 400);
+      const emp = admin ? (req.query.employeeId ? String(req.query.employeeId) : null) : (me as string);
+      const now = new Date();
+      const soon = new Date(now.getTime() + 14 * DAY);
+      const rows = await prisma.feeInstallment.findMany({
+        where: {
+          status: { in: ['PENDING_APPROVAL', 'PENDING', 'OVERDUE'] },
+          OR: [{ status: 'PENDING_APPROVAL' }, { dueDate: { lte: soon } }],
+          plan: { status: 'ACTIVE', ...(emp ? { lead: { assignedToId: emp } } : {}) },
+        },
+        include: {
+          receivedBy: { select: { id: true, firstName: true, lastName: true } },
+          plan: { select: { courseName: true, totalFee: true, lead: { select: { id: true, name: true, phone: true, assignedTo: { select: { id: true, firstName: true, lastName: true } } } } } },
+        },
+        orderBy: { dueDate: 'asc' },
+        take: 400,
+      });
+      const shape = (i: (typeof rows)[number]) => ({
+        id: i.id, amount: i.amount, dueDate: i.dueDate, status: i.status, paidAt: i.paidAt, mode: i.mode, reference: i.reference,
+        collectedBy: i.receivedBy, course: i.plan.courseName, lead: i.plan.lead,
+      });
+      res.json({
+        success: true,
+        data: {
+          awaiting: rows.filter((i) => i.status === 'PENDING_APPROVAL').map(shape),
+          overdue: rows.filter((i) => i.status !== 'PENDING_APPROVAL' && i.dueDate < now).map(shape),
+          upcoming: rows.filter((i) => i.status !== 'PENDING_APPROVAL' && i.dueDate >= now).map(shape),
         },
       });
     } catch (err) { next(err); }

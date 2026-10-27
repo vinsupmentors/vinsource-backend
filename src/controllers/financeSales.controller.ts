@@ -6,6 +6,7 @@ import { AuthRequest } from '../types';
 import { paginate, formatPagination } from '../utils/helpers';
 import { emailService } from '../services/email.service';
 import { generateReceiptPdf, ReceiptTransaction } from '../utils/receiptPdf';
+import { syncStageFromFees, logPaymentRecorded } from '../utils/salesFlow';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 const leadSelect = { id: true, name: true, phone: true, email: true, city: true, assignedToId: true };
@@ -568,7 +569,7 @@ export const financeSalesController = {
         throw new AppError('This installment has already been collected', 400);
       }
 
-      const { amount, mode, collectedAt } = req.body;
+      const { amount, mode, collectedAt, reference } = req.body;
       const paidAmount = amount !== undefined ? Number(amount) : installment.amount;
       const paymentDate = collectedAt ? new Date(collectedAt) : new Date();
       const receiver = req.user?.employeeId || undefined;
@@ -579,9 +580,10 @@ export const financeSalesController = {
 
       await prisma.feeInstallment.update({
         where: { id: installment.id },
-        data: { status: 'PENDING_APPROVAL', paidAt: paymentDate, amount: paidAmount, mode: mode || 'UPI', receivedById: receiver },
+        data: { status: 'PENDING_APPROVAL', paidAt: paymentDate, amount: paidAmount, mode: mode || 'UPI', reference: reference ? String(reference).slice(0, 190) : undefined, receivedById: receiver },
       });
 
+      await logPaymentRecorded(installment.plan.leadId, receiver, paidAmount, String(mode || 'UPI'), reference ? String(reference) : null).catch(() => {});
       const plan = await prisma.feePaymentPlan.findUnique({ where: { id: installment.planId }, include: planInclude });
       res.json({ success: true, data: plan, message: 'Payment recorded. Awaiting Admin approval before the receipt is emailed.' });
     } catch (err) { next(err); }
@@ -645,7 +647,7 @@ export const financeSalesController = {
             mode: installment.mode || 'UPI',
             receivedById: installment.receivedById || undefined,
             collectedAt: paymentDate,
-            remarks: `Fee plan: ${installment.plan.courseName}`,
+            remarks: `Fee plan: ${installment.plan.courseName}${installment.reference ? ` · ref ${installment.reference}` : ''}`,
           },
         });
         await tx.feeInstallment.update({
@@ -660,6 +662,8 @@ export const financeSalesController = {
       });
 
       emailReceipt(installment.planId, paymentDate);
+      // Verified money moves the lead's stage (Registration Done / Partial Payment / Enrolled) and is noted in its history.
+      await syncStageFromFees(installment.plan.leadId, req.user?.employeeId, installment.amount).catch((e) => console.error('Stage sync after payment failed', e));
 
       const plan = await prisma.feePaymentPlan.findUnique({ where: { id: installment.planId }, include: planInclude });
       res.json({ success: true, data: plan, message: 'Payment approved. Receipt emailed.' });

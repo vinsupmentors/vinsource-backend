@@ -114,3 +114,64 @@ export async function completeScheduledDemos(leadId: string, actorId?: string | 
   if (open.length) await history(leadId, actorId, 'DEMO', `Demo marked conducted (lead moved to Demo over)`);
   return open.length;
 }
+
+// ── Sales ↔ Finance: fee plan money drives the lead stage ─────────────────────
+
+/** Money picture for one lead across its live fee plans (cancelled / refunded plans are ignored). */
+export async function feeSummaryForLead(leadId: string) {
+  const plans = await prisma.feePaymentPlan.findMany({
+    where: { leadId, status: { in: ['ACTIVE', 'COMPLETED'] } },
+    include: { installments: { orderBy: { dueDate: 'asc' } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  const now = new Date();
+  let total = 0, paid = 0, awaiting = 0, overdue = 0;
+  let nextDue: { dueDate: Date; amount: number } | null = null;
+  for (const p of plans) {
+    for (const i of p.installments) {
+      if (i.status === 'WAIVED') continue;
+      total += i.amount;
+      if (i.status === 'PAID') paid += i.amount;
+      else if (i.status === 'PENDING_APPROVAL') awaiting += i.amount;
+      else {
+        if (i.dueDate < now) overdue += i.amount;
+        if (!nextDue || i.dueDate < nextDue.dueDate) nextDue = { dueDate: i.dueDate, amount: i.amount };
+      }
+    }
+  }
+  return { plans, total, paid, awaiting, overdue, balance: Math.max(0, total - paid - awaiting), nextDue, pct: total > 0 ? paid / total : 0 };
+}
+
+const PAYMENT_STAGE_RANK: Record<string, number> = { CUSTOM_REGISTRATION_DONE: 1, CUSTOM_PARTIAL_PAYMENT: 2, ENROLLED: 3 };
+const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+/** Sales recorded a payment — note it on the lead (stage waits for Finance to verify). */
+export async function logPaymentRecorded(leadId: string, actorId: string | null | undefined, amount: number, mode: string, reference: string | null) {
+  await history(leadId, actorId, 'PAYMENT', `Payment of ${inr(amount)} recorded (${mode.replace('_', ' ')}${reference ? `, ref ${reference}` : ''}) — awaiting Finance verification`);
+}
+
+/**
+ * Finance verified a payment: move the lead forward from what has really been paid.
+ *  any verified payment → Registration Done · 60%+ → Partial Payment · fully paid → Enrolled.
+ * It only ever moves forward, so a lead already at a later stage is left alone.
+ */
+export async function syncStageFromFees(leadId: string, actorId: string | null | undefined, verifiedAmount?: number) {
+  const sum = await feeSummaryForLead(leadId);
+  if (sum.paid <= 0) return;
+  const target = sum.total > 0 && sum.paid >= sum.total - 0.5 ? 'ENROLLED' : sum.pct >= 0.6 ? 'CUSTOM_PARTIAL_PAYMENT' : 'CUSTOM_REGISTRATION_DONE';
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { status: true, stageKey: true, assignedToId: true } });
+  if (!lead) return;
+  const currentKey = lead.stageKey || lead.status;
+  const note = `Payment${verifiedAmount ? ` of ${inr(verifiedAmount)}` : ''} verified by Finance — ${inr(sum.paid)} of ${inr(sum.total)} paid (${Math.round(sum.pct * 100)}%)`;
+  if ((PAYMENT_STAGE_RANK[currentKey] ?? 0) >= PAYMENT_STAGE_RANK[target]) {
+    await history(leadId, actorId, 'PAYMENT', note);
+    return;
+  }
+  const stage = await resolveStage(target);
+  await prisma.lead.update({
+    where: { id: leadId },
+    data: { status: stage.status as LeadStatus, stageKey: stage.stageKey, lostReason: null, lostReasonKey: null, nextFollowUpAt: null },
+  });
+  await syncFollowUpTask(leadId, null, null, actorId); // paid leads need no sales follow-up
+  await history(leadId, actorId, 'STAGE', `Lead stage changed from ${currentKey.replace(/^CUSTOM_/, '').replace(/_/g, ' ').toLowerCase()} to ${stage.label} — ${note}`, currentKey, stage.stageKey || stage.status);
+}
