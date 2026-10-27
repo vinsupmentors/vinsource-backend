@@ -935,7 +935,7 @@ export const salesController = {
       if (outcome && !OUTCOME_PLAN[String(outcome)]) throw new AppError('Unknown demo outcome', 400);
       if (status === 'COMPLETED') {
         if (!outcome) {
-          throw new AppError('Pick an outcome (Not Interested / Interested / 50-50 / Need Follow-up) when marking a demo Conducted', 400);
+          throw new AppError('Pick the lead stage (Demo Over - Positive / Need Follow up / Not Interested) when marking a demo Conducted', 400);
         }
         // Proof of demo is optional for now (a photo can still be attached).
       }

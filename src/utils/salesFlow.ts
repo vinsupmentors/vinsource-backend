@@ -64,9 +64,9 @@ export async function closeDemoTask(demoId: string, outcome: 'DONE' | 'CANCELLED
 
 /** What each outcome does to the lead. followUpDays = default follow-up if the caller did not pick a date. */
 export const OUTCOME_PLAN: Record<string, { stage: string; status: LeadActivityStatus; followUpDays: number | null; label: string }> = {
-  INTERESTED:     { stage: 'CUSTOM_POSITIVE', status: 'DEMO_OVER',      followUpDays: null, label: 'Interested' },
-  FIFTY_FIFTY:    { stage: 'CUSTOM_FOLLOW_UP', status: 'DEMO_OVER',      followUpDays: 2,    label: '50-50' },
-  NEED_FOLLOWUP:  { stage: 'DEMO_DONE',   status: 'DEMO_OVER',      followUpDays: 1,    label: 'Needs follow-up' },
+  INTERESTED:     { stage: 'CUSTOM_DEMO_OVER_POSITIVE', status: 'DEMO_OVER',      followUpDays: null, label: 'Interested' },
+  FIFTY_FIFTY:    { stage: 'CUSTOM_DEMO_OVER_FOLLOW_UP', status: 'DEMO_OVER',      followUpDays: 2,    label: '50-50' },
+  NEED_FOLLOWUP:  { stage: 'CUSTOM_DEMO_OVER_FOLLOW_UP', status: 'DEMO_OVER',      followUpDays: 1,    label: 'Needs follow-up' },
   NOT_INTERESTED: { stage: 'CUSTOM_NOT_INTERESTED',        status: 'NOT_INTERESTED', followUpDays: null, label: 'Not interested' },
 };
 
