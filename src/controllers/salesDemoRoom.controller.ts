@@ -272,11 +272,16 @@ export const salesDemoRoomController = {
 export async function closeExpiredSalesDemos(): Promise<number> {
   const due = await prisma.demo.findMany({
     where: { roomName: { not: null }, startedAt: { not: null }, closedAt: null, expiresAt: { lte: new Date() } },
-    select: { id: true, roomName: true },
+    select: { id: true, roomName: true, leadId: true, status: true },
   });
   for (const d of due) {
     await closeRoom(d.roomName!).catch(() => {});
-    await prisma.demo.update({ where: { id: d.id }, data: { closedAt: new Date() } });
+    await prisma.demo.update({ where: { id: d.id }, data: { closedAt: new Date(), ...(d.status === 'SCHEDULED' ? { status: 'COMPLETED' } : {}) } });
+    // The host never pressed End demo: the demo still happened, so move the lead to Demo done + a follow-up and close the task.
+    if (d.status === 'SCHEDULED') {
+      await applyDemoOutcome(d.leadId, 'NEED_FOLLOWUP', null).catch((e) => console.error('Auto demo outcome failed', e));
+      await closeDemoTask(d.id, 'DONE').catch(() => {});
+    }
   }
   return due.length;
 }
