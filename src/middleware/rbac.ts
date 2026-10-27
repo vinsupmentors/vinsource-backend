@@ -40,6 +40,26 @@ export const requireMinRole = (minRole: Role) =>
   };
 
 /**
+ * Passes if the caller's role is at least `minRole` OR their effective access to
+ * `module` is at least `level`. Lets someone in the HR department (login role
+ * Manager/Employee, HR module access granted via department default or Master
+ * Control) do HR work without being given the global HR role.
+ */
+export const requireRoleOrModule = (minRole: Role, module: ModuleName, level: AccessLevel = 'EDIT') =>
+  async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+    if (ROLE_HIERARCHY[req.user.role] >= ROLE_HIERARCHY[minRole]) { next(); return; }
+    try {
+      const lvl = (await getEffectiveAccess(req.user.userId))[module];
+      if (lvl && LEVEL_RANK[lvl] >= LEVEL_RANK[level]) { next(); return; }
+      res.status(403).json({ success: false, message: 'Insufficient permissions' });
+    } catch (err) { next(err); }
+  };
+
+/**
  * Master Control gate — grants access regardless of the caller's own
  * department/designation. SUPER_ADMIN always passes; everyone else must
  * have User.canManageAccess = true (set via Master Control itself).

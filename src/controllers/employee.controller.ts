@@ -6,6 +6,7 @@ import { AuthRequest } from '../types';
 import { emailService } from '../services/email.service';
 import { notificationService } from '../services/notification.service';
 import { config } from '../config/env';
+import { getEffectiveAccess } from '../utils/moduleAccess';
 
 export const employeeController = {
   async list(req: AuthRequest, res: Response, next: NextFunction) {
@@ -52,7 +53,9 @@ export const employeeController = {
   async get(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const requesterRole = req.user!.role;
-      const isHROrAbove = ['HR', 'ADMIN', 'SUPER_ADMIN'].includes(requesterRole);
+      // HR-department staff with HR module EDIT access see salary/bank details too, same as the HR role.
+      const isHROrAbove = ['HR', 'ADMIN', 'SUPER_ADMIN'].includes(requesterRole)
+        || ['EDIT', 'ADMIN'].includes((await getEffectiveAccess(req.user!.userId)).HR || '');
 
       const employee = await prisma.employee.findUnique({
         where: { id: req.params.id },
@@ -101,7 +104,8 @@ export const employeeController = {
           data: {
             email: body.email.toLowerCase(),
             password: hashedPwd,
-            role: body.role || 'EMPLOYEE',
+            // Only the HR role and above may hand out HR/Admin logins; HR-module staff can create Employee/Manager.
+            role: (['HR', 'ADMIN', 'SUPER_ADMIN'].includes(req.user!.role) || ['EMPLOYEE', 'MANAGER'].includes(body.role)) ? (body.role || 'EMPLOYEE') : 'EMPLOYEE',
           },
         });
 

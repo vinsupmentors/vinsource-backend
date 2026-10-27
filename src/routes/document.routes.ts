@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { documentController } from '../controllers/document.controller';
 import { authenticate } from '../middleware/auth';
-import { requireMinRole } from '../middleware/rbac';
+import { requireMinRole, requireRoleOrModule } from '../middleware/rbac';
 import { uploadDocument } from '../middleware/upload';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { AuthRequest } from '../types';
@@ -42,7 +42,7 @@ router.delete('/:id', documentController.delete);
 // requireHROrModule allows the HR role OR HR module access (e.g. Yureka as doc reviewer)
 router.get('/all', requireHROrModule('VIEW'), documentController.listForHR);
 router.get('/originals-summary', requireHROrModule('VIEW'), documentController.originalsSummary);
-router.post('/collect-originals', requireMinRole('HR'), documentController.collectOriginalsAtJoining);
+router.post('/collect-originals', requireRoleOrModule('HR', 'HR', 'EDIT'), documentController.collectOriginalsAtJoining);
 router.get('/employee/:employeeId', requireHROrModule('VIEW'), documentController.list);
 router.put('/:id/mark-original', requireMinRole('HR'), documentController.markOriginal);
 router.put('/:id/verify', requireHROrModule('EDIT'), documentController.verify);
