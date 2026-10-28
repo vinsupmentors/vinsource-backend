@@ -16,7 +16,7 @@ import { LEAD_FILTER_FIELDS, CALL_FILTER_FIELDS } from '../utils/salesFilterFiel
 import { normalizePhone } from '../utils/phone';
 import { computeRankCard } from '../utils/rankCard';
 import { getOnboardingStatus, reconcileFlagsBatch } from '../utils/onboardingStatus';
-import { moveDemoReminder, syncFollowUpTask, moveOpenTasks, upsertDemoTask, closeDemoTask, applyDemoOutcome, completeScheduledDemos, OUTCOME_PLAN } from '../utils/salesFlow';
+import { ensureReminderForStage, moveDemoReminder, syncFollowUpTask, moveOpenTasks, upsertDemoTask, closeDemoTask, applyDemoOutcome, completeScheduledDemos, OUTCOME_PLAN } from '../utils/salesFlow';
 
 // BDAs (SALES access level EDIT, not ADMIN) only ever see their own assigned
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
@@ -218,7 +218,11 @@ export const salesController = {
       if (advanced) and.push(advanced);
       if (and.length) where.AND = and;
       // "Reminder" column filter — leads whose next-follow-up is overdue or due today.
-      if (followUp === 'overdue' || followUp === 'today') {
+      if (followUp === 'none') {
+        // Open leads with no reminder at all.
+        where.nextFollowUpAt = null;
+        where.status = { notIn: ['LOST', 'ENROLLED'] };
+      } else if (followUp === 'overdue' || followUp === 'today') {
         const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
         const endOfToday = new Date(startOfToday); endOfToday.setDate(endOfToday.getDate() + 1);
         where.nextFollowUpAt = followUp === 'overdue' ? { lt: startOfToday } : { gte: startOfToday, lt: endOfToday };
@@ -515,6 +519,7 @@ export const salesController = {
           name, phone, phoneKey: phone ? leadPhoneKey(phone) : undefined, email, source, courseInterest, assignedToId, campaignId, notes,
           status: newStage ? (newStage.status as LeadStatus) : undefined,
           stageKey: newStage ? newStage.stageKey : undefined,
+          ...(newStage && newStage.stageKey !== 'CUSTOM_UNRESPONSIVE' ? { dnpCount: 0 } : {}),
           scoutKey: scoutKey !== undefined ? (scoutKey || null) : undefined,
           // Profile-tab edits: blank clears the value.
           city: city !== undefined ? (city || null) : undefined,
@@ -540,6 +545,7 @@ export const salesController = {
       // Moving the lead to Demo done by hand finishes its scheduled demo so the Demo tab agrees.
       if (newStage && newStage.status === 'DEMO_DONE' && before.status !== 'DEMO_DONE') await completeScheduledDemos(lead.id, actor);
       if (newStage && (newStage.status === 'LOST' || newStage.status === 'ENROLLED')) await syncFollowUpTask(lead.id, null, null, actor);
+      if (newStage) await ensureReminderForStage(lead.id, newStage.stageKey, actor).catch((e) => console.error('Auto reminder failed', e));
       if (newStage) {
         const beforeKey = before.stageKey || before.status;
         const afterKey = newStage.stageKey || newStage.status;
@@ -733,8 +739,17 @@ export const salesController = {
       }
 
       const leadId = req.params.id;
-      const before = await prisma.lead.findUnique({ where: { id: leadId }, select: { status: true, stageKey: true, activityStatus: true, statusKey: true, nextFollowUpAt: true, deletedAt: true, courseInterest: true, assignedToId: true } });
+      const before = await prisma.lead.findUnique({ where: { id: leadId }, select: { status: true, stageKey: true, activityStatus: true, statusKey: true, nextFollowUpAt: true, deletedAt: true, courseInterest: true, assignedToId: true, dnpCount: true } });
       if (!before || before.deletedAt) throw new AppError('Lead not found', 404);
+
+      // DNP counter: consecutive "did not pick" updates. Any other update resets it; the 5th DNP makes the lead Unresponsive.
+      const DNP_LIMIT = 5;
+      const dnpCount = baseStatus === 'DNP' ? before.dnpCount + 1 : 0;
+      const autoUnresponsive = baseStatus === 'DNP' && dnpCount >= DNP_LIMIT;
+      if (autoUnresponsive) {
+        stage = await resolveStage('CUSTOM_UNRESPONSIVE');
+        finalLostReason = LeadLostReason.UNREACHABLE; finalLostReasonKey = null;
+      }
 
       // Which call (if any) is this update about?
       let linkedCall: { id: string; calledAt: Date } | null = null;
@@ -755,6 +770,7 @@ export const salesController = {
         nextFollowUpAt: followUpValue,
         activityStatus: baseStatus,
         statusKey: customStatusKey,
+        dnpCount,
         status: stage.status as LeadStatus,
         stageKey: stage.stageKey,
         lostReason: finalLostReason,
@@ -794,11 +810,12 @@ export const salesController = {
       const beforeStageKey = before.stageKey || before.status;
       const what = isMeeting ? 'Meeting logged' : linkedCall ? 'Call update logged' : 'Status updated (no call)';
       await logLeadHistory(leadId, actor, 'ACTIVITY',
-        `${what} — status ${sdef.label}${notes ? `: ${String(notes).slice(0, 300)}` : ' (no notes)'}`,
+        `${what} — status ${sdef.label}${baseStatus === 'DNP' ? ` (DNP ${dnpCount} of ${DNP_LIMIT} in a row)` : ''}${notes ? `: ${String(notes).slice(0, 300)}` : ' (no notes)'}`,
         beforeStatusKey, sdef.key);
       if (beforeStatusKey !== sdef.key) {
         await logLeadHistory(leadId, actor, 'STATUS', `Status changed from ${beforeStatusKey ? cfg.label('STATUS', beforeStatusKey) : 'none'} to ${sdef.label}`, beforeStatusKey, sdef.key);
       }
+      if (autoUnresponsive) await logLeadHistory(leadId, actor, 'STAGE', `Did not pick ${DNP_LIMIT} times in a row — lead marked Unresponsive automatically`);
       const newStageKey = stage.stageKey || stage.status;
       if (beforeStageKey !== newStageKey) {
         await logLeadHistory(leadId, actor, 'STAGE', `Lead stage changed from ${cfg.label('STAGE', beforeStageKey)} to ${stage.label}`, beforeStageKey, newStageKey);
@@ -903,6 +920,8 @@ export const salesController = {
       ]);
 
       await upsertDemoTask(demo.id, req.user?.employeeId).catch((e) => console.error('Demo task failed', e));
+      // A booked demo is also the lead's next reminder when it has none.
+      await prisma.lead.updateMany({ where: { id: leadId, nextFollowUpAt: null }, data: { nextFollowUpAt: new Date(scheduledAt) } }).catch(() => {});
       // A demo booking replaces any open follow-up — the demo itself is now the next thing to do.
       await syncFollowUpTask(leadId, null, null, req.user?.employeeId).catch(() => {});
       await logLeadHistory(leadId, req.user?.employeeId, 'DEMO', `Demo ${bookingNumber} booked (${online ? 'online' : 'offline'}) for ${course} on ${new Date(scheduledAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}`);

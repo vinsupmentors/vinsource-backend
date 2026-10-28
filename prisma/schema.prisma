@@ -1482,6 +1482,7 @@ model Lead {
   // call log entry refreshes lastContactAt, and carries the BDA's chosen
   // next-follow-up date forward into nextFollowUpAt ("Reminder" column).
   lastContactAt  DateTime?
+  dnpCount       Int        @default(0) // consecutive DNP updates; resets when the lead is reached
   nextFollowUpAt DateTime?
   // Latest "Update Status" from Log Activity (DNP / Follow-up / ...). `status`
   // above is the lead STAGE and is derived from this.
@@ -1513,6 +1514,7 @@ model Lead {
   assignedTo  Employee?           @relation("LeadAssignee", fields: [assignedToId], references: [id])
   campaign    Campaign?           @relation(fields: [campaignId], references: [id])
   history     LeadHistory[]
+  onboarding  LeadOnboarding?
   tasks       SalesTask[]
   leadNotes   LeadNote[]
   demos       Demo[]
@@ -1992,6 +1994,10 @@ model FeeInstallment {
   paidAt       DateTime?
   mode         PaymentMode?
   reference    String?              // UTR / JODO / transaction id, for finance to match
+  proofFile    String?              // payment screenshot (private-uploads/payment-proofs)
+  ocrAmount    Float?               // amount read from the screenshot in the browser
+  ocrReference String?              // transaction id read from the screenshot
+  amountMatched Boolean?            // does the screenshot amount equal the entered amount
   receivedById String?
   approvedById String?
   approvedAt   DateTime?
@@ -4321,4 +4327,22 @@ model CallTranscript {
   @@index([status])
   @@index([leadId])
   @@index([ownerId])
+}
+
+/// Sales onboards a lead that said yes: batch preferences + how they will pay.
+model LeadOnboarding {
+  id               String   @id @default(uuid())
+  leadId           String   @unique
+  courseName       String
+  daysType         String // WEEKDAY | WEEKEND
+  timing           String // MORNING | AFTERNOON | EVENING
+  mode             String // OFFLINE | ONLINE
+  paymentMethod    String // FULL | PART | EMI
+  totalFee         Float?
+  registrationPaid Boolean  @default(false)
+  planId           String?
+  createdById      String?
+  createdAt        DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
 }

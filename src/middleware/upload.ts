@@ -409,3 +409,16 @@ export const uploadCertificateEmailPdf = multer({
   },
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 }).single('pdf');
+
+// ── Sales onboarding: payment screenshot (PRIVATE dir — streamed through an authenticated route) ──
+export const PAYMENT_PROOF_DIR = path.join(process.cwd(), 'private-uploads', 'payment-proofs');
+if (!fs.existsSync(PAYMENT_PROOF_DIR)) fs.mkdirSync(PAYMENT_PROOF_DIR, { recursive: true });
+
+export const uploadPaymentProof = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, PAYMENT_PROOF_DIR),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  fileFilter: imageOnlyFilter,
+  limits: { fileSize: 8 * 1024 * 1024 },
+}).single('proof');

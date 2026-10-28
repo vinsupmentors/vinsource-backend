@@ -9,10 +9,11 @@ import { salesAlertsController } from '../controllers/salesAlerts.controller';
 import { salesToolsController } from '../controllers/salesTools.controller';
 import { leadConfigController } from '../controllers/leadConfig.controller';
 import { salesDashboardController } from '../controllers/salesDashboard.controller';
+import { salesOnboardingController } from '../controllers/salesOnboarding.controller';
 import { transcriptsController } from '../controllers/transcripts.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
-import { uploadDemoProof } from '../middleware/upload';
+import { uploadDemoProof, uploadPaymentProof } from '../middleware/upload';
 
 const router = Router();
 router.use(authenticate);
@@ -22,6 +23,10 @@ router.get('/stats', salesController.stats);
 router.get('/dashboard', salesDashboardController.get);
 router.get('/collections', salesDashboardController.collections);
 router.get('/leads/:id/fees', salesDashboardController.leadFees);
+router.get('/leads/:id/onboarding', salesOnboardingController.get);
+router.post('/leads/:id/onboarding', requireModule('SALES', 'EDIT'), uploadPaymentProof, salesOnboardingController.onboard);
+router.post('/leads/:id/payments', requireModule('SALES', 'EDIT'), uploadPaymentProof, salesOnboardingController.recordPayment);
+router.get('/payment-proofs/:id', salesOnboardingController.proof);
 router.get('/team', salesController.listTeam);
 
 router.get('/leads', salesController.listLeads);

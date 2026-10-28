@@ -13,7 +13,7 @@ import { closeRoom } from '../services/liveKit.service';
 const IST = 'Asia/Kolkata';
 export const fmtIST = (d: Date | null | undefined) => (d ? d.toLocaleString('en-IN', { timeZone: IST, dateStyle: 'medium', timeStyle: 'short' }) : 'none');
 
-async function history(leadId: string, actorId: string | null | undefined, type: string, summary: string, from?: string | null, to?: string | null) {
+export async function history(leadId: string, actorId: string | null | undefined, type: string, summary: string, from?: string | null, to?: string | null) {
   try { await prisma.leadHistory.create({ data: { leadId, actorId: actorId || null, type, summary, fromValue: from ?? null, toValue: to ?? null } }); }
   catch (e) { console.error('Lead history write failed', e); }
 }
@@ -34,6 +34,22 @@ export async function syncFollowUpTask(leadId: string, assigneeId: string | null
       createdById: actorId || null, dueAt, kind: 'FOLLOW_UP',
     },
   });
+}
+
+/** Stages that always carry a reminder, and how far ahead it is set when nobody picked a date. */
+const AUTO_REMINDER_DAYS: Record<string, number> = { CUSTOM_FOLLOW_UP: 1, CUSTOM_DEMO_OVER_FOLLOW_UP: 1, CUSTOM_MAYBE_LATER: 7, CUSTOM_POSITIVE: 2 };
+
+/** A lead moved into a follow-up type stage with no reminder: give it one (11:00 IST) so it never goes silent. */
+export async function ensureReminderForStage(leadId: string, stageKey: string | null | undefined, actorId?: string | null) {
+  const days = stageKey ? AUTO_REMINDER_DAYS[stageKey] : undefined;
+  if (!days) return;
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { nextFollowUpAt: true, assignedToId: true, status: true } });
+  if (!lead || lead.nextFollowUpAt || lead.status === 'LOST' || lead.status === 'ENROLLED') return;
+  const base = new Date(Date.now() + days * 86400000 + 5.5 * 3600000); // IST wall clock
+  const at = new Date(`${base.toISOString().slice(0, 10)}T11:00:00+05:30`);
+  await prisma.lead.update({ where: { id: leadId }, data: { nextFollowUpAt: at } });
+  await syncFollowUpTask(leadId, lead.assignedToId, at, actorId, 'Automatic reminder — no follow-up date was set');
+  await history(leadId, actorId, 'FOLLOW_UP', `Follow-up set automatically to ${fmtIST(at)} (the stage needs a reminder)`);
 }
 
 /** Lead changed hands: every open task on it moves to the new owner. */
@@ -126,11 +142,13 @@ export async function feeSummaryForLead(leadId: string) {
   });
   const now = new Date();
   let total = 0, paid = 0, awaiting = 0, overdue = 0;
+  let totalKnown = true;
   let nextDue: { dueDate: Date; amount: number } | null = null;
   for (const p of plans) {
+    let planSum = 0;
     for (const i of p.installments) {
       if (i.status === 'WAIVED') continue;
-      total += i.amount;
+      planSum += i.amount;
       if (i.status === 'PAID') paid += i.amount;
       else if (i.status === 'PENDING_APPROVAL') awaiting += i.amount;
       else {
@@ -138,8 +156,11 @@ export async function feeSummaryForLead(leadId: string) {
         if (!nextDue || i.dueDate < nextDue.dueDate) nextDue = { dueDate: i.dueDate, amount: i.amount };
       }
     }
+    // Plans started from Onboarding take payments one by one, so the course fee (when known) is the total.
+    if (p.totalFee > 0) total += Math.max(p.totalFee, planSum);
+    else { total += planSum; totalKnown = false; }
   }
-  return { plans, total, paid, awaiting, overdue, balance: Math.max(0, total - paid - awaiting), nextDue, pct: total > 0 ? paid / total : 0 };
+  return { plans, total, totalKnown, paid, awaiting, overdue, balance: Math.max(0, total - paid - awaiting), nextDue, pct: total > 0 ? paid / total : 0 };
 }
 
 const PAYMENT_STAGE_RANK: Record<string, number> = { CUSTOM_REGISTRATION_DONE: 1, CUSTOM_PARTIAL_PAYMENT: 2, ENROLLED: 3 };
@@ -158,11 +179,11 @@ export async function logPaymentRecorded(leadId: string, actorId: string | null 
 export async function syncStageFromFees(leadId: string, actorId: string | null | undefined, verifiedAmount?: number) {
   const sum = await feeSummaryForLead(leadId);
   if (sum.paid <= 0) return;
-  const target = sum.total > 0 && sum.paid >= sum.total - 0.5 ? 'ENROLLED' : sum.pct >= 0.6 ? 'CUSTOM_PARTIAL_PAYMENT' : 'CUSTOM_REGISTRATION_DONE';
+  const target = sum.totalKnown && sum.total > 0 && sum.paid >= sum.total - 0.5 ? 'ENROLLED' : sum.totalKnown && sum.pct >= 0.6 ? 'CUSTOM_PARTIAL_PAYMENT' : 'CUSTOM_REGISTRATION_DONE';
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { status: true, stageKey: true, assignedToId: true } });
   if (!lead) return;
   const currentKey = lead.stageKey || lead.status;
-  const note = `Payment${verifiedAmount ? ` of ${inr(verifiedAmount)}` : ''} verified by Finance — ${inr(sum.paid)} of ${inr(sum.total)} paid (${Math.round(sum.pct * 100)}%)`;
+  const note = `Payment${verifiedAmount ? ` of ${inr(verifiedAmount)}` : ''} verified by Finance — ${sum.totalKnown ? `${inr(sum.paid)} of ${inr(sum.total)} paid (${Math.round(sum.pct * 100)}%)` : `${inr(sum.paid)} paid so far`}`;
   if ((PAYMENT_STAGE_RANK[currentKey] ?? 0) >= PAYMENT_STAGE_RANK[target]) {
     await history(leadId, actorId, 'PAYMENT', note);
     return;

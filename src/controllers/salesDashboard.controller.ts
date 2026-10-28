@@ -141,7 +141,7 @@ export const salesDashboardController = {
           ...totals,
           plans: plans.map((p) => ({
             id: p.id, courseName: p.courseName, totalFee: p.totalFee, planType: p.planType, admissionId: p.admissionId, status: p.status,
-            installments: p.installments.map((i) => ({ id: i.id, dueDate: i.dueDate, amount: i.amount, status: i.status, paidAt: i.paidAt, mode: i.mode, reference: i.reference, kind: i.kind })),
+            installments: p.installments.map((i) => ({ id: i.id, dueDate: i.dueDate, amount: i.amount, status: i.status, paidAt: i.paidAt, mode: i.mode, reference: i.reference, kind: i.kind, hasProof: !!i.proofFile, ocrAmount: i.ocrAmount, ocrReference: i.ocrReference, amountMatched: i.amountMatched })),
           })),
         },
       });

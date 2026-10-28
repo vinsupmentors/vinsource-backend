@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { financeSalesController } from '../controllers/financeSales.controller';
+import { salesOnboardingController } from '../controllers/salesOnboarding.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
 
@@ -27,6 +28,7 @@ router.post('/installments/:id/collect', requireModule('FINANCE_SALES', 'EDIT'),
 // hits the ledger and the receipt goes out.
 router.get('/approvals', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listApprovals);
 router.get('/approval-history', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.listApprovalHistory);
+router.get('/installments/:id/proof', salesOnboardingController.proof);
 router.post('/installments/:id/approve', requireModule('FINANCE_SALES', 'ADMIN'), financeSalesController.approveInstallment);
 
 // Refund — Sales requests, Admin does the transfer and completes it.
