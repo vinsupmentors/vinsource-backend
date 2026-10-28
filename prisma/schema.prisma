@@ -4382,6 +4382,9 @@ model ReportSheet {
   bookId    String
   name      String
   sortOrder Int      @default(0)
+  /// GRID = free cells (no formulas) · LIVE = a report built from portal data (liveKey says which)
+  kind      String   @default("GRID")
+  liveKey   String?
   content   Json
   updatedById String?
   createdAt DateTime @default(now())
@@ -4390,4 +4393,12 @@ model ReportSheet {
   book ReportBook @relation(fields: [bookId], references: [id], onDelete: Cascade)
 
   @@index([bookId, sortOrder])
+}
+
+/// Daily targets for the BRD Tracker live sheets (defaults 5 bookings / 2 demos a day when no row exists).
+model BdaDailyTarget {
+  employeeId    String   @id
+  bookingTarget Int      @default(5)
+  demoTarget    Int      @default(2)
+  updatedAt     DateTime @updatedAt
 }

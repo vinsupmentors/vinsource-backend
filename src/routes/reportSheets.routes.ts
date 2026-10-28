@@ -7,6 +7,8 @@ const router = Router();
 router.use(authenticate);
 router.use(requireModule('REPORT_SHEETS', 'VIEW'));
 
+router.get('/live/:key', reportSheetsController.live);
+router.put('/live-targets', requireModule('REPORT_SHEETS', 'ADMIN'), reportSheetsController.setTarget);
 router.get('/books', reportSheetsController.listBooks);
 router.get('/books/:id', reportSheetsController.getBook);
 router.post('/books', requireModule('REPORT_SHEETS', 'ADMIN'), reportSheetsController.createBook);

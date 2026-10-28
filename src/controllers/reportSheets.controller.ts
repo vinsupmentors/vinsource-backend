@@ -2,25 +2,39 @@ import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { BRD_TRACKER_SHEETS, SheetContent, Cell } from '../utils/reportSheetsSeed';
+import { bookedVsConducted, booking, todayDemo, bookingResponse, demoResponse, saveTarget } from '../utils/reportSheetsLive';
+
+interface Cell { v: string; bg?: string; fg?: string; b?: 1; i?: 1; al?: 'l' | 'c' | 'r' }
+interface SheetContent { rows: number; cols: number; colWidths: number[]; rowHeights: Record<string, number>; merges: { r: number; c: number; rs: number; cs: number }[]; cells: Record<string, Cell>; frozenRows: number }
 
 const blank = (): SheetContent => ({ rows: 40, cols: 12, colWidths: Array(12).fill(110), rowHeights: {}, merges: [], cells: {}, frozenRows: 0 });
 
-/** First visit: create the "BRD Tracker" spreadsheet with its five sheets. */
-async function ensureSeed() {
-  if ((await prisma.reportBook.count()) > 0) return;
-  await prisma.reportBook.create({
-    data: {
-      name: 'BRD Tracker',
-      sheets: { create: BRD_TRACKER_SHEETS.map((s, i) => ({ name: s.name, sortOrder: i, content: s.content as object })) },
-    },
-  });
+/** The BRD Tracker's five sheets are live reports built from the Sales data. */
+const BRD_LIVE: { name: string; liveKey: string }[] = [
+  { name: 'Booking', liveKey: 'BOOKING' },
+  { name: 'Booked VS Conducted', liveKey: 'BOOKED_VS_CONDUCTED' },
+  { name: 'Today Demo', liveKey: 'TODAY_DEMO' },
+  { name: 'Booking Response', liveKey: 'BOOKING_RESPONSE' },
+  { name: 'Demo Response', liveKey: 'DEMO_RESPONSE' },
+];
+
+/** Idempotent: make sure "BRD Tracker" exists with its five live sheets (converting any earlier static copy). */
+async function ensureBrd() {
+  let book = await prisma.reportBook.findFirst({ where: { name: 'BRD Tracker' } });
+  if (!book) book = await prisma.reportBook.create({ data: { name: 'BRD Tracker' } });
+  const sheets = await prisma.reportSheet.findMany({ where: { bookId: book.id } });
+  for (let i = 0; i < BRD_LIVE.length; i++) {
+    const def = BRD_LIVE[i];
+    const existing = sheets.find((s) => s.liveKey === def.liveKey) || sheets.find((s) => s.name === def.name && s.kind !== 'LIVE');
+    if (!existing) await prisma.reportSheet.create({ data: { bookId: book.id, name: def.name, sortOrder: i, kind: 'LIVE', liveKey: def.liveKey, content: {} } });
+    else if (existing.kind !== 'LIVE') await prisma.reportSheet.update({ where: { id: existing.id }, data: { kind: 'LIVE', liveKey: def.liveKey, sortOrder: i, content: {} } });
+  }
 }
 
 export const reportSheetsController = {
   async listBooks(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      await ensureSeed();
+      await ensureBrd();
       const books = await prisma.reportBook.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true, updatedAt: true, _count: { select: { sheets: true } } } });
       res.json({ success: true, data: books });
     } catch (err) { next(err); }
@@ -109,6 +123,29 @@ export const reportSheetsController = {
         }
       }
       await prisma.reportSheet.update({ where: { id: sheet.id }, data: { content: content as object, updatedById: req.user?.employeeId || null } });
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
+  /** Live report data. */
+  async live(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const q = req.query as { from?: string; to?: string };
+      const fn: Record<string, () => Promise<unknown>> = {
+        BOOKING: () => booking(q), BOOKED_VS_CONDUCTED: () => bookedVsConducted(q), TODAY_DEMO: () => todayDemo(q),
+        BOOKING_RESPONSE: () => bookingResponse(q), DEMO_RESPONSE: () => demoResponse(q),
+      };
+      const run = fn[req.params.key];
+      if (!run) throw new AppError('Unknown report', 404);
+      res.json({ success: true, data: await run() });
+    } catch (err) { next(err); }
+  },
+
+  async setTarget(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const { employeeId, bookingTarget, demoTarget } = req.body || {};
+      if (!employeeId) throw new AppError('Employee is required', 400);
+      await saveTarget(String(employeeId), bookingTarget !== undefined ? Number(bookingTarget) : undefined, demoTarget !== undefined ? Number(demoTarget) : undefined);
       res.json({ success: true });
     } catch (err) { next(err); }
   },
