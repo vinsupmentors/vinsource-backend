@@ -39,7 +39,7 @@ function parsePayment(req: AuthRequest) {
   return { amount, mode, reference, ocrAmount: ocrAmount !== null && Number.isFinite(ocrAmount) ? ocrAmount : null, ocrReference, amountMatched, paidAt: isNaN(paidAt.getTime()) ? new Date() : paidAt };
 }
 
-async function addPayment(planId: string, req: AuthRequest, kind: 'REGISTRATION_FEE' | null) {
+async function addPayment(planId: string, req: AuthRequest, kind: 'REGISTRATION_FEE' | 'DOWN_PAYMENT' | null) {
   const pay = parsePayment(req);
   const file = (req as any).file as { filename: string } | undefined;
   if (!file) throw new AppError('Attach the payment screenshot', 400);
