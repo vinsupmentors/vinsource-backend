@@ -1,0 +1,29 @@
+-- Report Sheets: spreadsheets (outside Sales) with plain-value sheets, own module access.
+ALTER TABLE `DepartmentModuleAccess` MODIFY COLUMN `module` ENUM('SALES', 'FINANCE_SALES', 'FINANCE_ADMIN', 'ADMIN', 'HR', 'PRODUCTION_TRAINING', 'PLACEMENTS', 'DIGITAL_MARKETING', 'CERTIFICATES', 'STUDENT_ONBOARDING', 'ADMISSION', 'LIVE_CLASSES', 'EMI', 'REPORT_SHEETS') NOT NULL;
+ALTER TABLE `UserModuleAccess` MODIFY COLUMN `module` ENUM('SALES', 'FINANCE_SALES', 'FINANCE_ADMIN', 'ADMIN', 'HR', 'PRODUCTION_TRAINING', 'PLACEMENTS', 'DIGITAL_MARKETING', 'CERTIFICATES', 'STUDENT_ONBOARDING', 'ADMISSION', 'LIVE_CLASSES', 'EMI', 'REPORT_SHEETS') NOT NULL;
+
+CREATE TABLE `ReportBook` (
+    `id` VARCHAR(191) NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `createdById` VARCHAR(191) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE `ReportSheet` (
+    `id` VARCHAR(191) NOT NULL,
+    `bookId` VARCHAR(191) NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `sortOrder` INTEGER NOT NULL DEFAULT 0,
+    `content` JSON NOT NULL,
+    `updatedById` VARCHAR(191) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    INDEX `ReportSheet_bookId_sortOrder_idx`(`bookId`, `sortOrder`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+ALTER TABLE `ReportSheet` ADD CONSTRAINT `ReportSheet_bookId_fkey` FOREIGN KEY (`bookId`) REFERENCES `ReportBook`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;

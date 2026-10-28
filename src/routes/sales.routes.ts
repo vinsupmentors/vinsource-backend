@@ -26,6 +26,13 @@ router.get('/leads/:id/fees', salesDashboardController.leadFees);
 router.get('/leads/:id/onboarding', salesOnboardingController.get);
 router.post('/leads/:id/onboarding', requireModule('SALES', 'EDIT'), uploadPaymentProof, salesOnboardingController.onboard);
 router.post('/leads/:id/payments', requireModule('SALES', 'EDIT'), uploadPaymentProof, salesOnboardingController.recordPayment);
+router.delete('/leads/:id/onboarding', requireModule('SALES', 'ADMIN'), salesOnboardingController.undo);
+router.put('/leads/:id/total-fee', requireModule('SALES', 'EDIT'), salesOnboardingController.setTotalFee);
+router.get('/course-fees', salesOnboardingController.listCourseFees);
+router.put('/course-fees', requireModule('SALES', 'ADMIN'), salesOnboardingController.saveCourseFee);
+router.delete('/course-fees/:id', requireModule('SALES', 'ADMIN'), salesOnboardingController.deleteCourseFee);
+router.get('/emi/quote', salesOnboardingController.emiQuote);
+router.post('/installments/:id/pay', requireModule('SALES', 'EDIT'), uploadPaymentProof, salesOnboardingController.payInstallment);
 router.get('/payment-proofs/:id', salesOnboardingController.proof);
 router.get('/team', salesController.listTeam);
 

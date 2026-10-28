@@ -222,6 +222,8 @@ enum ModuleName {
   STUDENT_ONBOARDING
   ADMISSION
   LIVE_CLASSES
+  EMI
+  REPORT_SHEETS
 }
 
 enum AccessLevel {
@@ -1703,6 +1705,7 @@ model SalesTask {
   /// MANUAL (typed by a person) | FOLLOW_UP (auto, from the lead's follow-up date) | DEMO (auto, from a booked demo)
   kind         String          @default("MANUAL")
   demoId       String?
+  installmentId String? // reminder to collect a scheduled EMI / down-payment instalment
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
@@ -1713,6 +1716,7 @@ model SalesTask {
   @@index([assignedToId, status])
   @@index([leadId])
   @@index([demoId])
+  @@index([installmentId])
 }
 
 /// Append-only audit trail for a lead, from the moment it is created:
@@ -1998,6 +2002,10 @@ model FeeInstallment {
   ocrAmount    Float?               // amount read from the screenshot in the browser
   ocrReference String?              // transaction id read from the screenshot
   amountMatched Boolean?            // does the screenshot amount equal the entered amount
+  rejectedAt   DateTime?            // Finance rejected this payment (status is set to WAIVED so it drops out of every total)
+  rejectReason String?  @db.Text
+  rejectedById String?
+  scheduled    Boolean  @default(false) // created up-front by an EMI/Part schedule (a rejection puts it back to PENDING instead of dropping it)
   receivedById String?
   approvedById String?
   approvedAt   DateTime?
@@ -4345,4 +4353,41 @@ model LeadOnboarding {
   createdAt        DateTime @default(now())
 
   lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+/// One place for what each course costs; Onboarding pre-fills from it. Editable by Sales Admin / Finance (Sales) Admin.
+model CourseFee {
+  id          String   @id @default(uuid())
+  courseName  String   @unique
+  fee         Float
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+/// A spreadsheet in the Report Sheets menu (e.g. "BRD Tracker"). Holds several sheets (tabs).
+model ReportBook {
+  id          String   @id @default(uuid())
+  name        String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sheets ReportSheet[]
+}
+
+/// One sheet (tab) of a ReportBook. `content` is plain cell values and formatting — no formulas.
+model ReportSheet {
+  id        String   @id @default(uuid())
+  bookId    String
+  name      String
+  sortOrder Int      @default(0)
+  content   Json
+  updatedById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  book ReportBook @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId, sortOrder])
 }

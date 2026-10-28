@@ -42,7 +42,7 @@ export const salesDashboardController = {
       const [
         callsToday, talkAgg, demosToday, followUpsDue, overdue, tasksDue, pendingOutcome,
         newThisMonth, enrolledMonth, demosDoneMonth, byStage, openTotal, calls7, targets,
-        sourceRows, enrolledSource, pool, untouchedNew, collectedAgg, awaitingAgg, overdueFeeAgg,
+        sourceRows, enrolledSource, pool, untouchedNew, collectedAgg, awaitingAgg, overdueFeeAgg, onboardedMonth, onboardedEnrolled,
       ] = await Promise.all([
         prisma.leadCallLog.count({ where: { ...callScope, calledAt: { gte: today, lt: tomorrow }, OR: [{ source: 'AUTO' }, { activityType: { not: null } }] } }),
         prisma.leadCallLog.aggregate({ where: { ...callScope, source: 'AUTO', calledAt: { gte: today, lt: tomorrow } }, _sum: { durationSeconds: true } }),
@@ -66,6 +66,8 @@ export const salesDashboardController = {
         prisma.feeCollection.aggregate({ where: { collectedAt: { gte: monthStart }, ...(scopeEmp ? { OR: [{ receivedById: scopeEmp }, { lead: { assignedToId: scopeEmp } }] } : {}) }, _sum: { amount: true } }),
         prisma.feeInstallment.aggregate({ where: { status: 'PENDING_APPROVAL', plan: { status: 'ACTIVE', ...(scopeEmp ? { lead: { assignedToId: scopeEmp } } : {}) } }, _sum: { amount: true }, _count: { _all: true } }),
         prisma.feeInstallment.aggregate({ where: { status: { in: ['PENDING', 'OVERDUE'] }, dueDate: { lt: today }, plan: { status: 'ACTIVE', ...(scopeEmp ? { lead: { assignedToId: scopeEmp } } : {}) } }, _sum: { amount: true }, _count: { _all: true } }),
+        prisma.leadOnboarding.count({ where: { createdAt: { gte: monthStart }, lead: leadScope as never } }),
+        prisma.leadOnboarding.count({ where: { createdAt: { gte: monthStart }, lead: { ...leadScope, status: 'ENROLLED' } as never } }),
       ]);
 
       // Calls per day, last 7 days (IST)
@@ -94,6 +96,8 @@ export const salesDashboardController = {
             : await prisma.leadCallLog.groupBy({ by: ['calledById'], where: { calledById: { in: ids }, ...where } as never, _count: { _all: true } });
           return new Map((rows as { assignedToId?: string | null; calledById?: string | null; _count: { _all: number } }[]).map((r) => [(by === 'assignedToId' ? r.assignedToId : r.calledById) as string, r._count._all]));
         };
+        const onbRows = await prisma.leadOnboarding.groupBy({ by: ['createdById'], where: { createdAt: { gte: monthStart }, createdById: { in: ids } }, _count: { _all: true } });
+        const onbM = new Map(onbRows.map((r) => [r.createdById as string, r._count._all]));
         const [openM, overdueM, enrolledM, callsM, tg] = await Promise.all([
           g({ status: open }), g({ status: open, nextFollowUpAt: { lt: today } }), g({ status: 'ENROLLED', updatedAt: { gte: monthStart } }),
           g({ calledAt: { gte: today, lt: tomorrow }, OR: [{ source: 'AUTO' }, { activityType: { not: null } }] }, 'calledById', 'call'),
@@ -102,7 +106,7 @@ export const salesDashboardController = {
         const goal = new Map(tg.map((t) => [t.employeeId, t.enrollmentGoal]));
         team = emps.map((e) => ({
           employeeId: e.id, name: `${e.firstName} ${e.lastName}`, open: openM.get(e.id) ?? 0, overdue: overdueM.get(e.id) ?? 0,
-          callsToday: callsM.get(e.id) ?? 0, enrolled: enrolledM.get(e.id) ?? 0, goal: goal.get(e.id) ?? 0,
+          callsToday: callsM.get(e.id) ?? 0, onboarded: onbM.get(e.id) ?? 0, enrolled: enrolledM.get(e.id) ?? 0, goal: goal.get(e.id) ?? 0,
         })).sort((a, b) => b.enrolled - a.enrolled || b.callsToday - a.callsToday);
       }
 
@@ -119,7 +123,7 @@ export const salesDashboardController = {
             goal: targets.reduce((n, t) => n + t.enrollmentGoal, 0), revenueGoal: targets.reduce((n, t) => n + t.revenueGoal, 0),
             dayOfMonth: ist.getUTCDate(), daysInMonth: new Date(ist.getUTCFullYear(), ist.getUTCMonth() + 1, 0).getDate(),
           },
-          money: { collectedMonth: collectedAgg._sum.amount || 0, awaitingAmount: awaitingAgg._sum.amount || 0, awaitingCount: awaitingAgg._count._all, overdueAmount: overdueFeeAgg._sum.amount || 0, overdueCount: overdueFeeAgg._count._all },
+          money: { collectedMonth: collectedAgg._sum.amount || 0, awaitingAmount: awaitingAgg._sum.amount || 0, awaitingCount: awaitingAgg._count._all, overdueAmount: overdueFeeAgg._sum.amount || 0, overdueCount: overdueFeeAgg._count._all, onboardedMonth, onboardedFullyPaid: onboardedEnrolled },
           funnel: stageCounts, openTotal,
           callsTrend: Array.from(perDay.entries()).map(([date, count]) => ({ date, count })),
           sources, pool, team,
@@ -141,7 +145,7 @@ export const salesDashboardController = {
           ...totals,
           plans: plans.map((p) => ({
             id: p.id, courseName: p.courseName, totalFee: p.totalFee, planType: p.planType, admissionId: p.admissionId, status: p.status,
-            installments: p.installments.map((i) => ({ id: i.id, dueDate: i.dueDate, amount: i.amount, status: i.status, paidAt: i.paidAt, mode: i.mode, reference: i.reference, kind: i.kind, hasProof: !!i.proofFile, ocrAmount: i.ocrAmount, ocrReference: i.ocrReference, amountMatched: i.amountMatched })),
+            installments: p.installments.map((i) => ({ id: i.id, dueDate: i.dueDate, amount: i.amount, status: i.status, paidAt: i.paidAt, mode: i.mode, reference: i.reference, kind: i.kind, hasProof: !!i.proofFile, ocrAmount: i.ocrAmount, ocrReference: i.ocrReference, amountMatched: i.amountMatched, rejected: !!i.rejectedAt, emiMonthNumber: i.emiMonthNumber, scheduled: i.scheduled, rejectReason: i.rejectReason })),
           })),
         },
       });
