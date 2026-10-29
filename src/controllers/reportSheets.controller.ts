@@ -2,7 +2,8 @@ import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
-import { bookedVsConducted, booking, todayDemo, bookingResponse, demoResponse, saveTarget } from '../utils/reportSheetsLive';
+import { bookedVsConducted, booking, todayDemo, bookingResponse, demoResponse, studentResponse, editDemoFields, saveTarget } from '../utils/reportSheetsLive';
+import { approval, paymentDetails, loan, addLoan, editLoan, verifyLoan, jodo, importJodo } from '../utils/reportSheetsRevenue';
 
 interface Cell { v: string; bg?: string; fg?: string; b?: 1; i?: 1; al?: 'l' | 'c' | 'r' }
 interface SheetContent { rows: number; cols: number; colWidths: number[]; rowHeights: Record<string, number>; merges: { r: number; c: number; rs: number; cs: number }[]; cells: Record<string, Cell>; frozenRows: number }
@@ -16,20 +17,29 @@ const BRD_LIVE: { name: string; liveKey: string }[] = [
   { name: 'Today Demo', liveKey: 'TODAY_DEMO' },
   { name: 'Booking Response', liveKey: 'BOOKING_RESPONSE' },
   { name: 'Demo Response', liveKey: 'DEMO_RESPONSE' },
+  { name: 'Student Response', liveKey: 'STUDENT_RESPONSE' },
 ];
 
-/** Idempotent: make sure "BRD Tracker" exists with its five live sheets (converting any earlier static copy). */
-async function ensureBrd() {
-  let book = await prisma.reportBook.findFirst({ where: { name: 'BRD Tracker' } });
-  if (!book) book = await prisma.reportBook.create({ data: { name: 'BRD Tracker' } });
+const REVENUE_LIVE: { name: string; liveKey: string }[] = [
+  { name: 'Approval', liveKey: 'REV_APPROVAL' },
+  { name: 'Payment Details', liveKey: 'REV_PAYMENT_DETAILS' },
+  { name: 'Loan', liveKey: 'REV_LOAN' },
+  { name: 'Jodo', liveKey: 'REV_JODO' },
+];
+
+/** Idempotent: make sure a spreadsheet exists with its live sheets (converting any earlier static copy). */
+async function ensureLiveBook(bookName: string, defs: { name: string; liveKey: string }[]) {
+  let book = await prisma.reportBook.findFirst({ where: { name: bookName } });
+  if (!book) book = await prisma.reportBook.create({ data: { name: bookName } });
   const sheets = await prisma.reportSheet.findMany({ where: { bookId: book.id } });
-  for (let i = 0; i < BRD_LIVE.length; i++) {
-    const def = BRD_LIVE[i];
+  for (let i = 0; i < defs.length; i++) {
+    const def = defs[i];
     const existing = sheets.find((s) => s.liveKey === def.liveKey) || sheets.find((s) => s.name === def.name && s.kind !== 'LIVE');
     if (!existing) await prisma.reportSheet.create({ data: { bookId: book.id, name: def.name, sortOrder: i, kind: 'LIVE', liveKey: def.liveKey, content: {} } });
     else if (existing.kind !== 'LIVE') await prisma.reportSheet.update({ where: { id: existing.id }, data: { kind: 'LIVE', liveKey: def.liveKey, sortOrder: i, content: {} } });
   }
 }
+const ensureBrd = async () => { await ensureLiveBook('BRD Tracker', BRD_LIVE); await ensureLiveBook('Revenue Consideration', REVENUE_LIVE); };
 
 export const reportSheetsController = {
   async listBooks(_req: AuthRequest, res: Response, next: NextFunction) {
@@ -133,7 +143,8 @@ export const reportSheetsController = {
       const q = req.query as { from?: string; to?: string };
       const fn: Record<string, () => Promise<unknown>> = {
         BOOKING: () => booking(q), BOOKED_VS_CONDUCTED: () => bookedVsConducted(q), TODAY_DEMO: () => todayDemo(q),
-        BOOKING_RESPONSE: () => bookingResponse(q), DEMO_RESPONSE: () => demoResponse(q),
+        BOOKING_RESPONSE: () => bookingResponse(q), DEMO_RESPONSE: () => demoResponse(q), STUDENT_RESPONSE: () => studentResponse(q),
+        REV_APPROVAL: () => approval(q), REV_PAYMENT_DETAILS: () => paymentDetails(q), REV_LOAN: () => loan(q), REV_JODO: () => jodo(q),
       };
       const run = fn[req.params.key];
       if (!run) throw new AppError('Unknown report', 404);
@@ -148,5 +159,29 @@ export const reportSheetsController = {
       await saveTarget(String(employeeId), bookingTarget !== undefined ? Number(bookingTarget) : undefined, demoTarget !== undefined ? Number(demoTarget) : undefined);
       res.json({ success: true });
     } catch (err) { next(err); }
+  },
+
+  async editDemo(req: AuthRequest, res: Response, next: NextFunction) {
+    try { await editDemoFields(req.params.id, req.body || {}); res.json({ success: true }); } catch (err) { next(err); }
+  },
+
+  async editLoan(req: AuthRequest, res: Response, next: NextFunction) {
+    try { res.json({ success: true, data: await editLoan(req.params.id, req.body || {}) }); } catch (err) { next(err); }
+  },
+
+  async addLoan(req: AuthRequest, res: Response, next: NextFunction) {
+    try { res.status(201).json({ success: true, data: await addLoan(req.body || {}, req.user?.employeeId) }); } catch (err) { next(err); }
+  },
+
+  async verifyLoan(req: AuthRequest, res: Response, next: NextFunction) {
+    try { res.json({ success: true, data: await verifyLoan(req.params.id, req.body?.verified !== false, req.user?.employeeId) }); } catch (err) { next(err); }
+  },
+
+  async deleteLoan(req: AuthRequest, res: Response, next: NextFunction) {
+    try { await prisma.loanEntry.delete({ where: { id: req.params.id } }); res.json({ success: true }); } catch (err) { next(err); }
+  },
+
+  async importJodo(req: AuthRequest, res: Response, next: NextFunction) {
+    try { res.json({ success: true, data: await importJodo(req.body?.rows, req.user?.employeeId) }); } catch (err) { next(err); }
   },
 };

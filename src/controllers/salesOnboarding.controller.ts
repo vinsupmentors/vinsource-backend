@@ -27,10 +27,12 @@ async function loadLead(req: AuthRequest) {
   return lead;
 }
 
+const firstVal = (v: any) => (Array.isArray(v) ? v[0] : v);
+
 function parsePayment(req: AuthRequest) {
   const amount = Number(req.body.amount);
   if (!Number.isFinite(amount) || amount <= 0) throw new AppError('Enter the amount collected', 400);
-  const mode = MODES.includes(String(req.body.mode)) ? String(req.body.mode) : 'UPI';
+  const mode = MODES.includes(String(req.body.payMode ?? firstVal(req.body.mode))) ? String(req.body.payMode ?? firstVal(req.body.mode)) : 'UPI';
   const reference = req.body.reference ? String(req.body.reference).trim().slice(0, 190) : null;
   const ocrAmount = req.body.ocrAmount !== undefined && req.body.ocrAmount !== '' ? Number(req.body.ocrAmount) : null;
   const ocrReference = req.body.ocrReference ? String(req.body.ocrReference).trim().slice(0, 190) : null;
@@ -79,7 +81,7 @@ export const salesOnboardingController = {
       const courseName = String(b.courseName || '').trim();
       const daysType = String(b.daysType || '').toUpperCase();
       const timing = String(b.timing || '').toUpperCase();
-      const mode = String(b.mode || '').toUpperCase();
+      const mode = String(firstVal(b.mode) || '').toUpperCase();
       const paymentMethod = String(b.paymentMethod || '').toUpperCase();
       if (!courseName) throw new AppError('Choose the course', 400);
       if (!['WEEKDAY', 'WEEKEND'].includes(daysType)) throw new AppError('Choose Weekday or Weekend', 400);
@@ -190,7 +192,7 @@ export const salesOnboardingController = {
       let allowed = req.user?.role === 'ADMIN' || req.user?.role === 'SUPER_ADMIN' || (!!req.user?.employeeId && inst.plan.lead.assignedToId === req.user.employeeId);
       if (!allowed && req.user) {
         const acc = await getEffectiveAccess(req.user.userId);
-        allowed = acc.SALES === 'ADMIN' || (!!acc.FINANCE_SALES && acc.FINANCE_SALES !== 'NONE');
+        allowed = acc.SALES === 'ADMIN' || (!!acc.FINANCE_SALES && acc.FINANCE_SALES !== 'NONE') || (!!acc.REPORT_SHEETS && acc.REPORT_SHEETS !== 'NONE');
       }
       if (!allowed) throw new AppError('You do not have access to this screenshot', 403);
       const file = path.join(PAYMENT_PROOF_DIR, path.basename(inst.proofFile));

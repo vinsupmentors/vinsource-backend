@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { portfolioController } from '../controllers/portfolio.controller';
 import { publicDemoController } from '../controllers/demoSessions.controller';
+import { demoFeedbackController } from '../controllers/demoFeedback.controller';
 import rateLimit from 'express-rate-limit';
 import { publicVerifyCertificate } from '../controllers/certificateRequests.controller';
 
@@ -19,5 +20,9 @@ router.get('/certificate', publicVerifyCertificate);
 // Demo sit-in join — public (the prospect has no account), so rate-limited per IP.
 const demoLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 router.post('/demo-join', demoLimiter, publicDemoController.join);
+
+const feedbackLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
+router.get('/demo-feedback/:token', feedbackLimiter, demoFeedbackController.publicGet);
+router.post('/demo-feedback/:token', feedbackLimiter, demoFeedbackController.publicSubmit);
 
 export default router;

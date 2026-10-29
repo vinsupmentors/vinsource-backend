@@ -26,7 +26,7 @@ const fullName = (e: { firstName: string; lastName: string }) => `${e.firstName}
 interface Advisor { id: string; name: string; tl: string; bookingTarget: number; demoTarget: number }
 
 /** Everyone who works leads, with their Team Lead (their manager; a manager is their own TL; no manager in sales → "Direct Reporting"). */
-async function loadAdvisors(extraIds: string[] = []): Promise<Map<string, Advisor>> {
+export async function loadAdvisors(extraIds: string[] = []): Promise<Map<string, Advisor>> {
   const emps = await prisma.employee.findMany({
     where: { OR: [{ status: { in: ['ACTIVE', 'ON_PROBATION'] }, assignedLeads: { some: { deletedAt: null } } }, { id: { in: extraIds } }] },
     select: { id: true, firstName: true, lastName: true, managerId: true, manager: { select: { id: true, firstName: true, lastName: true } } },
@@ -174,18 +174,56 @@ export async function bookingResponse(q: { from?: unknown; to?: unknown }) {
 // ── Demo Response ─────────────────────────────────────────────────────────
 export async function demoResponse(q: { from?: unknown; to?: unknown }) {
   const r = parseRange(q);
-  const demos = await fetchDemos({ scheduledAt: { gte: r.start, lt: r.end }, status: 'COMPLETED' });
+  const demos = await fetchDemos({ completedAt: { gte: r.start, lt: r.end }, status: 'COMPLETED' });
   const advisors = await loadAdvisors(demos.map(owner).filter(Boolean));
   const cfg = await leadConfig();
-  const rows = demos.sort((a, b) => b.scheduledAt.getTime() - a.scheduledAt.getTime()).map((d) => {
+  const rows = demos.sort((a, b) => (b.completedAt?.getTime() || 0) - (a.completedAt?.getTime() || 0)).map((d) => {
     const a = advisors.get(owner(d));
     return {
-      id: d.id, student: d.lead.name, doneAt: d.updatedAt, advisor: a?.name || '—', tl: a?.tl || '—', phone: d.lead.phone,
+      id: d.id, student: d.lead.name, doneAt: d.completedAt || d.updatedAt, advisor: a?.name || '—', tl: a?.tl || '—', phone: d.lead.phone,
       outcome: d.outcome ? OUTCOME_LABEL[d.outcome] : '', comments: d.feedback || '', source: d.lead.source || '', demoDate: d.scheduledAt,
       stage: cfg.label('STAGE', d.lead.stageKey || d.lead.status), stageComment: d.lead.callLogs[0]?.notes || '', mode: d.mode,
     };
   });
   return { from: r.from, to: r.to, rows, outcomes: OUTCOMES.map((o) => OUTCOME_LABEL[o]) };
+}
+
+// ── Student Response (demo reviews filled by students) ───────────────────
+const INTENT_LABEL: Record<string, string> = { YES: 'Yes', MAYBE: 'Maybe', NO: 'No' };
+const PACE_LABEL: Record<string, string> = { TOO_FAST: 'Too fast', JUST_RIGHT: 'Just right', TOO_SLOW: 'Too slow' };
+const DOUBTS_LABEL: Record<string, string> = { YES: 'Yes', PARTLY: 'Partly', NO: 'No' };
+
+export async function studentResponse(q: { from?: unknown; to?: unknown }) {
+  const r = parseRange(q);
+  const fbs = await prisma.demoFeedback.findMany({
+    where: { OR: [{ submittedAt: { gte: r.start, lt: r.end } }, { submittedAt: null, releasedAt: { gte: r.start, lt: r.end } }] },
+    include: { demo: { include: demoInclude } },
+    orderBy: { releasedAt: 'desc' }, take: 5000,
+  });
+  const advisors = await loadAdvisors(fbs.map((f) => owner(f.demo as DemoRow)).filter(Boolean));
+  const rows = fbs.map((f) => {
+    const d = f.demo as DemoRow;
+    const a = advisors.get(owner(d));
+    return {
+      id: f.id, demoId: d.id, student: d.lead.name, phone: d.lead.phone, advisor: a?.name || '—', tl: a?.tl || '—', demoAt: d.scheduledAt, mode: d.mode,
+      releasedAt: f.releasedAt, submittedAt: f.submittedAt, status: f.submittedAt ? 'Submitted' : 'Awaiting',
+      overall: f.overall, trainer: f.trainer, content: f.content, pace: f.pace ? PACE_LABEL[f.pace] : '', doubts: f.doubts ? DOUBTS_LABEL[f.doubts] : '',
+      joinIntent: f.joinIntent ? INTENT_LABEL[f.joinIntent] : '', liked: f.liked || '', improve: f.improve || '', source: d.lead.source || '',
+    };
+  });
+  return { from: r.from, to: r.to, rows };
+}
+
+/** Edit the comment-type fields shown on Booking Response / Demo Response (writes back to the source records). */
+export async function editDemoFields(demoId: string, b: Record<string, unknown>) {
+  const demo = await prisma.demo.findUnique({ where: { id: demoId }, select: { id: true, leadId: true } });
+  if (!demo) throw new AppError('Demo not found', 404);
+  const t = (v: unknown, max: number) => String(v ?? '').trim().slice(0, max) || null;
+  const data: Prisma.DemoUpdateInput = {};
+  if (b.comments !== undefined) data.bookingComments = t(b.comments, 2000);
+  if (b.feedback !== undefined) data.feedback = t(b.feedback, 2000);
+  if (Object.keys(data).length) await prisma.demo.update({ where: { id: demoId }, data });
+  if (b.source !== undefined) await prisma.lead.update({ where: { id: demo.leadId }, data: { source: t(b.source, 120) } });
 }
 
 export async function saveTarget(employeeId: string, bookingTarget?: number, demoTarget?: number) {

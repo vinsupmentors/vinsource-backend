@@ -152,7 +152,7 @@ export const salesDemoRoomController = {
       await prisma.demo.update({
         where: { id: d.id },
         data: {
-          closedAt: d.closedAt ?? new Date(), expiresAt: new Date(), status: 'COMPLETED',
+          closedAt: d.closedAt ?? new Date(), expiresAt: new Date(), status: 'COMPLETED', completedAt: new Date(),
           startedAt: d.startedAt ?? new Date(),
           feedback: feedback ? String(feedback).slice(0, 2000) : undefined, outcome: outcome || undefined,
           reopenRequestedAt: null,
@@ -276,7 +276,7 @@ export async function closeExpiredSalesDemos(): Promise<number> {
   });
   for (const d of due) {
     await closeRoom(d.roomName!).catch(() => {});
-    await prisma.demo.update({ where: { id: d.id }, data: { closedAt: new Date(), ...(d.status === 'SCHEDULED' ? { status: 'COMPLETED' } : {}) } });
+    await prisma.demo.update({ where: { id: d.id }, data: { closedAt: new Date(), ...(d.status === 'SCHEDULED' ? { status: 'COMPLETED', completedAt: new Date() } : {}) } });
     // The host never pressed End demo: the demo still happened, so move the lead to Demo done + a follow-up and close the task.
     if (d.status === 'SCHEDULED') {
       await applyDemoOutcome(d.leadId, 'NEED_FOLLOWUP', null).catch((e) => console.error('Auto demo outcome failed', e));

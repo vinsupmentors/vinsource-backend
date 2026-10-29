@@ -965,6 +965,7 @@ export const salesController = {
         data: {
           scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
           mode, conductedById, status, feedback,
+          ...(status === 'COMPLETED' && existingDemo.status !== 'COMPLETED' ? { completedAt: new Date() } : {}),
           outcome: outcome || undefined,
           coConductedById: coConductedById || undefined,
           proofUrl: proofFile ? `/uploads/demo-proofs/${proofFile.filename}` : undefined,

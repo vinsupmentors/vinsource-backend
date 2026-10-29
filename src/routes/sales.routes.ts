@@ -1,3 +1,4 @@
+import { demoFeedbackController } from '../controllers/demoFeedback.controller';
 import { Router } from 'express';
 import { salesController } from '../controllers/sales.controller';
 import { callTrackingController } from '../controllers/callTracking.controller';
@@ -61,6 +62,7 @@ router.post('/demos', requireModule('SALES', 'EDIT'), salesController.createDemo
 // as a multipart request too, just without a file — multer passes those
 // through untouched.
 router.put('/demos/:id', requireModule('SALES', 'EDIT'), uploadDemoProof, salesController.updateDemo);
+router.post('/demos/:id/feedback/release', requireModule('SALES', 'EDIT'), demoFeedbackController.release);
 router.post('/demos/:id/reschedule', requireModule('SALES', 'EDIT'), salesController.rescheduleDemo);
 
 // Tasks / reminders (self-scoped inside the controller; Sales Admin can assign + see all).

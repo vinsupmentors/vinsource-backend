@@ -1825,6 +1825,7 @@ model Demo {
   rescheduleReason String? @db.Text
 
   // ── Captured when marking conducted ───────────────────────────────────────
+  completedAt     DateTime?    // when the demo was marked conducted
   proofUrl        String?      // screenshot/photo proof the demo happened
   outcome         DemoOutcome?
   coConductedById String?      // a second sales rep who joined the demo, if any
@@ -1863,6 +1864,29 @@ model Demo {
   coConductedBy   Employee? @relation("DemoCoConductor", fields: [coConductedById], references: [id])
   rescheduledFrom Demo?     @relation("DemoReschedule", fields: [rescheduledFromId], references: [id])
   rescheduledTo   Demo?     @relation("DemoReschedule")
+  studentFeedback DemoFeedback?
+}
+
+/// Student's review of a demo: released by the sales rep (on-screen form or link), filled by the student.
+model DemoFeedback {
+  id            String    @id @default(uuid())
+  demoId        String    @unique
+  token         String    @unique
+  releasedById  String?
+  releasedAt    DateTime  @default(now())
+  submittedAt   DateTime?
+  overall       Int?
+  trainer       Int?
+  content       Int?
+  pace          String?
+  doubts        String?
+  joinIntent    String?
+  liked         String?   @db.Text
+  improve       String?   @db.Text
+  studentName   String?
+  demo          Demo      @relation(fields: [demoId], references: [id], onDelete: Cascade)
+
+  @@index([submittedAt])
 }
 
 // ─── FINANCE (SALES) — student fee collections ───────────────────────────────
@@ -4401,4 +4425,58 @@ model BdaDailyTarget {
   bookingTarget Int      @default(5)
   demoTarget    Int      @default(2)
   updatedAt     DateTime @updatedAt
+}
+
+/// A payment made through a lender (loan EMI). Vinsup receives the EMI minus the interest.
+model LoanEntry {
+  id             String    @id @default(uuid())
+  leadId         String?
+  studentName    String
+  phone          String?
+  email          String?
+  paymentFor     String // EMI - 1, Processing Fees, …
+  paidOn         DateTime
+  emiAmount      Float
+  interestAmount Float     @default(0)
+  vinsupAmount   Float
+  transactionId  String?
+  lender         String?
+  batch          String?
+  mode           String?
+  comments       String?   @db.Text
+  verified       Boolean   @default(false)
+  verifiedById   String?
+  verifiedAt     DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  @@index([paidOn])
+  @@index([leadId])
+}
+
+/// One line of a JODO settlement export (imported from their file; duplicates are skipped by paymentRef).
+model JodoSettlement {
+  id             String   @id @default(uuid())
+  paymentRef     String   @unique
+  leadId         String?
+  jodoStudentId  String?
+  studentName    String
+  rollNumber     String?
+  instituteName  String?
+  stream         String?
+  grade          String?
+  product        String?
+  payMode        String?
+  amount         Float
+  feeAmount      Float?
+  paidDate       DateTime?
+  settlementUtr  String?
+  settlementBank String?
+  settlementDate DateTime?
+  phone          String?
+  importedById   String?
+  createdAt      DateTime @default(now())
+
+  @@index([paidDate])
+  @@index([leadId])
 }

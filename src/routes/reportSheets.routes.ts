@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { salesOnboardingController } from '../controllers/salesOnboarding.controller';
 import { reportSheetsController } from '../controllers/reportSheets.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
@@ -9,6 +10,13 @@ router.use(requireModule('REPORT_SHEETS', 'VIEW'));
 
 router.get('/live/:key', reportSheetsController.live);
 router.put('/live-targets', requireModule('REPORT_SHEETS', 'ADMIN'), reportSheetsController.setTarget);
+router.post('/loan', requireModule('REPORT_SHEETS', 'EDIT'), reportSheetsController.addLoan);
+router.put('/loan/:id/verify', requireModule('REPORT_SHEETS', 'ADMIN'), reportSheetsController.verifyLoan);
+router.delete('/loan/:id', requireModule('REPORT_SHEETS', 'ADMIN'), reportSheetsController.deleteLoan);
+router.patch('/demo/:id', requireModule('REPORT_SHEETS', 'EDIT'), reportSheetsController.editDemo);
+router.patch('/loan/:id', requireModule('REPORT_SHEETS', 'EDIT'), reportSheetsController.editLoan);
+router.post('/jodo/import', requireModule('REPORT_SHEETS', 'EDIT'), reportSheetsController.importJodo);
+router.get('/proof/:id', salesOnboardingController.proof);
 router.get('/books', reportSheetsController.listBooks);
 router.get('/books/:id', reportSheetsController.getBook);
 router.post('/books', requireModule('REPORT_SHEETS', 'ADMIN'), reportSheetsController.createBook);

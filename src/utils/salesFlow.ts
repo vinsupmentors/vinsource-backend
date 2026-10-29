@@ -123,7 +123,7 @@ export async function completeScheduledDemos(leadId: string, actorId?: string | 
   const open = await prisma.demo.findMany({ where: { leadId, status: 'SCHEDULED' }, select: { id: true, roomName: true, mode: true, startedAt: true, scheduledAt: true } });
   for (const d of open) {
     await moveDemoReminder(leadId, d.scheduledAt, null);
-    await prisma.demo.update({ where: { id: d.id }, data: { status: 'COMPLETED', closedAt: d.roomName ? new Date() : undefined } });
+    await prisma.demo.update({ where: { id: d.id }, data: { status: 'COMPLETED', completedAt: new Date(), closedAt: d.roomName ? new Date() : undefined } });
     if (d.roomName) await closeRoom(d.roomName).catch(() => {});
     await closeDemoTask(d.id, 'DONE');
   }
