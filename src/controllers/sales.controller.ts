@@ -88,6 +88,14 @@ const LEGACY_STATUS_MAP: Record<string, { status: LeadStatus; lostReason?: LeadL
   'student': { status: LeadStatus.ENROLLED },
 };
 
+/** Adds `createdBy: {id, name}` to each lead (createdById has no relation, so look the names up in one query). */
+async function withCreator<T extends { createdById?: string | null }>(leads: T[]) {
+  const ids = [...new Set(leads.map((l) => l.createdById).filter(Boolean) as string[])];
+  const emps = ids.length ? await prisma.employee.findMany({ where: { id: { in: ids } }, select: { id: true, firstName: true, lastName: true } }) : [];
+  const m = new Map(emps.map((e) => [e.id, `${e.firstName} ${e.lastName}`.trim()]));
+  return leads.map((l) => ({ ...l, createdBy: l.createdById ? { id: l.createdById, name: m.get(l.createdById) || 'Unknown' } : null }));
+}
+
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 
 type HistoryDb = Pick<typeof prisma, 'leadHistory'>;
@@ -235,7 +243,7 @@ export const salesController = {
         where.assignedToId = req.user?.employeeId || '__none__';
       }
 
-      const [leads, total] = await Promise.all([
+      const [leadsRaw, total] = await Promise.all([
         prisma.lead.findMany({
           where,
           include: {
@@ -250,6 +258,7 @@ export const salesController = {
         prisma.lead.count({ where }),
       ]);
 
+      const leads = await withCreator(leadsRaw);
       res.json({ success: true, data: leads, meta: formatPagination(total, p, l) });
     } catch (err) { next(err); }
   },
@@ -466,13 +475,16 @@ export const salesController = {
       if (!(await isSalesAdmin(req)) && lead.assignedToId !== req.user?.employeeId) {
         throw new AppError('You do not have access to this lead', 403);
       }
-      res.json({ success: true, data: lead });
+      res.json({ success: true, data: (await withCreator([lead]))[0] });
     } catch (err) { next(err); }
   },
 
   async createLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const { name, phone, email, source, courseInterest, assignedToId, campaignId, notes, city } = req.body;
+      const { name, phone, email, source, courseInterest, campaignId, notes, city } = req.body;
+      // A BDA's own leads (e.g. referrals) always land with them; only Sales Admin can assign to someone else.
+      const admin = await isSalesAdmin(req);
+      const assignedToId = admin ? req.body.assignedToId || undefined : req.user?.employeeId;
       // Lead Scout is an accountability field — only Sales Admin may set it.
       const scoutKey = (await isSalesAdmin(req)) ? req.body.scoutKey : undefined;
       if (!name || !phone) throw new AppError('Name and phone are required', 400);
