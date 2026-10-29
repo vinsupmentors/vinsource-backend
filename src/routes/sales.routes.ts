@@ -1,3 +1,4 @@
+import { salesTeamsController } from '../controllers/salesTeams.controller';
 import { demoFeedbackController } from '../controllers/demoFeedback.controller';
 import { Router } from 'express';
 import { salesController } from '../controllers/sales.controller';
@@ -36,6 +37,8 @@ router.get('/emi/quote', salesOnboardingController.emiQuote);
 router.post('/installments/:id/pay', requireModule('SALES', 'EDIT'), uploadPaymentProof, salesOnboardingController.payInstallment);
 router.get('/payment-proofs/:id', salesOnboardingController.proof);
 router.get('/team', salesController.listTeam);
+router.get('/team-map', requireModule('SALES', 'ADMIN'), salesTeamsController.list);
+router.put('/team-map', requireModule('SALES', 'ADMIN'), salesTeamsController.set);
 
 router.get('/leads', salesController.listLeads);
 router.post('/leads', requireModule('SALES', 'EDIT'), salesController.createLead);

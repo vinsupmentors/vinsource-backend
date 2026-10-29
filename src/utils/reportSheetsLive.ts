@@ -25,21 +25,23 @@ const fullName = (e: { firstName: string; lastName: string }) => `${e.firstName}
 
 interface Advisor { id: string; name: string; tl: string; bookingTarget: number; demoTarget: number }
 
-/** Everyone who works leads, with their Team Lead (their manager; a manager is their own TL; no manager in sales → "Direct Reporting"). */
+/** Everyone who works leads, with their Team Lead from the Sales team mapping (a TL is their own TL; unmapped → "Direct Reporting"). */
 export async function loadAdvisors(extraIds: string[] = []): Promise<Map<string, Advisor>> {
+  const maps = await prisma.salesTeamMap.findMany();
+  const tlOf = new Map(maps.map((m) => [m.employeeId, m.tlId]));
+  const tlIds = new Set(maps.map((m) => m.tlId));
   const emps = await prisma.employee.findMany({
-    where: { OR: [{ status: { in: ['ACTIVE', 'ON_PROBATION'] }, assignedLeads: { some: { deletedAt: null } } }, { id: { in: extraIds } }] },
-    select: { id: true, firstName: true, lastName: true, managerId: true, manager: { select: { id: true, firstName: true, lastName: true } } },
+    where: { OR: [{ status: { in: ['ACTIVE', 'ON_PROBATION'] }, assignedLeads: { some: { deletedAt: null } } }, { id: { in: [...extraIds, ...tlOf.keys(), ...tlIds] } }] },
+    select: { id: true, firstName: true, lastName: true },
   });
-  const ids = new Set(emps.map((e) => e.id));
-  const managersInTeam = new Set(emps.filter((e) => e.managerId && ids.has(e.managerId)).map((e) => e.managerId as string));
-  const targets = await prisma.bdaDailyTarget.findMany({ where: { employeeId: { in: [...ids] } } });
+  const byId = new Map(emps.map((e) => [e.id, e]));
+  const targets = await prisma.bdaDailyTarget.findMany({ where: { employeeId: { in: [...byId.keys()] } } });
   const tMap = new Map(targets.map((t) => [t.employeeId, t]));
   const out = new Map<string, Advisor>();
   for (const e of emps) {
-    let tl = 'Direct Reporting';
-    if (e.manager && ids.has(e.manager.id)) tl = fullName(e.manager);
-    else if (managersInTeam.has(e.id)) tl = fullName(e);
+    const tlId = tlOf.get(e.id);
+    const tlEmp = tlId ? byId.get(tlId) : undefined;
+    const tl = tlEmp ? fullName(tlEmp) : tlIds.has(e.id) ? fullName(e) : 'Direct Reporting';
     const t = tMap.get(e.id);
     out.set(e.id, { id: e.id, name: fullName(e), tl, bookingTarget: t?.bookingTarget ?? 5, demoTarget: t?.demoTarget ?? 2 });
   }
