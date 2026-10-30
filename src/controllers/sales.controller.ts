@@ -294,6 +294,7 @@ export const salesController = {
         prisma.campaign.findMany({ select: { id: true, name: true } }),
         prisma.lead.findMany({ where: { deletedAt: null }, select: { phoneKey: true, phone: true } }),
       ]);
+      const stageDefs = (await leadConfig()).of('STAGE').filter((s) => s.active || s.system);
       const employeeByCode = new Map(allEmployees.map((e) => [e.employeeCode.trim().toLowerCase(), e.id]));
       const campaignByName = new Map(allCampaigns.map((c) => [c.name.trim().toLowerCase(), c.id]));
       const existingPhones = new Set(existingLeads.map((l) => l.phoneKey || leadPhoneKey(l.phone) || ''));
@@ -371,12 +372,24 @@ export const salesController = {
           }
 
           // Legacy status text -> our pipeline (see LEGACY_STATUS_MAP above).
-          const legacyStatusRaw = field(row, 'status');
+          // The stage comes from the "Lead Stage" column (or the old CRM's "Status"): matched to our Config stages by name,
+          // then to the legacy list; blank → New Lead.
+          const legacyStatusRaw = field(row, 'leadstage', 'stage') || field(row, 'status');
           const legacyStatusKey = legacyStatusRaw.toLowerCase();
-          const mapped = LEGACY_STATUS_MAP[legacyStatusKey];
-          const status: LeadStatus = mapped?.status || LeadStatus.NEW;
-          const lostReason = mapped?.lostReason;
-          if (legacyStatusRaw && !mapped) warnings.push(`status "${legacyStatusRaw}" not recognized — imported as New`);
+          const cfgStage = legacyStatusRaw
+            ? stageDefs.find((s) => s.label.trim().toLowerCase() === legacyStatusKey || s.key.toLowerCase() === legacyStatusKey.replace(/[^a-z0-9]+/g, '_'))
+            : undefined;
+          const mapped = cfgStage ? undefined : LEGACY_STATUS_MAP[legacyStatusKey];
+          let status: LeadStatus = LeadStatus.NEW;
+          let stageKey: string | undefined;
+          let lostReason: LeadLostReason | undefined;
+          if (cfgStage && cfgStage.base) {
+            status = cfgStage.base as LeadStatus;
+            stageKey = cfgStage.system ? undefined : cfgStage.key;
+            if (status === LeadStatus.LOST) lostReason = cfgStage.key === 'CUSTOM_UNRESPONSIVE' ? LeadLostReason.UNREACHABLE : cfgStage.key === 'CUSTOM_NOT_INTERESTED' ? LeadLostReason.NOT_INTERESTED : LeadLostReason.OTHER;
+          } else if (mapped) {
+            status = mapped.status; lostReason = mapped.lostReason;
+          } else if (legacyStatusRaw) warnings.push(`stage "${legacyStatusRaw}" not recognized — imported as New Lead`);
 
           const createdAt = parseFlexDate(field(row, 'created'));
           const lastContactAt = parseFlexDate(field(row, 'lastcontact'));
@@ -385,7 +398,7 @@ export const salesController = {
           const notesParts: string[] = [];
           const notesField = field(row, 'notes');
           if (notesField) notesParts.push(notesField);
-          if (legacyStatusRaw) notesParts.push(`Imported from legacy CRM — original status: "${legacyStatusRaw}"`);
+          if (legacyStatusRaw && !cfgStage) notesParts.push(`Imported from legacy CRM — original status: "${legacyStatusRaw}"`);
 
           if (dryRun) {
             existingPhones.add(key);
@@ -408,6 +421,7 @@ export const salesController = {
               createdById: req.user?.employeeId,
               campaignId,
               status,
+              stageKey,
               lostReason,
               lastContactAt,
               nextFollowUpAt,
