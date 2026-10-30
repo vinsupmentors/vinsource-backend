@@ -91,7 +91,12 @@ export const salesOnboardingController = {
       const registrationPaid = b.registrationPaid === true || b.registrationPaid === 'true';
       const totalFee = b.totalFee !== undefined && b.totalFee !== '' && Number(b.totalFee) > 0 ? Number(b.totalFee) : null;
       if (await prisma.leadOnboarding.findUnique({ where: { leadId: lead.id } })) throw new AppError('This lead is already onboarded', 409);
-      if (registrationPaid && !(req as any).file) throw new AppError('Attach the payment screenshot for the registration amount', 400);
+      if (registrationPaid && !(req as any).file) {
+        const ct = String(req.headers['content-type'] || '').split(';')[0] || 'none';
+        throw new AppError(ct.startsWith('multipart/')
+          ? 'The screenshot did not reach the server — please re-select the image and try again (JPG/PNG/WEBP).'
+          : `The screenshot was not uploaded (request type "${ct}") — the portal page is out of date. Hard-refresh (Ctrl+Shift+R) and try again.`, 400);
+      }
       if (registrationPaid && req.body.reference) {
         const dup = await prisma.feeInstallment.findFirst({ where: { reference: String(req.body.reference).trim(), rejectedAt: null }, select: { id: true } });
         if (dup) throw new AppError(`Transaction ID ${String(req.body.reference).trim()} has already been used on another payment.`, 409);
