@@ -14,6 +14,11 @@ import { enqueueCallTranscript } from '../services/transcription.service';
 
 const employeeSelect = { id: true, firstName: true, lastName: true } as const;
 
+async function isSalesAdminReq(req: AuthRequest): Promise<boolean> {
+  if (!req.user) return false;
+  return (await getEffectiveAccess(req.user.userId)).SALES === 'ADMIN';
+}
+
 export const callTrackingController = {
   // ─── Device management (HR/Sales Admin) ────────────────────────────────
 
@@ -220,10 +225,12 @@ export const callTrackingController = {
 
   // ─── Unmatched-call review queue (Sales team) ──────────────────────────
 
-  async listUnmatchedCalls(_req: AuthRequest, res: Response, next: NextFunction) {
+  async listUnmatchedCalls(req: AuthRequest, res: Response, next: NextFunction) {
     try {
+      // Only Sales Admin sees everyone's unmatched calls; a salesperson sees only their own.
+      const admin = await isSalesAdminReq(req);
       const calls = await prisma.leadCallLog.findMany({
-        where: { leadId: null, source: 'AUTO' },
+        where: { leadId: null, source: 'AUTO', ...(admin ? {} : { calledById: req.user?.employeeId || '__none__' }) },
         include: { calledBy: { select: employeeSelect } },
         orderBy: { calledAt: 'desc' },
       });
@@ -241,6 +248,7 @@ export const callTrackingController = {
         prisma.lead.findUnique({ where: { id: leadId } }),
       ]);
       if (!call) throw new AppError('Call log not found', 404);
+      if (!(await isSalesAdminReq(req)) && call.calledById !== req.user?.employeeId) throw new AppError('You do not have access to this call', 403);
       if (call.leadId) throw new AppError('Call is already linked to a lead', 400);
       if (!lead) throw new AppError('Lead not found', 404);
 
@@ -256,6 +264,7 @@ export const callTrackingController = {
       const { name } = req.body;
       const call = await prisma.leadCallLog.findUnique({ where: { id: req.params.id } });
       if (!call) throw new AppError('Call log not found', 404);
+      if (!(await isSalesAdminReq(req)) && call.calledById !== req.user?.employeeId) throw new AppError('You do not have access to this call', 403);
       if (call.leadId) throw new AppError('Call is already linked to a lead', 400);
       if (!call.rawPhoneNumber) throw new AppError('Call has no phone number on file', 400);
 
