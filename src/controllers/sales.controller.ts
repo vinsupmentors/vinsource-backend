@@ -618,7 +618,10 @@ export const salesController = {
   async courses(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const courses = await prisma.academyCourse.findMany({ where: { isActive: true }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
-      res.json({ success: true, data: courses });
+      // Not a real course: for walk-ins / people who want counselling before choosing one.
+      const GENERAL = 'General / Career Guidance';
+      const list = courses.some((c) => c.name === GENERAL) ? courses : [...courses, { id: 'general-career-guidance', name: GENERAL }];
+      res.json({ success: true, data: list });
     } catch (err) { next(err); }
   },
 

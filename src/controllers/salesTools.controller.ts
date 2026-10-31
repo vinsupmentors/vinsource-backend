@@ -211,7 +211,7 @@ export const salesToolsController = {
       else if (req.query.employeeId) where.calledById = String(req.query.employeeId);
 
       const logs = await prisma.leadCallLog.findMany({
-        where, select: { calledById: true, calledAt: true, durationSeconds: true, direction: true, source: true, activityStatus: true },
+        where, select: { calledById: true, calledAt: true, durationSeconds: true, direction: true, source: true, activityStatus: true, statusKey: true },
         take: 200000,
       });
       const emps = await prisma.employee.findMany({ where: { id: { in: Array.from(new Set(logs.map((l) => l.calledById).filter(Boolean) as string[])) } }, select: { id: true, firstName: true, lastName: true } });
@@ -224,7 +224,7 @@ export const salesToolsController = {
         if (l.direction === 'MISSED') s.missed++; else if (l.direction === 'INBOUND') s.inbound++; else if (l.direction === 'OUTBOUND') s.outbound++;
       };
       const totals = blank();
-      const perPerson = new Map<string, S & { name: string; days: Set<string> }>();
+      const perPerson = new Map<string, S & { name: string; days: Set<string>; dnp: number; first: Date; last: Date; outcomes: Map<string, number>; byDay: Map<string, { calls: number; connected: number; talk: number }> }>();
       const perDay = new Map<string, S>();
       const perHour = Array.from({ length: 24 }, () => ({ calls: 0, connected: 0 }));
       const perWeekday = Array.from({ length: 7 }, () => ({ calls: 0, connected: 0 }));
@@ -236,8 +236,15 @@ export const salesToolsController = {
         if (!perDay.has(p.date)) perDay.set(p.date, blank());
         bump(perDay.get(p.date)!, connected, l);
         const pid = l.calledById as string;
-        if (!perPerson.has(pid)) perPerson.set(pid, { ...blank(), name: names.get(pid) || 'Unknown', days: new Set() });
+        if (!perPerson.has(pid)) perPerson.set(pid, { ...blank(), name: names.get(pid) || 'Unknown', days: new Set(), dnp: 0, first: l.calledAt, last: l.calledAt, outcomes: new Map(), byDay: new Map() });
         const pp = perPerson.get(pid)!; bump(pp, connected, l); pp.days.add(p.date);
+        if (!connected) pp.dnp++;
+        if (l.calledAt < pp.first) pp.first = l.calledAt;
+        if (l.calledAt > pp.last) pp.last = l.calledAt;
+        const outcome = l.statusKey || l.activityStatus || (l.source === 'AUTO' ? (connected ? 'AUTO_CONNECTED' : 'AUTO_NOT_CONNECTED') : 'NO_STATUS');
+        pp.outcomes.set(outcome, (pp.outcomes.get(outcome) || 0) + 1);
+        const bd = pp.byDay.get(p.date) || { calls: 0, connected: 0, talk: 0 };
+        bd.calls++; if (connected) bd.connected++; bd.talk += l.durationSeconds || 0; pp.byDay.set(p.date, bd);
         perHour[p.hour].calls++; if (connected) perHour[p.hour].connected++;
         perWeekday[p.dow].calls++; if (connected) perWeekday[p.dow].connected++;
       }
@@ -250,19 +257,65 @@ export const salesToolsController = {
         if (!days.length || days[days.length - 1].date !== date) days.push({ date, calls: s.calls, connected: s.connected, talkSeconds: s.talkSeconds });
       }
       const rate = (c: number, n: number) => (n ? Math.round((c / n) * 1000) / 10 : 0);
+      // Team lead roll-up (from the Sales Team mapping).
+      const tmap = await prisma.salesTeamMap.findMany();
+      const tlOf = new Map(tmap.map((m) => [m.employeeId, m.tlId]));
+      const tlIds = Array.from(new Set([...tmap.map((m) => m.tlId)]));
+      const tlEmps = await prisma.employee.findMany({ where: { id: { in: tlIds } }, select: { id: true, firstName: true, lastName: true } });
+      const tlName = new Map(tlEmps.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
+      const perTl = new Map<string, { name: string; calls: number; connected: number; talkSeconds: number; members: number; outcomes: Map<string, number> }>();
+      for (const [pid, s] of perPerson) {
+        const tid = tlOf.get(pid) || (tlIds.includes(pid) ? pid : '');
+        const key = tid || '__none__';
+        if (!perTl.has(key)) perTl.set(key, { name: tid ? tlName.get(tid) || 'Unknown' : 'No team lead', calls: 0, connected: 0, talkSeconds: 0, members: 0, outcomes: new Map() });
+        const t = perTl.get(key)!; t.calls += s.calls; t.connected += s.connected; t.talkSeconds += s.talkSeconds; t.members++;
+        for (const [o, n] of s.outcomes) t.outcomes.set(o, (t.outcomes.get(o) || 0) + n);
+      }
+      const objOf = (m: Map<string, number>) => Object.fromEntries(m);
+      const iso = (d: Date) => d.toISOString();
       res.json({
         success: true,
         data: {
+          perTl: Array.from(perTl.values()).map((t) => ({ name: t.name, members: t.members, calls: t.calls, connected: t.connected, connectRate: rate(t.connected, t.calls), talkSeconds: t.talkSeconds, outcomes: objOf(t.outcomes) })).sort((a, b) => b.calls - a.calls),
           totals: { ...totals, notConnected: totals.calls - totals.connected, connectRate: rate(totals.connected, totals.calls), avgTalkSeconds: totals.connected ? Math.round(totals.talkSeconds / totals.connected) : 0, callsPerDay: days.length ? Math.round((totals.calls / days.length) * 10) / 10 : 0 },
           perPerson: Array.from(perPerson.entries()).map(([employeeId, s]) => ({
             employeeId, name: s.name, calls: s.calls, connected: s.connected, connectRate: rate(s.connected, s.calls), talkSeconds: s.talkSeconds,
             avgTalkSeconds: s.connected ? Math.round(s.talkSeconds / s.connected) : 0, missed: s.missed, activeDays: s.days.size, callsPerDay: s.days.size ? Math.round((s.calls / s.days.size) * 10) / 10 : 0,
+            dnp: s.dnp, tl: tlName.get(tlOf.get(employeeId) || '') || '', firstCall: iso(s.first), lastCall: iso(s.last), avgCallSeconds: s.calls ? Math.round(s.talkSeconds / s.calls) : 0,
+            outcomes: objOf(s.outcomes), byDay: Array.from(s.byDay.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, v]) => ({ date, ...v })),
           })).sort((a, b) => b.calls - a.calls),
           days,
           hours: perHour.map((h, hour) => ({ hour, calls: h.calls, connected: h.connected, connectRate: rate(h.connected, h.calls) })),
           weekdays: perWeekday.map((h, dow) => ({ dow, calls: h.calls, connected: h.connected, connectRate: rate(h.connected, h.calls) })),
         },
       });
+    } catch (err) { next(err); }
+  },
+
+  async callDetails(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const admin = await isAdmin(req);
+      const from = req.query.from ? new Date(`${String(req.query.from)}T00:00:00+05:30`) : new Date(startOfTodayIst().getTime() - 29 * DAY);
+      const to = req.query.to ? new Date(`${String(req.query.to)}T23:59:59.999+05:30`) : new Date();
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid dates', 400);
+      const where: Record<string, unknown> = { calledAt: { gte: from, lte: to }, calledById: { not: null } };
+      if (!admin) where.calledById = req.user?.employeeId || '__none__';
+      else if (req.query.employeeId) where.calledById = String(req.query.employeeId);
+      const logs = await prisma.leadCallLog.findMany({
+        where, orderBy: { calledAt: 'asc' }, take: 50000,
+        select: { calledAt: true, durationSeconds: true, direction: true, source: true, activityStatus: true, statusKey: true, notes: true, rawPhoneNumber: true,
+          calledBy: { select: { firstName: true, lastName: true } }, lead: { select: { name: true, phone: true } } },
+      });
+      const rows = logs.map((l) => {
+        const p = istParts(l.calledAt);
+        const connected = l.source === 'AUTO' ? (l.durationSeconds || 0) > 0 && l.direction !== 'MISSED' : l.activityStatus !== 'DNP';
+        return {
+          date: p.date, time: l.calledAt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true }), salesperson: l.calledBy ? `${l.calledBy.firstName} ${l.calledBy.lastName}` : '',
+          lead: l.lead?.name || '', phone: l.lead?.phone || l.rawPhoneNumber || '', direction: l.direction || '', source: l.source, connected: connected ? 'Yes' : 'No',
+          durationSeconds: l.durationSeconds || 0, status: l.statusKey || l.activityStatus || '', notes: l.notes || '',
+        };
+      });
+      res.json({ success: true, data: rows });
     } catch (err) { next(err); }
   },
 

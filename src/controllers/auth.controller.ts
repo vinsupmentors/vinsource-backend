@@ -136,14 +136,11 @@ export const authController = {
         }
       }
       const newToken = generateToken(payload as AuthPayload);
-      const newRefreshToken = generateRefreshToken(payload as AuthPayload);
+      // The refresh token is NOT rotated: with several tabs open (or two requests failing at once) a rotating token
+      // makes the second refresh fail and logs the person out. It still expires on its own after JWT_REFRESH_EXPIRES_IN.
+      await prisma.userSession.update({ where: { id: session.id }, data: { token: newToken } });
 
-      await prisma.userSession.update({
-        where: { id: session.id },
-        data: { token: newToken, refreshToken: newRefreshToken },
-      });
-
-      res.json({ success: true, data: { token: newToken, refreshToken: newRefreshToken } });
+      res.json({ success: true, data: { token: newToken, refreshToken } });
     } catch (err) {
       next(err);
     }

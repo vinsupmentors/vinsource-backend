@@ -32,6 +32,22 @@ const fmt = (d: Date) => d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', d
 const joinLink = (code: string) => `${config.FRONTEND_URL.replace(/\/$/, '')}/demo-join?code=${code}`;
 const hostLink = (id: string) => `${config.FRONTEND_URL.replace(/\/$/, '')}/sales-demo/${id}`;
 
+const durationText = (min: number) => (min % 60 === 0 ? `${min / 60} hour${min === 60 ? '' : 's'}` : `${min} minutes`);
+
+/** The student-facing "Demo Session" email (booking confirmation and the 10-minute reminder). */
+function demoSessionEmail(o: { name: string; when: string; course: string; link: string; code: string; email: string; minutes: number; reminder?: boolean }) {
+  return `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#1f2937">
+<h2 style="color:#1e40af;margin-bottom:4px">Your Demo Session${o.reminder ? ' starts in 10 minutes' : ' is confirmed'}</h2>
+<p>Hi ${o.name},</p>
+<p>${o.reminder ? 'This is a reminder for' : 'Thank you for booking'} your <b>Demo Session</b>${o.course ? ` for <b>${o.course}</b>` : ''} at Vinsup Skill Academy.</p>
+<table style="border-collapse:collapse;margin:12px 0"><tr><td style="padding:4px 12px 4px 0;color:#6b7280">When</td><td><b>${o.when}</b> (IST)</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#6b7280">Session length</td><td>up to ${durationText(o.minutes)}</td></tr>
+<tr><td style="padding:4px 12px 4px 0;color:#6b7280">Access code</td><td><b style="font-size:18px;letter-spacing:2px">${o.code}</b></td></tr></table>
+<p><a href="${o.link}" style="background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block">Join Demo Session</a></p>
+<p style="font-size:13px;color:#6b7280">Or copy this link: <a href="${o.link}">${o.link}</a><br/>Open it at the scheduled time and enter this email address (<b>${o.email}</b>) and the access code. Please keep your camera and microphone ready.</p>
+<p>Team Vinsup Skill Academy</p></div>`;
+}
+
 async function isAdmin(req: AuthRequest): Promise<boolean> {
   if (!req.user) return false;
   if (req.user.role === 'SUPER_ADMIN') return true;
@@ -80,10 +96,8 @@ export async function announceOnlineDemo(demoId: string, bookedByName: string) {
   );
   if (d.lead.email) {
     await emailService.send({
-      to: d.lead.email, subject: `Your online demo — ${d.courseEnquired || 'Vinsup Skill Academy'}`, template: 'sales-demo-invite',
-      html: `<p>Hi ${d.lead.name},</p><p>Your online demo is booked for <b>${when}</b> (IST)${d.courseEnquired ? ` — <b>${d.courseEnquired}</b>` : ''}.</p>
-<p><b>Join link:</b> <a href="${joinLink(d.accessCode)}">${joinLink(d.accessCode)}</a><br/><b>Access code:</b> <span style="font-size:18px;letter-spacing:2px">${d.accessCode}</span></p>
-<p>Open the link at the scheduled time and enter this email address (<b>${d.lead.email}</b>) and the code. The session runs for ${d.maxMinutes} minutes.</p><p>Team Vinsup Skill Academy</p>`,
+      to: d.lead.email, subject: `Your Demo Session — ${d.courseEnquired || 'Vinsup Skill Academy'}`, template: 'demo-session-invite',
+      html: demoSessionEmail({ name: d.lead.name, when, course: d.courseEnquired || '', link: joinLink(d.accessCode), code: d.accessCode, email: d.lead.email, minutes: d.maxMinutes }),
     }).catch(() => {});
   }
 }
@@ -309,10 +323,10 @@ export async function sendDemoReminders(): Promise<number> {
     const advisor = d.conductedBy || d.lead.assignedTo;
     if (d.lead.email) {
       await emailService.send({
-        to: d.lead.email, subject: `Reminder: your demo starts in 10 minutes — ${course}`, template: 'sales-demo-reminder',
-        html: `<p>Hi ${d.lead.name},</p><p>Your demo for <b>${course}</b> starts at <b>${when}</b> (IST) — in about 10 minutes.</p>${
-          online ? `<p><b>Join link:</b> <a href="${joinLink(d.accessCode!)}">${joinLink(d.accessCode!)}</a><br/><b>Access code:</b> <span style="font-size:18px;letter-spacing:2px">${d.accessCode}</span><br/>Enter this email address (<b>${d.lead.email}</b>) and the code. Please keep your camera and microphone ready.</p>` : '<p>Please reach the academy a few minutes early.</p>'
-        }<p>Team Vinsup Skill Academy</p>`,
+        to: d.lead.email, subject: `Reminder: your Demo Session starts in 10 minutes — ${course}`, template: 'demo-session-reminder',
+        html: online
+          ? demoSessionEmail({ name: d.lead.name, when, course: d.courseEnquired || '', link: joinLink(d.accessCode!), code: d.accessCode!, email: d.lead.email, minutes: d.maxMinutes, reminder: true })
+          : `<p>Hi ${d.lead.name},</p><p>Your <b>Demo Session</b> for <b>${course}</b> starts at <b>${when}</b> (IST) — in about 10 minutes.</p><p>Please reach the academy a few minutes early.</p><p>Team Vinsup Skill Academy</p>`,
       }).catch(() => {});
     }
     if (advisor) {

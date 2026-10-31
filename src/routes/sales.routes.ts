@@ -96,6 +96,7 @@ router.post('/transcripts/:type/:id/run', requireModule('SALES', 'EDIT'), transc
 // Today view, call analytics, message templates (self-scoped inside the controller; Sales Admin sees all).
 router.get('/today', salesToolsController.today);
 router.get('/call-analytics', salesToolsController.callAnalytics);
+router.get('/call-details', salesToolsController.callDetails);
 router.get('/message-templates', salesToolsController.listTemplates);
 router.post('/message-templates', requireModule('SALES', 'ADMIN'), salesToolsController.saveTemplate);
 router.put('/message-templates/:id', requireModule('SALES', 'ADMIN'), salesToolsController.saveTemplate);

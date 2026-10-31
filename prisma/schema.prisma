@@ -1842,7 +1842,7 @@ model Demo {
   // it runs out the room is closed and only a Sales Admin can reopen it.
   roomName           String?   @unique
   accessCode         String?   @unique
-  maxMinutes         Int       @default(60)
+  maxMinutes         Int       @default(120)
   startedAt          DateTime?
   expiresAt          DateTime?
   closedAt           DateTime?
