@@ -25,9 +25,11 @@ export const salesTeamsController = {
         await prisma.salesTeamMap.deleteMany({ where: { employeeId, tlId } });
       } else {
         if (tlId === employeeId) throw new AppError('A person cannot report to themselves', 400);
-        // Keep it to one level: a Team Lead can't report to someone, and a member can't be a TL.
-        if (await prisma.salesTeamMap.findFirst({ where: { tlId: employeeId } })) throw new AppError('This person is a Team Lead for others, so they cannot report to someone else', 400);
-        if (await prisma.salesTeamMap.findFirst({ where: { employeeId: tlId } })) throw new AppError('That person reports to someone, so they cannot be a Team Lead', 400);
+        // Any depth is allowed (member → Team Lead → Senior Manager), but never a loop.
+        const all = await prisma.salesTeamMap.findMany({ select: { employeeId: true, tlId: true } });
+        const seen = new Set<string>([tlId]); const stack = [tlId];
+        while (stack.length) { const cur = stack.pop()!; for (const m of all) if (m.employeeId === cur && !seen.has(m.tlId)) { seen.add(m.tlId); stack.push(m.tlId); } }
+        if (seen.has(employeeId)) throw new AppError('That would make a loop (they already sit above this person)', 400);
         await prisma.salesTeamMap.upsert({ where: { employeeId_tlId: { employeeId, tlId } }, create: { employeeId, tlId }, update: {} });
       }
       res.json({ success: true });

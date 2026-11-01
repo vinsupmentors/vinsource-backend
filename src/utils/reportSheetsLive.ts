@@ -41,7 +41,7 @@ export async function loadAdvisors(extraIds: string[] = []): Promise<Map<string,
   const out = new Map<string, Advisor>();
   for (const e of emps) {
     const tlNames = (tlOf.get(e.id) || []).map((id) => byId.get(id)).filter(Boolean).map((x) => fullName(x!));
-    const tl = tlNames.length ? tlNames.join(' / ') : tlIds.has(e.id) ? fullName(e) : 'Direct Reporting';
+    const tl = tlIds.has(e.id) ? fullName(e) : tlNames.length ? tlNames.join(' / ') : 'Direct Reporting';
     const t = tMap.get(e.id);
     out.set(e.id, { id: e.id, name: fullName(e), tl, bookingTarget: t?.bookingTarget ?? 5, demoTarget: t?.demoTarget ?? 2 });
   }

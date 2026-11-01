@@ -266,7 +266,7 @@ export const salesToolsController = {
       const tlName = new Map(tlEmps.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
       const perTl = new Map<string, { name: string; calls: number; connected: number; talkSeconds: number; members: number; outcomes: Map<string, number> }>();
       for (const [pid, s] of perPerson) {
-        const own = tlOf.get(pid) || (tlIds.includes(pid) ? [pid] : []);
+        const own = tlIds.includes(pid) ? [pid] : tlOf.get(pid) || [];
         for (const tid of own.length ? own : ['']) {
           const key = tid || '__none__';
           if (!perTl.has(key)) perTl.set(key, { name: tid ? tlName.get(tid) || 'Unknown' : 'No team lead', calls: 0, connected: 0, talkSeconds: 0, members: 0, outcomes: new Map() });
