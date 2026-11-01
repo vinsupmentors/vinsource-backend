@@ -11,6 +11,7 @@ import { mintAccessToken, getLiveKitUrl, ensureRoom, closeRoom, listLiveParticip
 import { transcriptionEnabled } from '../services/transcription.service';
 import { closeDemoTask, applyDemoOutcome, OUTCOME_PLAN, fmtIST } from '../utils/salesFlow';
 import { resolveStage } from '../utils/leadConfig';
+import { isPresales } from '../utils/salesScope';
 
 /**
  * Sales online demos hosted inside the portal. The BDA hosts the room, the
@@ -44,7 +45,7 @@ function demoSessionEmail(o: { name: string; when: string; course: string; link:
 <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Session length</td><td>up to ${durationText(o.minutes)}</td></tr>
 <tr><td style="padding:4px 12px 4px 0;color:#6b7280">Access code</td><td><b style="font-size:18px;letter-spacing:2px">${o.code}</b></td></tr></table>
 <p><a href="${o.link}" style="background:#2563eb;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block">Join Demo Session</a></p>
-<p style="font-size:13px;color:#6b7280">Or copy this link: <a href="${o.link}">${o.link}</a><br/>Open it at the scheduled time and enter this email address (<b>${o.email}</b>) and the access code. Please keep your camera and microphone ready.</p>
+<p style="font-size:13px;color:#6b7280">Or copy this link: <a href="${o.link}">${o.link}</a><br/>Open it at the scheduled time — you join directly, no sign-in needed. Please keep your camera and microphone ready.</p>
 <p>Team Vinsup Skill Academy</p></div>`;
 }
 
@@ -80,7 +81,7 @@ export async function notifySalesAdmins(title: string, message: string, html: st
 }
 
 /** Called right after an ONLINE demo is booked: tell Sales Admin and email the prospect their link. */
-export async function announceOnlineDemo(demoId: string, bookedByName: string) {
+export async function announceOnlineDemo(demoId: string, bookedByName: string, skipStudentEmail = false) {
   const d = await prisma.demo.findUnique({
     where: { id: demoId },
     include: { lead: { select: { name: true, email: true, phone: true } }, conductedBy: { select: { firstName: true, lastName: true } } },
@@ -94,7 +95,7 @@ export async function announceOnlineDemo(demoId: string, bookedByName: string) {
     `<p>An <b>online demo</b> was booked.</p><p><b>${d.lead.name}</b> — ${d.courseEnquired || 'course not set'}<br/>When: ${when}<br/>Hosted by: ${host}<br/>Booking: ${d.bookingNumber}</p><p>You can watch it live any time from <b>Sales → Live Demos</b> in the portal.</p>`,
     d.id,
   );
-  if (d.lead.email) {
+  if (d.lead.email && !skipStudentEmail) {
     await emailService.send({
       to: d.lead.email, subject: `Your Demo Session — ${d.courseEnquired || 'Vinsup Skill Academy'}`, template: 'demo-session-invite',
       html: demoSessionEmail({ name: d.lead.name, when, course: d.courseEnquired || '', link: joinLink(d.accessCode), code: d.accessCode, email: d.lead.email, minutes: d.maxMinutes }),
@@ -321,7 +322,7 @@ export async function sendDemoReminders(): Promise<number> {
     const online = d.mode === 'ONLINE' && !!d.accessCode;
     const course = d.courseEnquired || 'your course';
     const advisor = d.conductedBy || d.lead.assignedTo;
-    if (d.lead.email) {
+    if (d.lead.email && !(await isPresales(d.bookedById))) {
       await emailService.send({
         to: d.lead.email, subject: `Reminder: your Demo Session starts in 10 minutes — ${course}`, template: 'demo-session-reminder',
         html: online

@@ -28,3 +28,8 @@ export async function visibleEmployeeIds(employeeId: string | undefined | null):
   peers.forEach((p) => { out.add(p); const sub = new Set<string>(); below(p, sub); sub.forEach((x) => out.add(x)); });
   return Array.from(out);
 }
+
+export async function isPresales(employeeId: string | undefined | null): Promise<boolean> {
+  if (!employeeId) return false;
+  return !!(await prisma.salesPresales.findUnique({ where: { employeeId } }));
+}

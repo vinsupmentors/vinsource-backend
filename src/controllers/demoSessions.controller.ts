@@ -259,7 +259,7 @@ export const publicDemoController = {
     try {
       const code = String(req.body?.code || '').trim().toUpperCase();
       const email = String(req.body?.email || '').trim().toLowerCase();
-      if (!code || !email) throw new AppError('Enter your access code and email.', 400);
+      if (!code) throw new AppError('Enter your access code.', 400);
 
       // Sales online demo (hosted by a BDA in its own room) — checked before class sit-ins.
       const sd = await prisma.demo.findUnique({
@@ -267,8 +267,8 @@ export const publicDemoController = {
         include: { lead: { select: { name: true, email: true } } },
       });
       if (sd) {
-        if (sd.mode !== 'ONLINE' || !sd.roomName || (sd.lead.email || '').toLowerCase() !== email || sd.status === 'CANCELLED' || sd.status === 'RESCHEDULED') {
-          throw new AppError('That code and email do not match an approved demo.', 403);
+        if (sd.mode !== 'ONLINE' || !sd.roomName || sd.status === 'CANCELLED' || sd.status === 'RESCHEDULED') {
+          throw new AppError('That code does not match an active demo. Please check the link you were sent.', 403);
         }
         if (sd.closedAt || (sd.expiresAt && sd.expiresAt.getTime() <= Date.now())) {
           throw new AppError('This demo session has ended. Thank you for joining — please contact your advisor if you need more time.', 403);
@@ -287,6 +287,8 @@ export const publicDemoController = {
         return res.json({ success: true, data: { waiting: false, token, url: getLiveKitUrl(), title, course: sd.courseEnquired || 'Demo', maxMinutes: sd.maxMinutes, expiresAt: sd.expiresAt } });
       }
 
+      // Class sit-in demos are still tied to the email the approval was sent to.
+      if (!email) throw new AppError('Enter the email address this demo invitation was sent to.', 400);
       const r = await prisma.demoSessionRequest.findUnique({ where: { accessCode: code } });
       // Same message for every mismatch so codes can't be probed.
       if (!r || r.mode !== 'ONLINE' || r.status !== 'APPROVED' || (r.attendeeEmail || '').toLowerCase() !== email) {

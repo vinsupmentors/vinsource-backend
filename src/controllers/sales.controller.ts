@@ -22,7 +22,7 @@ import { ensureReminderForStage, moveDemoReminder, syncFollowUpTask, moveOpenTas
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
 // gated to ADMIN at the route level instead. SUPER_ADMIN and anyone with
 // SALES=ADMIN sees everything, same as before.
-import { visibleEmployeeIds } from '../utils/salesScope';
+import { visibleEmployeeIds, isPresales } from '../utils/salesScope';
 
 async function isSalesAdmin(req: AuthRequest): Promise<boolean> {
   if (!req.user) return false;
@@ -524,8 +524,10 @@ export const salesController = {
   async updateLead(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       await assertLeadAccess(req, req.params.id);
-      const { name, phone, email, source, courseInterest, status, stageKey, assignedToId, campaignId, notes, lostReason,
+      const { name, phone, email, source, courseInterest, status, stageKey, campaignId, notes, lostReason,
         city, educationQualification, collegeName, passedOutYear, currentStatus } = req.body;
+      // Only Sales Admin and Presales people can hand a lead to someone else.
+      const assignedToId = ((await isSalesAdmin(req)) || (await isPresales(req.user?.employeeId))) ? req.body.assignedToId : undefined;
       // Lead Scout is an accountability field — only Sales Admin may change it (ignored for everyone else).
       const scoutKey = (await isSalesAdmin(req)) ? req.body.scoutKey : undefined;
       // Stage can be a built-in stage or an Admin-created one (Config tab).
@@ -925,8 +927,10 @@ export const salesController = {
       // Online demos run inside the portal and the prospect is emailed their
       // link, so a valid email is needed (saved onto the lead if it had none).
       const online = (mode || 'ONLINE') === 'ONLINE';
+      // Presales only book the slot — the student's email is optional for them and nothing is mailed to the student.
+      const presalesBooking = await isPresales(req.user?.employeeId);
       const email = String(attendeeEmail || lead.email || '').trim().toLowerCase();
-      if (online && !/^\S+@\S+\.\S+$/.test(email)) throw new AppError('A valid email is required to send the online demo link', 400);
+      if (online && !presalesBooking && !/^\S+@\S+\.\S+$/.test(email)) throw new AppError('A valid email is required to send the online demo link', 400);
 
       const bookingNumber = await nextDemoBookingNumber(prisma);
       const roomFields = online
@@ -937,6 +941,7 @@ export const salesController = {
         prisma.demo.create({
           data: {
             leadId, scheduledAt: new Date(scheduledAt), mode, conductedById: conductedById || undefined, status, feedback,
+            bookedById: req.user?.employeeId || undefined,
             bookingNumber,
             city: lead.city ?? undefined,
             educationQualification: lead.educationQualification ?? undefined,
@@ -950,7 +955,7 @@ export const salesController = {
         }),
         prisma.lead.update({
           where: { id: leadId },
-          data: { status: 'DEMO_SCHEDULED', stageKey: null, courseInterest: course, ...(online && !lead.email ? { email } : {}) },
+          data: { status: 'DEMO_SCHEDULED', stageKey: null, courseInterest: course, ...(online && !lead.email && email ? { email } : {}) },
         }),
       ]);
 
@@ -963,7 +968,7 @@ export const salesController = {
       if (online) {
         const me = req.user?.employeeId ? await prisma.employee.findUnique({ where: { id: req.user.employeeId }, select: { firstName: true, lastName: true } }) : null;
         // Best effort — a mail hiccup must never block the booking itself.
-        announceOnlineDemo(demo.id, me ? `${me.firstName} ${me.lastName}` : 'Sales').catch((e) => console.error('Online demo announce failed', e));
+        announceOnlineDemo(demo.id, me ? `${me.firstName} ${me.lastName}` : 'Sales', presalesBooking).catch((e) => console.error('Online demo announce failed', e));
       }
       res.status(201).json({ success: true, data: demo });
     } catch (err) { next(err); }

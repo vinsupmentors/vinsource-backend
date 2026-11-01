@@ -4,6 +4,26 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 
 export const salesTeamsController = {
+  /** Presales roster + whether the caller is on it. */
+  async presales(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const rows = await prisma.salesPresales.findMany({ select: { employeeId: true } });
+      const ids = rows.map((r) => r.employeeId);
+      res.json({ success: true, data: { ids, mine: !!req.user?.employeeId && ids.includes(req.user.employeeId) } });
+    } catch (err) { next(err); }
+  },
+
+  /** Body: { employeeId, presales: boolean } */
+  async setPresales(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = String(req.body?.employeeId || '');
+      if (!employeeId) throw new AppError('Choose an employee', 400);
+      if (req.body?.presales) await prisma.salesPresales.upsert({ where: { employeeId }, create: { employeeId }, update: {} });
+      else await prisma.salesPresales.deleteMany({ where: { employeeId } });
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
   /** All "reports to" arrows: [{ employeeId, tlId }]. A person may have several. */
   async list(_req: AuthRequest, res: Response, next: NextFunction) {
     try {

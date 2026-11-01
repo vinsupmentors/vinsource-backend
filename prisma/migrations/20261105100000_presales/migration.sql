@@ -1,0 +1,7 @@
+ALTER TABLE `Demo` ADD COLUMN `bookedById` VARCHAR(191) NULL;
+
+CREATE TABLE `SalesPresales` (
+  `employeeId` VARCHAR(191) NOT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`employeeId`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

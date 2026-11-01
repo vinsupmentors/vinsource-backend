@@ -1809,6 +1809,7 @@ model Demo {
   scheduledAt   DateTime
   mode          DemoMode   @default(ONLINE)
   conductedById String?
+  bookedById    String?    // who booked the slot (a Presales person books, a Sales person conducts)
   status        DemoStatus @default(SCHEDULED)
   feedback      String?    @db.Text
 
@@ -4497,4 +4498,11 @@ model JodoSettlement {
 
   @@index([paidDate])
   @@index([leadId])
+}
+
+
+/// Employees on the Presales team (everyone else working leads is Sales).
+model SalesPresales {
+  employeeId String   @id
+  createdAt  DateTime @default(now())
 }
