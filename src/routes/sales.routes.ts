@@ -39,6 +39,8 @@ router.get('/payment-proofs/:id', salesOnboardingController.proof);
 router.get('/team', salesController.listTeam);
 router.get('/team-map', requireModule('SALES', 'ADMIN'), salesTeamsController.list);
 router.put('/team-map', requireModule('SALES', 'ADMIN'), salesTeamsController.set);
+router.get('/team-layout', requireModule('SALES', 'ADMIN'), salesTeamsController.layout);
+router.put('/team-layout', requireModule('SALES', 'ADMIN'), salesTeamsController.saveNode);
 
 router.get('/leads', salesController.listLeads);
 router.post('/leads', requireModule('SALES', 'EDIT'), salesController.createLead);

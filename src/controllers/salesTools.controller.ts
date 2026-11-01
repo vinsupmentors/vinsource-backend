@@ -259,17 +259,20 @@ export const salesToolsController = {
       const rate = (c: number, n: number) => (n ? Math.round((c / n) * 1000) / 10 : 0);
       // Team lead roll-up (from the Sales Team mapping).
       const tmap = await prisma.salesTeamMap.findMany();
-      const tlOf = new Map(tmap.map((m) => [m.employeeId, m.tlId]));
+      const tlOf = new Map<string, string[]>();
+      for (const m of tmap) tlOf.set(m.employeeId, [...(tlOf.get(m.employeeId) || []), m.tlId]);
       const tlIds = Array.from(new Set([...tmap.map((m) => m.tlId)]));
       const tlEmps = await prisma.employee.findMany({ where: { id: { in: tlIds } }, select: { id: true, firstName: true, lastName: true } });
       const tlName = new Map(tlEmps.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
       const perTl = new Map<string, { name: string; calls: number; connected: number; talkSeconds: number; members: number; outcomes: Map<string, number> }>();
       for (const [pid, s] of perPerson) {
-        const tid = tlOf.get(pid) || (tlIds.includes(pid) ? pid : '');
-        const key = tid || '__none__';
-        if (!perTl.has(key)) perTl.set(key, { name: tid ? tlName.get(tid) || 'Unknown' : 'No team lead', calls: 0, connected: 0, talkSeconds: 0, members: 0, outcomes: new Map() });
-        const t = perTl.get(key)!; t.calls += s.calls; t.connected += s.connected; t.talkSeconds += s.talkSeconds; t.members++;
-        for (const [o, n] of s.outcomes) t.outcomes.set(o, (t.outcomes.get(o) || 0) + n);
+        const own = tlOf.get(pid) || (tlIds.includes(pid) ? [pid] : []);
+        for (const tid of own.length ? own : ['']) {
+          const key = tid || '__none__';
+          if (!perTl.has(key)) perTl.set(key, { name: tid ? tlName.get(tid) || 'Unknown' : 'No team lead', calls: 0, connected: 0, talkSeconds: 0, members: 0, outcomes: new Map() });
+          const t = perTl.get(key)!; t.calls += s.calls; t.connected += s.connected; t.talkSeconds += s.talkSeconds; t.members++;
+          for (const [o, n] of s.outcomes) t.outcomes.set(o, (t.outcomes.get(o) || 0) + n);
+        }
       }
       const objOf = (m: Map<string, number>) => Object.fromEntries(m);
       const iso = (d: Date) => d.toISOString();
@@ -281,7 +284,7 @@ export const salesToolsController = {
           perPerson: Array.from(perPerson.entries()).map(([employeeId, s]) => ({
             employeeId, name: s.name, calls: s.calls, connected: s.connected, connectRate: rate(s.connected, s.calls), talkSeconds: s.talkSeconds,
             avgTalkSeconds: s.connected ? Math.round(s.talkSeconds / s.connected) : 0, missed: s.missed, activeDays: s.days.size, callsPerDay: s.days.size ? Math.round((s.calls / s.days.size) * 10) / 10 : 0,
-            dnp: s.dnp, tl: tlName.get(tlOf.get(employeeId) || '') || '', firstCall: iso(s.first), lastCall: iso(s.last), avgCallSeconds: s.calls ? Math.round(s.talkSeconds / s.calls) : 0,
+            dnp: s.dnp, tl: (tlOf.get(employeeId) || []).map((id) => tlName.get(id) || '').filter(Boolean).join(' / '), firstCall: iso(s.first), lastCall: iso(s.last), avgCallSeconds: s.calls ? Math.round(s.talkSeconds / s.calls) : 0,
             outcomes: objOf(s.outcomes), byDay: Array.from(s.byDay.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, v]) => ({ date, ...v })),
           })).sort((a, b) => b.calls - a.calls),
           days,

@@ -4429,11 +4429,20 @@ model BdaDailyTarget {
 
 /// Sales team mapping: which Team Lead each sales person reports to (drives the TL column in the report sheets).
 model SalesTeamMap {
-  employeeId String   @id
+  employeeId String
   tlId       String
   updatedAt  DateTime @updatedAt
 
+  @@id([employeeId, tlId])
   @@index([tlId])
+}
+
+/// Where a person's card sits on the Teams canvas.
+model SalesTeamNode {
+  employeeId String   @id
+  x          Int
+  y          Int
+  updatedAt  DateTime @updatedAt
 }
 
 /// A payment made through a lender (loan EMI). Vinsup receives the EMI minus the interest.

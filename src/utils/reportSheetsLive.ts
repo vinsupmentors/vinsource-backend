@@ -28,7 +28,8 @@ interface Advisor { id: string; name: string; tl: string; bookingTarget: number;
 /** Everyone who works leads, with their Team Lead from the Sales team mapping (a TL is their own TL; unmapped → "Direct Reporting"). */
 export async function loadAdvisors(extraIds: string[] = []): Promise<Map<string, Advisor>> {
   const maps = await prisma.salesTeamMap.findMany();
-  const tlOf = new Map(maps.map((m) => [m.employeeId, m.tlId]));
+  const tlOf = new Map<string, string[]>();
+  for (const m of maps) tlOf.set(m.employeeId, [...(tlOf.get(m.employeeId) || []), m.tlId]);
   const tlIds = new Set(maps.map((m) => m.tlId));
   const emps = await prisma.employee.findMany({
     where: { OR: [{ status: { in: ['ACTIVE', 'ON_PROBATION'] }, assignedLeads: { some: { deletedAt: null } } }, { id: { in: [...extraIds, ...tlOf.keys(), ...tlIds] } }] },
@@ -39,9 +40,8 @@ export async function loadAdvisors(extraIds: string[] = []): Promise<Map<string,
   const tMap = new Map(targets.map((t) => [t.employeeId, t]));
   const out = new Map<string, Advisor>();
   for (const e of emps) {
-    const tlId = tlOf.get(e.id);
-    const tlEmp = tlId ? byId.get(tlId) : undefined;
-    const tl = tlEmp ? fullName(tlEmp) : tlIds.has(e.id) ? fullName(e) : 'Direct Reporting';
+    const tlNames = (tlOf.get(e.id) || []).map((id) => byId.get(id)).filter(Boolean).map((x) => fullName(x!));
+    const tl = tlNames.length ? tlNames.join(' / ') : tlIds.has(e.id) ? fullName(e) : 'Direct Reporting';
     const t = tMap.get(e.id);
     out.set(e.id, { id: e.id, name: fullName(e), tl, bookingTarget: t?.bookingTarget ?? 5, demoTarget: t?.demoTarget ?? 2 });
   }
