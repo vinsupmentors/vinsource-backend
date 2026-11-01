@@ -22,6 +22,8 @@ import { ensureReminderForStage, moveDemoReminder, syncFollowUpTask, moveOpenTas
 // leads/demos — Sales Pulse and Lead Quality (aggregate, cross-rep views) are
 // gated to ADMIN at the route level instead. SUPER_ADMIN and anyone with
 // SALES=ADMIN sees everything, same as before.
+import { visibleEmployeeIds } from '../utils/salesScope';
+
 async function isSalesAdmin(req: AuthRequest): Promise<boolean> {
   if (!req.user) return false;
   const access = await getEffectiveAccess(req.user.userId);
@@ -36,7 +38,8 @@ async function assertLeadAccess(req: AuthRequest, leadId: string): Promise<void>
   if (await isSalesAdmin(req)) return;
   const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { assignedToId: true } });
   if (!lead) throw new AppError('Lead not found', 404);
-  if (lead.assignedToId !== req.user?.employeeId) {
+  const ids = await visibleEmployeeIds(req.user?.employeeId);
+  if (!lead.assignedToId || !ids.includes(lead.assignedToId)) {
     throw new AppError('You do not have access to this lead', 403);
   }
 }
@@ -240,7 +243,8 @@ export const salesController = {
       // overrides any assignedToId query param so they can't page through
       // teammates' leads by editing the request.
       if (!(await isSalesAdmin(req))) {
-        where.assignedToId = req.user?.employeeId || '__none__';
+        const ids = await visibleEmployeeIds(req.user?.employeeId);
+        where.assignedToId = ids.length ? { in: ids } : '__none__';
       }
 
       const [leadsRaw, total] = await Promise.all([
@@ -486,7 +490,7 @@ export const salesController = {
       });
       if (!lead || lead.deletedAt) throw new AppError('Lead not found', 404);
       // A BDA (SALES=EDIT) may only open leads assigned to them.
-      if (!(await isSalesAdmin(req)) && lead.assignedToId !== req.user?.employeeId) {
+      if (!(await isSalesAdmin(req)) && !(lead.assignedToId && (await visibleEmployeeIds(req.user?.employeeId)).includes(lead.assignedToId))) {
         throw new AppError('You do not have access to this lead', 403);
       }
       res.json({ success: true, data: (await withCreator([lead]))[0] });
@@ -671,7 +675,8 @@ export const salesController = {
       const where: Record<string, unknown> = {};
       const admin = await isSalesAdmin(req);
       if (!admin) {
-        where.calledById = req.user?.employeeId || '__none__';
+        const vis = await visibleEmployeeIds(req.user?.employeeId);
+        where.calledById = vis.length ? { in: vis } : '__none__';
       } else if (employeeId) {
         where.calledById = employeeId;
       }
@@ -874,7 +879,8 @@ export const salesController = {
       // their Demo Booked / Demo Rescheduled / Demo Conducted tabs (each is
       // just this same endpoint with a different ?status=).
       if (!(await isSalesAdmin(req))) {
-        where.lead = { assignedToId: req.user?.employeeId || '__none__' };
+        const vis = await visibleEmployeeIds(req.user?.employeeId);
+        where.lead = { assignedToId: vis.length ? { in: vis } : '__none__' };
         if (leadId) {
           const cutoff = await historyCutoff(false, String(leadId));
           if (cutoff) where.scheduledAt = { gte: cutoff };
@@ -1098,8 +1104,10 @@ export const salesController = {
   async stats(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const admin = await isSalesAdmin(req);
-      const ownLeadWhere: Record<string, unknown> = admin ? { deletedAt: null } : { deletedAt: null, assignedToId: req.user?.employeeId || '__none__' };
-      const ownDemoWhere: Record<string, unknown> = admin ? {} : { lead: { assignedToId: req.user?.employeeId || '__none__' } };
+      const vis = admin ? [] : await visibleEmployeeIds(req.user?.employeeId);
+      const visWhere = vis.length ? { in: vis } : '__none__';
+      const ownLeadWhere: Record<string, unknown> = admin ? { deletedAt: null } : { deletedAt: null, assignedToId: visWhere };
+      const ownDemoWhere: Record<string, unknown> = admin ? {} : { lead: { assignedToId: visWhere } };
 
       const [byStatus, totalLeads, upcomingDemos, enrolledThisMonth] = await Promise.all([
         prisma.lead.groupBy({ by: ['status'], where: ownLeadWhere, _count: { _all: true } }),

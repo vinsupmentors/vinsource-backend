@@ -3,6 +3,7 @@ import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { getEffectiveAccess } from '../utils/moduleAccess';
+import { visibleEmployeeIds } from '../utils/salesScope';
 import { leadPhoneKey } from '../utils/leadPhone';
 import { emailService } from '../services/email.service';
 import { computeBehind, getTargetAlertConfig, salesTargetAlertsService } from '../services/salesTargetAlerts.service';
@@ -207,7 +208,7 @@ export const salesToolsController = {
       const to = req.query.to ? new Date(`${String(req.query.to)}T23:59:59.999+05:30`) : new Date();
       if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid dates', 400);
       const where: Record<string, unknown> = { calledAt: { gte: from, lte: to }, calledById: { not: null } };
-      if (!admin) where.calledById = req.user?.employeeId || '__none__';
+      if (!admin) { const vis = await visibleEmployeeIds(req.user?.employeeId); where.calledById = vis.length ? { in: vis } : '__none__'; }
       else if (req.query.employeeId) where.calledById = String(req.query.employeeId);
 
       const logs = await prisma.leadCallLog.findMany({
@@ -302,7 +303,7 @@ export const salesToolsController = {
       const to = req.query.to ? new Date(`${String(req.query.to)}T23:59:59.999+05:30`) : new Date();
       if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid dates', 400);
       const where: Record<string, unknown> = { calledAt: { gte: from, lte: to }, calledById: { not: null } };
-      if (!admin) where.calledById = req.user?.employeeId || '__none__';
+      if (!admin) { const vis = await visibleEmployeeIds(req.user?.employeeId); where.calledById = vis.length ? { in: vis } : '__none__'; }
       else if (req.query.employeeId) where.calledById = String(req.query.employeeId);
       const logs = await prisma.leadCallLog.findMany({
         where, orderBy: { calledAt: 'asc' }, take: 50000,
