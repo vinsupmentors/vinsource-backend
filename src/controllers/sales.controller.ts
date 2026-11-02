@@ -798,7 +798,7 @@ export const salesController = {
         linkedCall = { id: c.id, calledAt: c.calledAt };
       }
       const isMeeting = type === 'MEETING';
-      const touched = isMeeting ? new Date() : linkedCall?.calledAt ?? null; // a real contact happened
+      const touched = isMeeting ? new Date() : linkedCall?.calledAt ?? new Date(); // any logged update counts as contact (call tracking isn't linked for everyone yet)
       // Closed-out statuses clear the reminder; open ones set the chosen date+time.
       const followUpValue = sdef.needsFollowUp && stage.status !== 'LOST' && stage.status !== 'ENROLLED' ? new Date(nextFollowUpAt) : null;
       const noteText = notes ? String(notes) : null;
