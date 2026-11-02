@@ -9,7 +9,9 @@ export const salesTeamsController = {
     try {
       const rows = await prisma.salesPresales.findMany({ select: { employeeId: true } });
       const ids = rows.map((r) => r.employeeId);
-      res.json({ success: true, data: { ids, mine: !!req.user?.employeeId && ids.includes(req.user.employeeId) } });
+      const me = req.user?.employeeId || '';
+      const isTl = !!me && !!(await prisma.salesTeamMap.findFirst({ where: { tlId: me } }));
+      res.json({ success: true, data: { ids, mine: !!me && ids.includes(me), isTl, employeeId: me } });
     } catch (err) { next(err); }
   },
 

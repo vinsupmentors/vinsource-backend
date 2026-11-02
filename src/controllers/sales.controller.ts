@@ -243,7 +243,9 @@ export const salesController = {
       // overrides any assignedToId query param so they can't page through
       // teammates' leads by editing the request.
       if (!(await isSalesAdmin(req))) {
-        const ids = await visibleEmployeeIds(req.user?.employeeId);
+        let ids = await visibleEmployeeIds(req.user?.employeeId);
+        // A Team Lead can narrow to part of their scope (e.g. "My Leads" = just themselves) — never widen it.
+        if (assignedToId) { const want = list(assignedToId); ids = ids.filter((i) => want.includes(i)); }
         where.assignedToId = ids.length ? { in: ids } : '__none__';
       }
 
