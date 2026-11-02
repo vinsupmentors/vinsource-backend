@@ -3,8 +3,8 @@ import prisma from '../config/database';
 /**
  * Whose leads an employee may see (Sales → Teams mapping).
  *  - Member (no one reports to them): only themselves.
- *  - Team Lead: themselves, everyone who reports to them (at any depth), and their co-TLs —
- *    anyone who shares a member with them — plus those co-TLs' members.
+ *  - Team Lead: themselves and everyone who reports to them (at any depth). A member shared by
+ *    two TLs shows only that member's leads to both — TLs do not see each other's leads.
  * Sales admins bypass this entirely (handled by the callers).
  */
 export async function visibleEmployeeIds(employeeId: string | undefined | null): Promise<string[]> {
@@ -22,10 +22,6 @@ export async function visibleEmployeeIds(employeeId: string | undefined | null):
   below(employeeId, mine);
   if (!mine.size) return [employeeId];
   mine.forEach((m) => out.add(m));
-  // Co-TLs: other leaders of any of my direct members.
-  const direct = links.filter((l) => l.tlId === employeeId).map((l) => l.employeeId);
-  const peers = new Set(links.filter((l) => direct.includes(l.employeeId) && l.tlId !== employeeId).map((l) => l.tlId));
-  peers.forEach((p) => { out.add(p); const sub = new Set<string>(); below(p, sub); sub.forEach((x) => out.add(x)); });
   return Array.from(out);
 }
 
