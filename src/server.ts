@@ -16,6 +16,7 @@ import { salesTargetAlertsService } from './services/salesTargetAlerts.service';
 import { feeReminderService } from './services/feeReminder.service';
 import { salesAdvisorReportService } from './services/salesAdvisorReport.service';
 import { cutExpiredDemoGuests } from './controllers/demoSessions.controller';
+import { retryFailedMetaLeads } from './services/metaLeads.service';
 import { closeExpiredSalesDemos, sendDemoReminders } from './controllers/salesDemoRoom.controller';
 import { processPending } from './services/transcription.service';
 
@@ -54,6 +55,8 @@ const start = async () => {
       try { await closeExpiredSalesDemos(); } catch (err) { console.error('Sales demo close failed:', err); }
       // "Demo starts in 10 minutes" emails to the student and the advisor.
       try { await sendDemoReminders(); } catch (err) { console.error('Demo reminders failed:', err); }
+      // Meta Lead Ads: retry notifications that failed earlier.
+      try { await retryFailedMetaLeads(); } catch (err) { console.error('Meta lead retry failed:', err); }
       // Call / demo transcription queue (no-op unless WHISPER_URL is set).
       // Not awaited: a long audio file must not hold up the other per-minute jobs.
       processPending(2).catch((err) => console.error('Transcription run failed:', err));

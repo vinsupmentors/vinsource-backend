@@ -15,6 +15,7 @@ import { salesOnboardingController } from '../controllers/salesOnboarding.contro
 import { transcriptsController } from '../controllers/transcripts.controller';
 import { authenticate } from '../middleware/auth';
 import { requireModule } from '../middleware/rbac';
+import { metaLeadsAdminController } from '../controllers/metaLeads.controller';
 import { uploadDemoProof, uploadPaymentProof } from '../middleware/upload';
 
 const router = Router();
@@ -41,6 +42,10 @@ router.get('/team-map', requireModule('SALES', 'ADMIN'), salesTeamsController.li
 router.put('/team-map', requireModule('SALES', 'ADMIN'), salesTeamsController.set);
 router.get('/presales', salesTeamsController.presales);
 router.put('/presales', requireModule('SALES', 'ADMIN'), salesTeamsController.setPresales);
+router.get('/meta-leads', requireModule('SALES', 'ADMIN'), metaLeadsAdminController.get);
+router.put('/meta-leads', requireModule('SALES', 'ADMIN'), metaLeadsAdminController.save);
+router.post('/meta-leads/test', requireModule('SALES', 'ADMIN'), metaLeadsAdminController.test);
+router.post('/meta-leads/events/:id/retry', requireModule('SALES', 'ADMIN'), metaLeadsAdminController.retry);
 router.get('/team-layout', requireModule('SALES', 'ADMIN'), salesTeamsController.layout);
 router.put('/team-layout', requireModule('SALES', 'ADMIN'), salesTeamsController.saveNode);
 

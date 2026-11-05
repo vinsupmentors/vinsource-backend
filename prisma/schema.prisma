@@ -4506,3 +4506,39 @@ model SalesPresales {
   employeeId String   @id
   createdAt  DateTime @default(now())
 }
+
+
+/// Meta (Facebook / Instagram) Lead Ads → portal. One settings row; secrets live in the server .env.
+model MetaLeadConfig {
+  id            String   @id @default("default")
+  enabled       Boolean  @default(false)
+  assignMode    String   @default("MY_BASE") // MY_BASE | ROUND_ROBIN | FIXED
+  fixedOwnerId  String?
+  roundRobinIds String?  @db.Text // comma-separated employee ids
+  rrCursor      Int      @default(0)
+  defaultCourse String?
+  formCourseMap String?  @db.Text // one "formId or form name = Course" per line
+  lastLeadAt    DateTime?
+  lastError     String?  @db.Text
+  updatedAt     DateTime @updatedAt
+}
+
+/// Every lead notification Meta sent (leadgen_id is unique → a retried notification is never processed twice).
+model MetaLeadEvent {
+  id         String   @id @default(uuid())
+  leadgenId  String   @unique
+  formId     String?
+  pageId     String?
+  status     String   @default("RECEIVED") // RECEIVED | PROCESSED | DUPLICATE | FAILED
+  attempts   Int      @default(0)
+  leadId     String?
+  name       String?
+  phone      String?
+  campaign   String?
+  error      String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}

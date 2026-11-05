@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { portfolioController } from '../controllers/portfolio.controller';
 import { publicDemoController } from '../controllers/demoSessions.controller';
 import { demoFeedbackController } from '../controllers/demoFeedback.controller';
+import { metaWebhookController } from '../controllers/metaLeads.controller';
 import rateLimit from 'express-rate-limit';
 import { publicVerifyCertificate } from '../controllers/certificateRequests.controller';
 
@@ -24,5 +25,9 @@ router.post('/demo-join', demoLimiter, publicDemoController.join);
 const feedbackLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
 router.get('/demo-feedback/:token', feedbackLimiter, demoFeedbackController.publicGet);
 router.post('/demo-feedback/:token', feedbackLimiter, demoFeedbackController.publicSubmit);
+
+// Meta Lead Ads webhook — called by Meta, authenticated by the verify token (GET) and the HMAC signature (POST).
+router.get('/meta-webhook', metaWebhookController.verify);
+router.post('/meta-webhook', metaWebhookController.receive);
 
 export default router;

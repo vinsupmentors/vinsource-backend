@@ -123,7 +123,8 @@ app.use('/api/live-classes/webhooks/livekit', express.raw({ type: '*/*' }), live
 
 // Parsing & logging
 app.use(compression());
-app.use(express.json({ limit: '10mb' }));
+// rawBody is kept so Meta's webhook signature (X-Hub-Signature-256) can be verified against the exact bytes.
+app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { (req as unknown as { rawBody?: Buffer }).rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan(config.NODE_ENV === 'production' ? 'combined' : 'dev'));
 

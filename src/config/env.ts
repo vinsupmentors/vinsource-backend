@@ -38,6 +38,12 @@ export const config = {
   SMTP_PASS: process.env.SMTP_PASS || '',
   EMAIL_FROM: process.env.EMAIL_FROM || 'no-reply@hrms.com',
 
+  // Meta Lead Ads → portal (Sales → Meta Leads). All blank = integration idle.
+  META_APP_SECRET:   process.env.META_APP_SECRET   || '',
+  META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN || '',
+  META_PAGE_TOKEN:   process.env.META_PAGE_TOKEN   || '',
+  META_GRAPH_VERSION: process.env.META_GRAPH_VERSION || 'v21.0',
+
   // Frontend
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
 
