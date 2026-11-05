@@ -99,6 +99,13 @@ export const callTrackingController = {
         }
       }
 
+      // The phone re-sends a call when a sync is retried — make ingestion idempotent so one call is one row.
+      const already = await prisma.leadCallLog.findFirst({
+        where: { source: 'AUTO', deviceId: req.device.id, rawPhoneNumber: phoneNumber, calledAt: { gte: new Date(calledAt.getTime() - 1000), lte: new Date(calledAt.getTime() + 1000) }, ...(direction ? { direction } : {}) },
+        select: { id: true, leadId: true },
+      });
+      if (already) return res.status(200).json({ success: true, data: { id: already.id, matched: !!already.leadId, duplicate: true } });
+
       const log = await prisma.leadCallLog.create({
         data: {
           leadId: matchedLeadId,

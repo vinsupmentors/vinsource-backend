@@ -296,6 +296,73 @@ export const salesToolsController = {
     } catch (err) { next(err); }
   },
 
+  /** Demo Reports (Sales Admin): who booked demos on a day, and a month calendar of every demo slot with whether it was taken. */
+  async demoReport(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      if (!(await isAdmin(req))) throw new AppError('Only Sales Admin can see Demo Reports', 403);
+      const dayStr = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : istParts(new Date()).date;
+      const dayStart = new Date(`${dayStr}T00:00:00+05:30`);
+      const dayEnd = new Date(dayStart.getTime() + DAY - 1);
+      const [yy, mm] = dayStr.split('-').map(Number);
+      const monthStart = new Date(`${yy}-${String(mm).padStart(2, '0')}-01T00:00:00+05:30`);
+      const nm = mm === 12 ? { y: yy + 1, m: 1 } : { y: yy, m: mm + 1 };
+      const monthEnd = new Date(`${nm.y}-${String(nm.m).padStart(2, '0')}-01T00:00:00+05:30`);
+
+      const include = { lead: { select: { name: true, phone: true, assignedToId: true } }, conductedBy: { select: { id: true, firstName: true, lastName: true } } };
+      const [sched, booked] = await Promise.all([
+        prisma.demo.findMany({ where: { scheduledAt: { gte: monthStart, lt: monthEnd } }, include, orderBy: { scheduledAt: 'asc' }, take: 5000 }),
+        prisma.demo.findMany({ where: { createdAt: { gte: dayStart, lte: dayEnd }, rescheduledFromId: null }, include, orderBy: { createdAt: 'asc' }, take: 2000 }),
+      ]);
+      const ids = new Set<string>();
+      for (const d of [...sched, ...booked]) { [d.bookedById, d.conductedById, d.lead.assignedToId].forEach((x) => x && ids.add(x)); }
+      const emps = await prisma.employee.findMany({ where: { id: { in: Array.from(ids) } }, select: { id: true, firstName: true, lastName: true } });
+      const nameOf = (id?: string | null) => { const e = id ? emps.find((x) => x.id === id) : null; return e ? `${e.firstName} ${e.lastName}` : ''; };
+      const now = Date.now();
+      const state = (d: { status: string; scheduledAt: Date }) =>
+        d.status === 'COMPLETED' ? 'TAKEN' : d.status === 'NO_SHOW' ? 'NOT_TAKEN' : d.status === 'RESCHEDULED' ? 'RESCHEDULED' : d.status === 'CANCELLED' ? 'CANCELLED'
+          : d.scheduledAt.getTime() < now ? 'PENDING' : 'UPCOMING';
+      const row = (d: (typeof sched)[number]) => {
+        const p = istParts(d.scheduledAt);
+        return {
+          id: d.id, leadId: d.leadId, bookingNumber: d.bookingNumber, date: p.date, time: d.scheduledAt.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }),
+          scheduledAt: d.scheduledAt.toISOString(), bookedAt: d.createdAt.toISOString(), leadName: d.lead.name, phone: d.lead.phone, course: d.courseEnquired || '', mode: d.mode,
+          status: d.status, state: state(d), outcome: d.outcome || '', bookedBy: nameOf(d.bookedById || d.lead.assignedToId), advisor: nameOf(d.conductedById || d.lead.assignedToId),
+        };
+      };
+      const calendar = sched.map(row);
+      const bookedRows = booked.map(row);
+
+      type P = { employeeId: string; name: string; bookedOnDay: number; slotsOnDay: number; taken: number; notTaken: number; pending: number; upcoming: number; rescheduled: number; cancelled: number; monthSlots: number; monthTaken: number };
+      const people = new Map<string, P>();
+      const get = (id: string | null | undefined) => {
+        const key = id || '__none__';
+        if (!people.has(key)) people.set(key, { employeeId: key, name: id ? nameOf(id) || 'Unknown' : 'Unassigned', bookedOnDay: 0, slotsOnDay: 0, taken: 0, notTaken: 0, pending: 0, upcoming: 0, rescheduled: 0, cancelled: 0, monthSlots: 0, monthTaken: 0 });
+        return people.get(key)!;
+      };
+      for (const d of booked) get(d.bookedById || d.lead.assignedToId).bookedOnDay++;
+      for (const d of sched) {
+        const p = get(d.conductedById || d.lead.assignedToId);
+        const st = state(d);
+        p.monthSlots++; if (st === 'TAKEN') p.monthTaken++;
+        if (istParts(d.scheduledAt).date === dayStr) {
+          p.slotsOnDay++;
+          if (st === 'TAKEN') p.taken++; else if (st === 'NOT_TAKEN') p.notTaken++; else if (st === 'PENDING') p.pending++; else if (st === 'UPCOMING') p.upcoming++; else if (st === 'RESCHEDULED') p.rescheduled++; else if (st === 'CANCELLED') p.cancelled++;
+        }
+      }
+      const perPerson = Array.from(people.values()).sort((a, b) => b.bookedOnDay - a.bookedOnDay || b.slotsOnDay - a.slotsOnDay || a.name.localeCompare(b.name));
+      const onDay = calendar.filter((r) => r.date === dayStr);
+      const count = (st: string) => onDay.filter((r) => r.state === st).length;
+      res.json({
+        success: true,
+        data: {
+          day: dayStr, month: `${yy}-${String(mm).padStart(2, '0')}`,
+          summary: { bookedOnDay: bookedRows.length, slotsOnDay: onDay.length, taken: count('TAKEN'), notTaken: count('NOT_TAKEN'), pending: count('PENDING'), upcoming: count('UPCOMING'), rescheduled: count('RESCHEDULED'), cancelled: count('CANCELLED') },
+          perPerson, calendar, bookedOnDay: bookedRows,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
   async callDetails(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const admin = await isAdmin(req);

@@ -17,6 +17,8 @@ export const LEAD_FILTER_FIELDS: FieldMap = {
   passedOutYear: { type: 'number', path: ['passedOutYear'], nullable: true },
   status: { type: 'select', path: ['status'], enumValues: STAGES },
   activityStatus: { type: 'select', path: ['activityStatus'], nullable: true, enumValues: ACTIVITY_STATUSES },
+  statusKey: { type: 'select', path: ['statusKey'], nullable: true }, // custom Update Statuses (May Buy Later, Positive…)
+  stageKey: { type: 'select', path: ['stageKey'], nullable: true }, // custom lead stages
   assignedToId: { type: 'select', path: ['assignedToId'], nullable: true },
   scoutKey: { type: 'select', path: ['scoutKey'], nullable: true },
   createdAt: { type: 'date', path: ['createdAt'] },
@@ -26,6 +28,13 @@ export const LEAD_FILTER_FIELDS: FieldMap = {
   demoMode: { type: 'select', path: ['mode'], enumValues: ['ONLINE', 'OFFLINE'], wrap: (f) => ({ demos: { some: f } }) },
   demoStatus: { type: 'select', path: ['status'], enumValues: ['SCHEDULED', 'COMPLETED', 'RESCHEDULED', 'NO_SHOW', 'CANCELLED'], wrap: (f) => ({ demos: { some: f } }) },
   demoDate: { type: 'date', path: ['scheduledAt'], wrap: (f) => ({ demos: { some: f } }) },
+  // Logged activities (Log Activity calls / meetings) — the lead matches when ANY of its activities does.
+  actType: { type: 'select', path: ['activityType'], enumValues: ['CALL', 'MEETING'], wrap: (f) => ({ callLogs: { some: f } }) },
+  actStatus: { type: 'select', path: ['activityStatus'], wrap: (f) => ({ callLogs: { some: f } }) },
+  actCustomStatus: { type: 'select', path: ['statusKey'], wrap: (f) => ({ callLogs: { some: f } }) },
+  actBy: { type: 'select', path: ['calledById'], wrap: (f) => ({ callLogs: { some: f } }) },
+  actDate: { type: 'date', path: ['calledAt'], wrap: (f) => ({ callLogs: { some: f } }) },
+  actNotes: { type: 'text', path: ['notes'], wrap: (f) => ({ callLogs: { some: f } }) },
 };
 
 /** Fields for the Call Log. */

@@ -8,6 +8,12 @@ import { getEffectiveAccess } from '../utils/moduleAccess';
 import { PAYMENT_PROOF_DIR } from '../middleware/upload';
 import { history } from '../utils/salesFlow';
 import { quoteEmi, addMonthsKeepDay } from '../utils/emiQuote';
+import { visibleEmployeeIds } from '../utils/salesScope';
+
+async function canWorkLead(req: AuthRequest, assignedToId: string | null): Promise<boolean> {
+  if (await isAdmin(req)) return true;
+  return !!assignedToId && (await visibleEmployeeIds(req.user?.employeeId)).includes(assignedToId);
+}
 
 const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 const MODES = ['CASH', 'UPI', 'CARD', 'NET_BANKING', 'CHEQUE', 'JODO', 'OTHER'];
@@ -23,7 +29,7 @@ async function isAdmin(req: AuthRequest): Promise<boolean> {
 async function loadLead(req: AuthRequest) {
   const lead = await prisma.lead.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, deletedAt: true, assignedToId: true } });
   if (!lead || lead.deletedAt) throw new AppError('Lead not found', 404);
-  if (!(await isAdmin(req)) && lead.assignedToId !== req.user?.employeeId) throw new AppError('You do not have access to this lead', 403);
+  if (!(await canWorkLead(req, lead.assignedToId))) throw new AppError('You do not have access to this lead', 403);
   return lead;
 }
 
@@ -97,6 +103,11 @@ export const salesOnboardingController = {
           ? 'The screenshot did not reach the server — please re-select the image and try again (JPG/PNG/WEBP).'
           : `The screenshot was not uploaded (request type "${ct}") — the portal page is out of date. Hard-refresh (Ctrl+Shift+R) and try again.`, 400);
       }
+      // Validate the payment BEFORE anything is saved, so a bad amount can't leave a half-onboarded lead behind.
+      if (registrationPaid) {
+        const early = parsePayment(req);
+        if (totalFee && early.amount > totalFee + 0.5) throw new AppError(`The amount collected (${inr(early.amount)}) is more than the course fee (${inr(totalFee)}).`, 400);
+      }
       if (registrationPaid && req.body.reference) {
         const dup = await prisma.feeInstallment.findFirst({ where: { reference: String(req.body.reference).trim(), rejectedAt: null }, select: { id: true } });
         if (dup) throw new AppError(`Transaction ID ${String(req.body.reference).trim()} has already been used on another payment.`, 409);
@@ -111,15 +122,19 @@ export const salesOnboardingController = {
         emi = await quoteEmi(totalFee, emiMonths);
         if (registrationPaid && Number(b.amount) > emi.downPayment + 0.5) throw new AppError(`The amount collected can't be more than the down payment (${inr(emi.downPayment)}).`, 400);
       }
+      let createdPlanId: string | null = null; let createdObId: string | null = null;
+      try {
       const plan = await prisma.feePaymentPlan.create({
         data: {
           leadId: lead.id, courseName, totalFee: totalFee || 0, planType: PLAN_TYPE[paymentMethod], status: 'ACTIVE', createdById: owner,
           ...(emi ? { emiMonths: emi.months, downPayment: emi.downPayment, interestRatePct: emi.ratePct, interestAmount: emi.interest } : {}),
         },
       });
+      createdPlanId = plan.id;
       const onboarding = await prisma.leadOnboarding.create({
         data: { leadId: lead.id, courseName, daysType, timing, mode, paymentMethod, totalFee, registrationPaid, planId: plan.id, createdById: owner },
       });
+      createdObId = onboarding.id;
       await prisma.lead.update({ where: { id: lead.id }, data: { courseInterest: courseName } }).catch(() => {});
 
       let regAmount = 0;
@@ -150,6 +165,17 @@ export const salesOnboardingController = {
       await history(lead.id, owner, 'ONBOARDING', line);
       await prisma.leadNote.create({ data: { leadId: lead.id, authorId: owner || null, body: `Fees: ${line}${totalFee ? ` · Course fee ${inr(totalFee)}` : ''}` } }).catch(() => {});
       res.status(201).json({ success: true, data: onboarding, message: registrationPaid ? 'Onboarded. Registration payment sent to Finance for approval.' : 'Lead onboarded.' });
+      } catch (inner) {
+        // Anything failing after the plan was created undoes it, so the lead is never left half-onboarded.
+        if (createdPlanId) {
+          const instIds = (await prisma.feeInstallment.findMany({ where: { planId: createdPlanId }, select: { id: true } }).catch(() => [])).map((i) => i.id);
+          if (instIds.length) await prisma.salesTask.deleteMany({ where: { installmentId: { in: instIds } } }).catch(() => {});
+          await prisma.feeInstallment.deleteMany({ where: { planId: createdPlanId } }).catch(() => {});
+          if (createdObId) await prisma.leadOnboarding.delete({ where: { id: createdObId } }).catch(() => {});
+          await prisma.feePaymentPlan.delete({ where: { id: createdPlanId } }).catch(() => {});
+        }
+        throw inner;
+      }
     } catch (err) {
       const f = (req as any).file as { filename: string } | undefined;
       if (f) fs.unlink(path.join(PAYMENT_PROOF_DIR, f.filename), () => {});
@@ -194,7 +220,7 @@ export const salesOnboardingController = {
     try {
       const inst = await prisma.feeInstallment.findUnique({ where: { id: req.params.id }, select: { proofFile: true, plan: { select: { lead: { select: { assignedToId: true } } } } } });
       if (!inst || !inst.proofFile) throw new AppError('No screenshot on this payment', 404);
-      let allowed = req.user?.role === 'ADMIN' || req.user?.role === 'SUPER_ADMIN' || (!!req.user?.employeeId && inst.plan.lead.assignedToId === req.user.employeeId);
+      let allowed = req.user?.role === 'ADMIN' || req.user?.role === 'SUPER_ADMIN' || (!!req.user?.employeeId && (await canWorkLead(req, inst.plan.lead.assignedToId)));
       if (!allowed && req.user) {
         const acc = await getEffectiveAccess(req.user.userId);
         allowed = acc.SALES === 'ADMIN' || (!!acc.FINANCE_SALES && acc.FINANCE_SALES !== 'NONE') || (!!acc.REPORT_SHEETS && acc.REPORT_SHEETS !== 'NONE');
@@ -312,7 +338,7 @@ export const salesOnboardingController = {
     try {
       const inst = await prisma.feeInstallment.findUnique({ where: { id: req.params.id }, include: { plan: { select: { leadId: true, lead: { select: { id: true, name: true, assignedToId: true } } } } } });
       if (!inst) throw new AppError('Instalment not found', 404);
-      if (!(await isAdmin(req)) && inst.plan.lead.assignedToId !== req.user?.employeeId) throw new AppError('You do not have access to this lead', 403);
+      if (!(await canWorkLead(req, inst.plan.lead.assignedToId))) throw new AppError('You do not have access to this lead', 403);
       if (inst.status !== 'PENDING' && inst.status !== 'OVERDUE') throw new AppError('This instalment is not waiting for payment', 400);
       const pay = parsePayment(req);
       const file = (req as any).file as { filename: string } | undefined;
@@ -361,12 +387,19 @@ export const salesOnboardingController = {
         const open = live.filter((i) => i.status === 'PENDING' || i.status === 'OVERDUE');
         const overdue = open.filter((i) => i.dueDate < now);
         const next = open[0] || null;
+        // Each EMI instalment = Vinsup's share (course fee) + interest; the down payment is all Vinsup.
+        const interestTotal = p.interestAmount || 0;
+        const emiPool = Math.max(0, p.totalFee - (p.downPayment || 0)) + interestTotal;
+        const intOf = (i: { kind: string | null; amount: number }) => (i.kind === 'EMI' && emiPool > 0 && interestTotal > 0 ? Math.round(i.amount * (interestTotal / emiPool)) : 0);
+        const paidInterest = live.filter((i) => i.status === 'PAID').reduce((n, i) => n + intOf(i), 0);
+        const paidVinsup = paid - paidInterest;
         return {
           planId: p.id, lead: p.lead, courseName: p.courseName, months: p.emiMonths, ratePct: p.interestRatePct, fee: p.totalFee,
           total, paid, awaiting, balance: Math.max(0, total - paid - awaiting),
+          interest: interestTotal, vinsup: p.totalFee, paidInterest, paidVinsup,
           paidCount: live.filter((i) => i.status === 'PAID' && i.kind === 'EMI').length,
           overdueCount: overdue.length, overdueAmount: overdue.reduce((n, i) => n + i.amount, 0),
-          nextDue: next ? { dueDate: next.dueDate, amount: next.amount } : null,
+          nextDue: next ? { dueDate: next.dueDate, amount: next.amount, interest: intOf(next), vinsup: next.amount - intOf(next) } : null,
         };
       });
       res.json({ success: true, data: rows });

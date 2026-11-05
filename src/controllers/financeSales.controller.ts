@@ -9,7 +9,7 @@ import { generateReceiptPdf, ReceiptTransaction } from '../utils/receiptPdf';
 import { syncStageFromFees, logPaymentRecorded } from '../utils/salesFlow';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
-const leadSelect = { id: true, name: true, phone: true, email: true, city: true, assignedToId: true };
+const leadSelect = { id: true, name: true, phone: true, email: true, city: true, assignedToId: true, assignedTo: { select: employeeSelect } };
 
 // Always CC'd on every student bill/receipt email, alongside the sales
 // person mapped to that student (Lead.assignedTo).
