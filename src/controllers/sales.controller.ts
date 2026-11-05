@@ -23,6 +23,7 @@ import { ensureReminderForStage, moveDemoReminder, syncFollowUpTask, moveOpenTas
 // gated to ADMIN at the route level instead. SUPER_ADMIN and anyone with
 // SALES=ADMIN sees everything, same as before.
 import { visibleEmployeeIds, isPresales } from '../utils/salesScope';
+import { emailAdvisorNewLeads } from '../utils/leadAssignEmail';
 
 async function isSalesAdmin(req: AuthRequest): Promise<boolean> {
   if (!req.user) return false;
@@ -324,6 +325,7 @@ export const salesController = {
       };
 
       const results: Array<{ row: number; status: 'created' | 'error'; message?: string; leadId?: string }> = [];
+      const assignedByAdvisor = new Map<string, string[]>(); // advisor → new lead ids, for one summary email each
 
       for (let i = 0; i < leads.length; i++) {
         const row = (leads[i] || {}) as Record<string, unknown>;
@@ -460,6 +462,7 @@ export const salesController = {
 
           await logLeadHistory(lead.id, req.user?.employeeId, 'CREATED', `Lead imported${defBatch ? ` (batch "${defBatch}")` : ''}${rowSource ? `, source: ${rowSource}` : ''}${assignedToId ? '' : ', placed in My Base'}`, null, rowSource || null);
           existingPhones.add(key);
+          if (assignedToId) assignedByAdvisor.set(assignedToId, [...(assignedByAdvisor.get(assignedToId) || []), lead.id]);
           results.push({
             row: rowNum,
             status: 'created',
@@ -471,6 +474,7 @@ export const salesController = {
         }
       }
 
+      if (!dryRun) for (const [advisor, ids] of assignedByAdvisor) emailAdvisorNewLeads(advisor, ids, { actorEmployeeId: req.user?.employeeId, batchLabel: defBatch || null, via: 'bulk upload' });
       const created = results.filter((r) => r.status === 'created').length;
       res.status(dryRun ? 200 : 201).json({ success: true, data: { results, created, failed: results.length - created, dryRun } });
     } catch (err) { next(err); }
@@ -519,6 +523,7 @@ export const salesController = {
       const assignee = lead.assignedTo ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}` : 'nobody';
       await logLeadHistory(lead.id, req.user?.employeeId, 'CREATED',
         `Lead created${source ? ` (source: ${source})` : ''}, assigned to ${assignee}`, null, source ?? null);
+      if (lead.assignedToId) emailAdvisorNewLeads(lead.assignedToId, [lead.id], { actorEmployeeId: req.user?.employeeId });
       res.status(201).json({ success: true, data: lead });
     } catch (err) { next(err); }
   },
@@ -574,6 +579,7 @@ export const salesController = {
       const fullName = (e?: { firstName: string; lastName: string } | null) => (e ? `${e.firstName} ${e.lastName}` : 'Unassigned');
       if (assignedToId !== undefined && (assignedToId || null) !== before.assignedToId) {
         await moveOpenTasks(lead.id, assignedToId || null); // follow-up / demo tasks follow the lead to its new owner
+        if (assignedToId) emailAdvisorNewLeads(assignedToId, [lead.id], { actorEmployeeId: actor, via: 'reassigned' });
         await logLeadHistory(lead.id, actor, 'ASSIGNED', `Reassigned from ${fullName(before.assignedTo)} to ${fullName(lead.assignedTo)}`, fullName(before.assignedTo), fullName(lead.assignedTo));
       }
       // Moving the lead to Demo done by hand finishes its scheduled demo so the Demo tab agrees.

@@ -3,6 +3,7 @@ import prisma from '../config/database';
 import { config } from '../config/env';
 import { leadPhoneKey, findDuplicateLead } from '../utils/leadPhone';
 import { ensureSource } from '../utils/leadConfig';
+import { emailAdvisorNewLeads } from '../utils/leadAssignEmail';
 
 /**
  * Meta Lead Ads → portal.
@@ -138,6 +139,7 @@ export async function processLeadgen(leadgenId: string, hint: { formId?: string;
     await prisma.leadHistory.create({ data: { leadId: created.id, actorId: null, type: 'CREATED', summary: `Lead created from Meta Lead Ads${campaign ? ` (campaign: ${campaign})` : ''}${assignedToId ? '' : ', placed in My Base'}`, toValue: 'Meta' } }).catch(() => {});
     await prisma.metaLeadEvent.update({ where: { id: ev.id }, data: { status: 'PROCESSED', leadId: created.id, name, phone: p.phone, campaign, formId: formId || null, error: null } });
     await prisma.metaLeadConfig.update({ where: { id: 'default' }, data: { lastLeadAt: new Date(), lastError: null } });
+    if (assignedToId) emailAdvisorNewLeads(assignedToId, [created.id], { via: 'Meta lead ad' });
     return ev;
   } catch (e) {
     const msg = (e as Error).message || 'Failed';

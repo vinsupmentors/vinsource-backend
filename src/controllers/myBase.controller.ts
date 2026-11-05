@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { notificationService } from '../services/notification.service';
 import { moveOpenTasks } from '../utils/salesFlow';
+import { emailAdvisorNewLeads } from '../utils/leadAssignEmail';
 
 /**
  * MyBase — the pool of unassigned leads. Sales Admin hands leads out in bulk
@@ -252,6 +253,7 @@ export const myBaseController = {
             summary: `${l.assignedToId ? `Reassigned from ${from} to ${to}` : `Assigned from MyBase to ${to}`}${batchLabel ? ` · batch "${batchLabel}"` : ''} · history ${showHistory ? 'shown' : 'hidden'} for the new owner`,
           });
         }
+        emailAdvisorNewLeads(emp.id, chunk.map((l) => l.id), { actorEmployeeId: actor, batchLabel });
         if (emp.userId) {
           await notificationService.create({
             userId: emp.userId, type: 'SYSTEM', title: 'New leads assigned',
