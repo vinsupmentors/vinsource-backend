@@ -1,4 +1,6 @@
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from 'pdf-lib';
+import fs from 'fs';
+import path from 'path';
 
 // Fixed policy lines shown on every receipt — matches the wording already in
 // use on the existing external billing tool's receipts (see the
@@ -18,6 +20,8 @@ export interface ReceiptTransaction {
   mode: string;
   date: Date;
   amount: number;
+  receiptNo?: string;  // the bill number issued for this payment
+  current?: boolean;   // true for the payment this bill is being issued for
 }
 
 export interface ReceiptData {
@@ -33,6 +37,9 @@ export interface ReceiptData {
   totalFee: number;
   totalPaid: number;
   transactions: ReceiptTransaction[];
+  stageLabel?: string; // lead stage, e.g. "Registration Done"
+  paidNow?: number;    // amount of the payment this bill is for
+  trackLabel?: string; // e.g. "IOP"
 }
 
 function fmtDate(d: Date): string {
@@ -94,17 +101,34 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Buffer> {
   let y = 780;
 
   // ── Header ──────────────────────────────────────────────────────────────
-  page.drawText('Vinsup Skill Academy', { x: marginX, y, size: 16, font: bold, color: NAVY });
+  // Vinsup logo (best-effort: a missing/unreadable file must never block the bill).
+  let textX = marginX;
+  try {
+    const logoPath = path.join(process.cwd(), 'assets', 'vinsup-logo.png');
+    if (fs.existsSync(logoPath)) {
+      const logo = await pdfDoc.embedPng(fs.readFileSync(logoPath));
+      const h = 48;
+      const w = (logo.width / logo.height) * h;
+      page.drawImage(logo, { x: marginX, y: 745, width: Math.min(w, 140), height: h });
+      textX = marginX + Math.min(w, 140) + 12;
+    }
+  } catch { /* ignore, header falls back to text only */ }
+
+  page.drawText('Vinsup Skill Academy', { x: textX, y, size: 16, font: bold, color: NAVY });
   const receiptTitleW = bold.widthOfTextAtSize('RECEIPT', 20);
   page.drawText('RECEIPT', { x: rightX - receiptTitleW, y: y + 4, size: 20, font: bold, color: NAVY });
   y -= 20;
-  page.drawText('148 A,B, Gopalaswamy Kovil Street, Ganapathy', { x: marginX, y, size: 9, font, color: GREY });
+  page.drawText('148 A,B, Gopalaswamy Kovil Street, Ganapathy', { x: textX, y, size: 9, font, color: GREY });
   const receiptNoW = font.widthOfTextAtSize(`# ${data.receiptNo}`, 10);
   page.drawText(`# ${data.receiptNo}`, { x: rightX - receiptNoW, y: y + 3, size: 10, font, color: GREY });
   y -= 13;
-  page.drawText('Coimbatore, Tamil Nadu, IN 641006', { x: marginX, y, size: 9, font, color: GREY });
+  page.drawText('Coimbatore, Tamil Nadu, IN 641006', { x: textX, y, size: 9, font, color: GREY });
   const statusW = bold.widthOfTextAtSize(statusLabel, 10);
   page.drawText(statusLabel, { x: rightX - statusW, y: y + 2, size: 10, font: bold, color: statusColor });
+  if (data.stageLabel) {
+    const stageLine = `Stage: ${data.stageLabel}`;
+    page.drawText(stageLine, { x: rightX - bold.widthOfTextAtSize(stageLine, 9), y: y - 11, size: 9, font: bold, color: NAVY });
+  }
   y -= 36;
 
   page.drawLine({ start: { x: marginX, y }, end: { x: rightX, y }, thickness: 1, color: BORDER });
@@ -131,6 +155,17 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Buffer> {
 
   y -= 20;
 
+  // ── Course details ──────────────────────────────────────────────────────
+  const detailRows: [string, string][] = [['Course Opted', data.itemName]];
+  if (data.trackLabel) detailRows.push(['Track', data.trackLabel]);
+  detailRows.push(['Total Fees', fmtMoney(data.totalFee)]);
+  for (const [label, val] of detailRows) {
+    page.drawText(`${label}:`, { x: marginX, y, size: 10, font: bold, color: GREY });
+    page.drawText(val, { x: marginX + 95, y, size: 10, font: bold, color: rgb(0.1, 0.1, 0.1) });
+    y -= 16;
+  }
+  y -= 8;
+
   // ── Item table ──────────────────────────────────────────────────────────
   const cols = [
     { label: '#', width: 25 },
@@ -153,7 +188,9 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Buffer> {
   y -= rowH;
 
   cx = marginX;
-  const itemVals = ['1', data.itemName, fmtMoney(data.totalFee), fmtMoney(data.totalFee)];
+  // Row = what was received today (this bill); falls back to the full fee for old callers.
+  const todayAmt = data.paidNow ?? data.totalFee;
+  const itemVals = ['1', data.paidNow ? `Payment received today - ${data.itemName}` : data.itemName, fmtMoney(todayAmt), fmtMoney(todayAmt)];
   for (let i = 0; i < cols.length; i++) {
     page.drawRectangle({ x: cx, y: y - rowH, width: cols[i].width, height: rowH, borderColor: BORDER, borderWidth: 0.5 });
     const align = i >= 2 ? 'right' : 'left';
@@ -166,9 +203,9 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Buffer> {
 
   // ── Summary ─────────────────────────────────────────────────────────────
   const summaryRows: [string, string, boolean][] = [
-    ['Sub Total', fmtMoney(data.totalFee), false],
-    ['Total', fmtMoney(data.totalFee), false],
-    ['Total Paid', fmtMoney(data.totalPaid), false],
+    ['Sub Total', fmtMoney(todayAmt), false],
+    ['Total', fmtMoney(todayAmt), false],
+    ['Total Paid (all bills)', fmtMoney(data.totalPaid), false],
     ['Amount Due', fmtMoney(amountDue), true],
   ];
   const summaryLabelX = rightX - 220;
@@ -185,26 +222,29 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Buffer> {
   page.drawText('Transactions', { x: marginX, y, size: 11, font: bold, color: NAVY });
   y -= 18;
   const txCols = [
-    { label: 'Payment Mode', width: 180 },
-    { label: 'Date', width: 150 },
-    { label: 'Amount', width: rightX - marginX - 180 - 150 },
+    { label: 'Bill No', width: 190 },
+    { label: 'Payment Mode', width: 110 },
+    { label: 'Date', width: 90 },
+    { label: 'Amount', width: rightX - marginX - 190 - 110 - 90 },
   ];
   cx = marginX;
-  for (const c of txCols) {
-    page.drawText(c.label, { x: cx, y, size: 9, font: bold, color: GREY });
+  txCols.forEach((c, i) => {
+    const hx = i === txCols.length - 1 ? cx + c.width - bold.widthOfTextAtSize(c.label, 9) : cx;
+    page.drawText(c.label, { x: hx, y, size: 9, font: bold, color: GREY });
     cx += c.width;
-  }
+  });
   y -= 6;
   page.drawLine({ start: { x: marginX, y }, end: { x: rightX, y }, thickness: 0.5, color: BORDER });
   y -= 14;
 
   for (const t of data.transactions.slice(0, 20)) {
     cx = marginX;
-    const vals = [t.mode, fmtDate(t.date), fmtMoney(t.amount)];
+    if (t.current) page.drawRectangle({ x: marginX - 4, y: y - 4, width: rightX - marginX + 8, height: 15, color: LIGHT_GREY });
+    const vals = [`${t.receiptNo || '-'}${t.current ? '  (this bill)' : ''}`, t.mode.replace(/_/g, ' '), fmtDate(t.date), fmtMoney(t.amount)];
     for (let i = 0; i < txCols.length; i++) {
-      const align = i === 2 ? 'right' : 'left';
+      const align = i === 3 ? 'right' : 'left';
       const tx = align === 'right' ? cx + txCols[i].width - font.widthOfTextAtSize(vals[i], 9) : cx;
-      page.drawText(vals[i], { x: tx, y, size: 9, font, color: rgb(0.1, 0.1, 0.1) });
+      page.drawText(vals[i], { x: tx, y, size: 9, font: t.current ? bold : font, color: rgb(0.1, 0.1, 0.1) });
       cx += txCols[i].width;
     }
     y -= 16;

@@ -49,33 +49,45 @@ async function nextReceiptNo(date: Date): Promise<string> {
  * Wrapped in try/catch end-to-end (not just around the send) — a throw
  * anywhere in here (e.g. PDF generation) must never become a silent,
  * unlogged unhandled rejection, since this is always called fire-and-forget. */
-async function emailReceipt(planId: string, paymentDate: Date) {
+async function emailReceipt(planId: string, paymentDate: Date, currentInstallmentId?: string) {
   try {
-    await emailReceiptInner(planId, paymentDate);
+    await emailReceiptInner(planId, paymentDate, currentInstallmentId);
   } catch (err) {
     console.error(`Fee receipt failed for plan ${planId}:`, err);
   }
 }
 
-async function emailReceiptInner(planId: string, paymentDate: Date) {
+async function emailReceiptInner(planId: string, paymentDate: Date, currentInstallmentId?: string) {
   const plan = await prisma.feePaymentPlan.findUnique({
     where: { id: planId },
     include: {
-      lead: { select: { name: true, email: true, city: true, assignedTo: { select: { email: true } } } },
-      installments: { where: { status: 'PAID' }, orderBy: { paidAt: 'asc' } },
+      lead: { select: { name: true, email: true, city: true, status: true, stageKey: true, assignedTo: { select: { email: true } } } },
+      installments: { where: { status: 'PAID' }, orderBy: { paidAt: 'asc' }, include: { collection: { select: { receiptNo: true } } } },
     },
   });
   if (!plan) return;
   const email = (plan.lead.email || '').trim();
-  if (!email) return; // nothing to send a bill to
+  if (!email) {
+    console.warn(`[fee-receipt] no student email on the lead — bill not sent for plan ${planId}`);
+    return; // nothing to send a bill to
+  }
 
   const totalPaid = plan.installments.reduce((sum, i) => sum + i.amount, 0);
-  const receiptNo = await nextReceiptNo(paymentDate);
+  const current = plan.installments.find((i) => i.id === currentInstallmentId);
+  // The bill number is the one stored on this payment's collection (created at approval),
+  // so every bill keeps its own stable number; fall back to a fresh one for old rows.
+  const receiptNo = current?.collection?.receiptNo || (await nextReceiptNo(paymentDate));
   const transactions: ReceiptTransaction[] = plan.installments.map((i) => ({
     mode: i.mode || 'OTHER',
     date: i.paidAt || i.createdAt,
     amount: i.amount,
+    receiptNo: i.collection?.receiptNo || undefined,
+    current: i.id === currentInstallmentId,
   }));
+  const stageKey = plan.lead.stageKey || plan.lead.status || '';
+  const stageLabel = stageKey
+    ? stageKey.replace(/^CUSTOM_/, '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+    : undefined;
 
   const pdf = await generateReceiptPdf({
     receiptNo,
@@ -87,6 +99,9 @@ async function emailReceiptInner(planId: string, paymentDate: Date) {
     totalFee: plan.totalFee,
     totalPaid,
     transactions,
+    stageLabel,
+    paidNow: current?.amount,
+    trackLabel: plan.track ? String(plan.track).replace(/_/g, ' ') : undefined,
   });
 
   const cc: string[] = [OPS_CC_EMAIL];
@@ -104,6 +119,8 @@ async function emailReceiptInner(planId: string, paymentDate: Date) {
       totalPaid,
       amountDue: Math.max(0, plan.totalFee - totalPaid),
       courseName: plan.courseName,
+      stageLabel,
+      paidNow: current?.amount,
     }),
     attachments: [{ filename: `${receiptNo.replace(/\//g, '-')}.pdf`, content: pdf, contentType: 'application/pdf' }],
     template: 'fee_receipt',
@@ -637,10 +654,12 @@ export const financeSalesController = {
       if (installment.status !== 'PENDING_APPROVAL') throw new AppError('This installment is not awaiting approval', 400);
 
       const paymentDate = installment.paidAt || new Date();
+      const billNo = await nextReceiptNo(paymentDate); // stored on the collection so this payment keeps its own bill number
 
       await prisma.$transaction(async (tx) => {
         const collection = await tx.feeCollection.create({
           data: {
+            receiptNo: billNo,
             leadId: installment.plan.leadId,
             studentName: installment.plan.lead.name,
             amount: installment.amount,
@@ -661,9 +680,10 @@ export const financeSalesController = {
         }
       });
 
-      emailReceipt(installment.planId, paymentDate);
       // Verified money moves the lead's stage (Registration Done / Partial Payment / Enrolled) and is noted in its history.
       await syncStageFromFees(installment.plan.leadId, req.user?.employeeId, installment.amount).catch((e) => console.error('Stage sync after payment failed', e));
+      // Bill goes out after the stage update so it shows the new stage (fire-and-forget; never blocks approval).
+      emailReceipt(installment.planId, paymentDate, installment.id);
 
       const plan = await prisma.feePaymentPlan.findUnique({ where: { id: installment.planId }, include: planInclude });
       res.json({ success: true, data: plan, message: 'Payment approved. Receipt emailed.' });

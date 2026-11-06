@@ -737,14 +737,16 @@ export const emailService = {
         </div>
       </div>`,
 
-    feeReceipt: (data: { name: string; receiptNo: string; totalFee: number; totalPaid: number; amountDue: number; courseName: string }) => `
+    feeReceipt: (data: { name: string; receiptNo: string; totalFee: number; totalPaid: number; amountDue: number; courseName: string; stageLabel?: string; paidNow?: number }) => `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#1e3a8a;padding:24px;">
+          <img src="${config.FRONTEND_URL}/vinsup-logo.png" alt="Vinsup Skill Academy" height="40" style="display:block;margin-bottom:12px;background:#fff;padding:4px 8px;border-radius:6px;" />
           <h1 style="color:#fff;margin:0;font-size:22px;">🧾 Payment Receipt — ${data.receiptNo}</h1>
+          ${data.stageLabel ? `<p style="color:#bfdbfe;margin:8px 0 0;font-size:14px;">Status: <strong>${data.stageLabel}</strong></p>` : ''}
         </div>
         <div style="padding:24px;">
           <p>Dear ${data.name},</p>
-          <p>Thank you for your payment towards <strong>${data.courseName}</strong>. Your receipt is attached to this email as a PDF.</p>
+          <p>Thank you for your payment${data.paidNow ? ` of <strong>₹${data.paidNow.toLocaleString('en-IN')}</strong>` : ''} towards <strong>${data.courseName}</strong>. Your receipt is attached to this email as a PDF${data.paidNow && data.totalPaid > data.paidNow ? ', and it lists your earlier payments as well' : ''}.</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;"><strong>Total Fee</strong></td><td style="padding:8px;border:1px solid #e5e7eb;">₹${data.totalFee.toLocaleString('en-IN')}</td></tr>
             <tr><td style="padding:8px;border:1px solid #e5e7eb;background:#f0fdf4;"><strong>Total Paid</strong></td><td style="padding:8px;border:1px solid #e5e7eb;background:#f0fdf4;">₹${data.totalPaid.toLocaleString('en-IN')}</td></tr>
