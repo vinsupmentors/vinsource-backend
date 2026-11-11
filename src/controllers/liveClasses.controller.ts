@@ -39,6 +39,18 @@ const liveClassInclude = {
     },
   },
   createdBy: { select: employeeSelect },
+  // Extra schedules clubbed into a combined (Soft Skills) class.
+  extraSchedules: {
+    select: {
+      schedule: {
+        select: {
+          id: true, code: true, mode: true,
+          batch: { select: { id: true, code: true } },
+          course: { select: { id: true, name: true } },
+        },
+      },
+    },
+  },
 };
 
 /** SUPER_ADMIN or explicit LIVE_CLASSES=ADMIN access — sees/manages every class, not just their own. */
@@ -60,18 +72,126 @@ async function canManageSchedule(req: AuthRequest, scheduleId: string): Promise<
   return !!assignment;
 }
 
+// JRP students never attend (or get recordings of) combined Soft Skills & Aptitude classes.
+const JRP_TRACKS = ['JRP', 'JRP_RECORDED'] as const;
+const isJrpTrack = (track: string | null | undefined) => !!track && (JRP_TRACKS as readonly string[]).includes(track);
+
+/** Recording access window (months) counted from the class date: JRP 3, everyone else (IOP etc.) 6. */
+function recordingMonthsFor(track: string | null | undefined): number { return isJrpTrack(track) ? 3 : 6; }
+
+/** The class's own schedule plus any extra schedules clubbed into a combined class. */
+async function allScheduleIds(c: { id: string; scheduleId: string }): Promise<string[]> {
+  const extra = await prisma.liveClassSchedule.findMany({ where: { liveClassId: c.id }, select: { scheduleId: true } });
+  return [c.scheduleId, ...extra.map((e: { scheduleId: string }) => e.scheduleId)];
+}
+
+/** May start/end/edit/cancel a class: an admin, the class's creator, or a trainer on ANY of its schedules. */
+async function canManageClass(req: AuthRequest, c: { id: string; scheduleId: string; createdById?: string | null }): Promise<boolean> {
+  if (await isLiveClassesAdmin(req)) return true;
+  if (!req.user?.employeeId) return false;
+  if (c.createdById && c.createdById === req.user.employeeId) return true;
+  const ids = await allScheduleIds(c);
+  const assignment = await prisma.trainerAssignment.findFirst({ where: { trainerId: req.user.employeeId, scheduleId: { in: ids } }, select: { id: true } });
+  return !!assignment;
+}
+
 /** Everyone allowed to be IN the (virtual) room: assigned trainers/admin as staff, actively-enrolled students. Throws if not. */
-async function assertCanJoin(req: AuthRequest, liveClass: { scheduleId: string }): Promise<{ canHost: boolean }> {
-  const canHost = await canManageSchedule(req, liveClass.scheduleId);
+async function assertCanJoin(req: AuthRequest, liveClass: { id: string; scheduleId: string; kind?: string | null; createdById?: string | null }): Promise<{ canHost: boolean }> {
+  const canHost = await canManageClass(req, liveClass);
   if (canHost) return { canHost: true };
 
   if (req.user?.role === 'STUDENT' && req.user.studentId) {
-    const enrollment = await prisma.studentBatchEnrollment.findUnique({
-      where: { studentId_scheduleId: { studentId: req.user.studentId, scheduleId: liveClass.scheduleId } },
+    const ids = await allScheduleIds(liveClass);
+    const enrollment = await prisma.studentBatchEnrollment.findFirst({
+      where: { studentId: req.user.studentId, scheduleId: { in: ids }, status: 'ACTIVE' },
+      select: { id: true },
     });
-    if (enrollment && enrollment.status === 'ACTIVE') return { canHost: false };
+    if (enrollment) {
+      if (liveClass.kind === 'SOFT_SKILLS') {
+        const st = await prisma.student.findUnique({ where: { id: req.user.studentId }, select: { track: true } });
+        if (!st || isJrpTrack(st.track)) throw new AppError('Soft Skills & Aptitude classes are for IOP students only.', 403);
+      }
+      return { canHost: false };
+    }
   }
   throw new AppError('You do not have access to this class.', 403);
+}
+
+const recordingInFlight = new Set<string>();
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Start the LiveKit Egress recording for a LIVE class, with retries. Previously a single attempt was made the
+ * instant the class went LIVE — before the host had even joined — and any hiccup (Egress busy/timeout, or the
+ * server simply not being configured, which returned silently) left the class with NO recording and no clue why.
+ * Now: short delay so the host is in the room, up to 3 attempts with back-off, and EVERY failure
+ * (including "not configured") is written as a FAILED row with the reason so staff can see it.
+ */
+async function ensureRecording(classId: string, roomName: string, justWentLive: boolean): Promise<void> {
+  if (recordingInFlight.has(classId)) return;
+  recordingInFlight.add(classId);
+  try {
+    const active = await prisma.liveClassRecording.findFirst({ where: { liveClassId: classId, status: 'RECORDING' }, select: { id: true } });
+    if (active) return;
+    if (justWentLive) await sleep(6000); // let the host connect so the room is not empty when recording starts
+
+    let lastErr = 'Recording could not be started.';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      // The class may have ended while we were waiting.
+      // eslint-disable-next-line no-await-in-loop
+      const cls = await prisma.liveClass.findUnique({ where: { id: classId }, select: { status: true } });
+      if (!cls || cls.status !== 'LIVE') return;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const egress = await startEgress(roomName, classId);
+        if (!egress) { lastErr = 'Recording is not configured on the server (LiveKit Egress / R2 settings are missing).'; break; }
+        // eslint-disable-next-line no-await-in-loop
+        await prisma.liveClassRecording.create({ data: { liveClassId: classId, egressId: egress.egressId } });
+        return;
+      } catch (err) {
+        lastErr = (err instanceof Error ? err.message : String(err)).slice(0, 450);
+        console.error(`[liveClasses] recording attempt ${attempt}/3 failed for ${classId}:`, err);
+        // eslint-disable-next-line no-await-in-loop
+        if (attempt < 3) await sleep(attempt * 4000);
+      }
+    }
+
+    // Keep at most 3 failure rows per class so repeated rejoins don't spam the list.
+    const failures = await prisma.liveClassRecording.count({ where: { liveClassId: classId, status: 'FAILED' } });
+    if (failures < 3) {
+      // egressId is a synthetic placeholder (no real egress exists) — it only satisfies the unique column.
+      await prisma.liveClassRecording.create({
+        data: { liveClassId: classId, egressId: `failed-${classId}-${Date.now()}`, status: 'FAILED', failReason: lastErr, endedAt: new Date() },
+      }).catch(() => {});
+    }
+  } finally {
+    recordingInFlight.delete(classId);
+  }
+}
+
+/** Students only: has the recording-access window (JRP 3 months / IOP 6 months, from the class date) closed? Staff never expire. */
+async function recordingWindow(req: AuthRequest, liveClass: { scheduledDate: Date }): Promise<{ expired: boolean; months: number }> {
+  if (req.user?.role !== 'STUDENT' || !req.user.studentId) return { expired: false, months: 0 };
+  const st = await prisma.student.findUnique({ where: { id: req.user.studentId }, select: { track: true } });
+  const months = recordingMonthsFor(st?.track);
+  const until = new Date(liveClass.scheduledDate);
+  until.setMonth(until.getMonth() + months);
+  return { expired: new Date() > until, months };
+}
+
+/** Class-level "which classes can this person see" clause; null = nothing. Covers combined classes (extra schedules) too. */
+async function classScopeClause(req: AuthRequest): Promise<Record<string, unknown> | null> {
+  if (req.user?.role === 'STUDENT' && req.user.studentId) {
+    const enr = { enrollments: { some: { studentId: req.user.studentId, status: 'ACTIVE' } } };
+    const base = { OR: [{ schedule: enr }, { extraSchedules: { some: { schedule: enr } } }] };
+    const st = await prisma.student.findUnique({ where: { id: req.user.studentId }, select: { track: true } });
+    return isJrpTrack(st?.track) ? { AND: [base, { kind: { not: 'SOFT_SKILLS' } }] } : base;
+  }
+  if (req.user?.employeeId) {
+    const mine = { trainers: { some: { trainerId: req.user.employeeId } } };
+    return { OR: [{ schedule: mine }, { extraSchedules: { some: { schedule: mine } } }, { createdById: req.user.employeeId }] };
+  }
+  return null;
 }
 
 /** Deterministic, human-readable code — e.g. DA-B14-PANDAS-DATA-CLEANING-2026-09-25. Falls back to a short random suffix on the rare collision. */
@@ -187,8 +307,18 @@ function unionMs(intervals: Array<[number, number]>): number {
 async function computeAttendance(liveClassId: string, scheduleId: string, actualStartAt: Date, actualEndAt: Date): Promise<void> {
   const classMinutes = Math.max(1, Math.round((actualEndAt.getTime() - actualStartAt.getTime()) / 60000));
 
+  const lc = await prisma.liveClass.findUnique({ where: { id: liveClassId }, select: { id: true, scheduleId: true, kind: true } });
+  const scheduleIds = lc ? await allScheduleIds(lc) : [scheduleId];
   const [enrollments, sessions] = await Promise.all([
-    prisma.studentBatchEnrollment.findMany({ where: { scheduleId, status: 'ACTIVE' }, select: { studentId: true } }),
+    prisma.studentBatchEnrollment.findMany({
+      where: {
+        scheduleId: { in: scheduleIds },
+        status: 'ACTIVE',
+        ...(lc?.kind === 'SOFT_SKILLS' ? { student: { track: { notIn: [...JRP_TRACKS] } } } : {}),
+      },
+      select: { studentId: true },
+      distinct: ['studentId'],
+    }),
     prisma.liveClassParticipant.findMany({
       where: { liveClassId, role: 'STUDENT' },
       select: { joinedAt: true, leftAt: true, user: { select: { student: { select: { id: true } } } } },
@@ -339,15 +469,18 @@ export const liveClassesController = {
     try {
       const admin = await isLiveClassesAdmin(req);
       const where: Record<string, unknown> = { status: { in: ['UPCOMING', 'ONGOING'] } };
-      if (!admin) {
+      // ?all=1 — the combined Soft Skills class picker needs every running schedule (any domain, online + offline), not only the caller's own.
+      if (!admin && req.query.all !== '1') {
         const scope = selfScopeWhere(req);
         if (!scope) return res.json({ success: true, data: [] });
         Object.assign(where, scope);
+      } else if (!admin && !req.user?.employeeId) {
+        return res.json({ success: true, data: [] });
       }
       const schedules = await prisma.batchCourseSchedule.findMany({
         where,
         select: {
-          id: true, code: true, timing: true, startTime: true, endTime: true,
+          id: true, code: true, timing: true, startTime: true, endTime: true, mode: true,
           dayPattern: true, customWeekdays: true, startDate: true, endDate: true,
           batch: { select: { id: true, code: true } },
           course: { select: { id: true, name: true } },
@@ -448,7 +581,18 @@ export const liveClassesController = {
         throw new AppError('scheduleId, title, scheduledDate, startTime, and endTime are required.', 400);
       }
       ({ startTime, endTime } = checkTimes(startTime, endTime));
-      if (!(await canManageSchedule(req, scheduleId))) {
+      // Combined Soft Skills & Aptitude class: clubs several domain schedules (online + offline); the creator hosts it.
+      const kind = req.body.kind === 'SOFT_SKILLS' ? 'SOFT_SKILLS' : 'REGULAR';
+      const extraScheduleIds: string[] = kind === 'SOFT_SKILLS' && Array.isArray(req.body.extraScheduleIds)
+        ? [...new Set<string>(req.body.extraScheduleIds.map(String))].filter((id) => id !== scheduleId)
+        : [];
+      if (kind === 'SOFT_SKILLS') {
+        if (!(await isLiveClassesAdmin(req)) && !req.user?.employeeId) throw new AppError('Only staff can create a Soft Skills class.', 403);
+        if (extraScheduleIds.length) {
+          const found = await prisma.batchCourseSchedule.count({ where: { id: { in: extraScheduleIds } } });
+          if (found !== extraScheduleIds.length) throw new AppError('One of the selected schedules was not found.', 404);
+        }
+      } else if (!(await canManageSchedule(req, scheduleId))) {
         throw new AppError('You are not assigned to train this batch.', 403);
       }
 
@@ -474,7 +618,7 @@ export const liveClassesController = {
       });
       const overlapsTime = overlapping.filter((o: { startTime: string; endTime: string }) => o.startTime < endTime && startTime < o.endTime);
 
-      const classCode = await generateClassCode(schedule.batch.code, schedule.course.name, topic, date);
+      const classCode = await generateClassCode(schedule.batch.code, kind === 'SOFT_SKILLS' ? 'Soft Skills' : schedule.course.name, topic, date);
       const roomName = `live-${classCode.toLowerCase()}`;
 
       const created = await prisma.liveClass.create({
@@ -483,6 +627,8 @@ export const liveClassesController = {
           roomName,
           title,
           scheduleId,
+          kind,
+          ...(extraScheduleIds.length ? { extraSchedules: { create: extraScheduleIds.map((id) => ({ scheduleId: id })) } } : {}),
           topic: topic || undefined,
           description: description || undefined,
           scheduledDate: date,
@@ -873,7 +1019,7 @@ export const liveClassesController = {
           const existing = await prisma.liveClass.findUnique({ where: { id } });
           if (!existing) { results.push({ id, status: 'error', message: 'Class not found.' }); continue; }
           // eslint-disable-next-line no-await-in-loop
-          if (!(await canManageSchedule(req, existing.scheduleId))) { results.push({ id, status: 'error', message: 'You cannot cancel this class.' }); continue; }
+          if (!(await canManageClass(req, existing))) { results.push({ id, status: 'error', message: 'You cannot cancel this class.' }); continue; }
           if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
             results.push({ id, status: 'error', message: `Already ${existing.status.toLowerCase()}.` });
             continue;
@@ -910,10 +1056,10 @@ export const liveClassesController = {
 
       const where: Record<string, unknown> = {};
       const scheduleWhere: Record<string, unknown> = {};
+      let scopeClause: Record<string, unknown> | null = null;
       if (!admin) {
-        const scope = selfScopeWhere(req);
-        if (!scope) return res.json({ success: true, data: [] });
-        Object.assign(scheduleWhere, scope);
+        scopeClause = await classScopeClause(req);
+        if (!scopeClause) return res.json({ success: true, data: [] });
       }
       if (batchId) scheduleWhere.batchId = String(batchId);
       if (courseId) scheduleWhere.courseId = String(courseId);
@@ -947,6 +1093,8 @@ export const liveClassesController = {
         ];
       }
 
+      if (scopeClause) where.AND = [...((where.AND as unknown[]) || []), scopeClause];
+
       const classes = await prisma.liveClass.findMany({
         where,
         include: liveClassInclude,
@@ -960,13 +1108,12 @@ export const liveClassesController = {
   async dashboard(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const admin = await isLiveClassesAdmin(req);
-      const scheduleWhere: Record<string, unknown> = {};
+      let baseWhere: Record<string, unknown> = {};
       if (!admin) {
-        const scope = selfScopeWhere(req);
-        if (!scope) return res.json({ success: true, data: { todayCount: 0, liveCount: 0, upcomingCount: 0, completedTodayCount: 0, live: [] } });
-        Object.assign(scheduleWhere, scope);
+        const clause = await classScopeClause(req);
+        if (!clause) return res.json({ success: true, data: { todayCount: 0, liveCount: 0, upcomingCount: 0, completedTodayCount: 0, live: [] } });
+        baseWhere = clause;
       }
-      const baseWhere = Object.keys(scheduleWhere).length ? { schedule: scheduleWhere } : {};
       const today = dayRange(new Date());
       const tomorrowStart = new Date(today.lt);
 
@@ -1002,7 +1149,7 @@ export const liveClassesController = {
     try {
       const existing = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!existing) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, existing.scheduleId))) throw new AppError('You cannot edit this class.', 403);
+      if (!(await canManageClass(req, existing))) throw new AppError('You cannot edit this class.', 403);
       if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
         throw new AppError(`This class is already ${existing.status.toLowerCase()} and cannot be edited.`, 400);
       }
@@ -1041,7 +1188,7 @@ export const liveClassesController = {
     try {
       const existing = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!existing) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, existing.scheduleId))) throw new AppError('You cannot cancel this class.', 403);
+      if (!(await canManageClass(req, existing))) throw new AppError('You cannot cancel this class.', 403);
       if (existing.status === 'COMPLETED' || existing.status === 'CANCELLED') {
         throw new AppError(`This class is already ${existing.status.toLowerCase()}.`, 400);
       }
@@ -1066,7 +1213,7 @@ export const liveClassesController = {
     try {
       const existing = await prisma.liveClass.findUnique({ where: { id: req.params.id }, include: liveClassInclude });
       if (!existing) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, existing.scheduleId))) throw new AppError('You are not a trainer on this batch.', 403);
+      if (!(await canManageClass(req, existing))) throw new AppError('You are not a trainer on this batch.', 403);
       if (existing.status === 'CANCELLED') throw new AppError('This class was cancelled.', 400);
       if (existing.status === 'COMPLETED') throw new AppError('This class has already ended.', 400);
 
@@ -1075,33 +1222,11 @@ export const liveClassesController = {
       let liveClass = existing;
       if (existing.status !== 'LIVE') {
         liveClass = await prisma.liveClass.update({ where: { id: existing.id }, data: { status: 'LIVE', actualStartAt: new Date() }, include: liveClassInclude });
-        // Auto-record — only on the actual transition to LIVE, not on every
-        // subsequent co-trainer /start call. Best-effort: a recording
-        // failure (Egress/Redis not set up, R2 misconfigured, etc.) never
-        // blocks the class itself from starting.
-        try {
-          const egress = await startEgress(existing.roomName, existing.id);
-          if (egress) await prisma.liveClassRecording.create({ data: { liveClassId: existing.id, egressId: egress.egressId } });
-        } catch (err) {
-          console.error('[liveClasses] failed to start recording for', existing.id, err);
-          // Surface the failure in the portal instead of leaving no recording
-          // row at all — previously a capacity rejection (Egress busy with
-          // other concurrent classes) or an outage looked identical to
-          // "recording was never attempted," so staff had no way to tell a
-          // genuine gap from a class that simply wasn't recorded. egressId
-          // is a synthetic placeholder here (no real LiveKit egress was ever
-          // created) — it only exists to satisfy the required unique column.
-          await prisma.liveClassRecording.create({
-            data: {
-              liveClassId: existing.id,
-              egressId: `failed-${existing.id}-${Date.now()}`,
-              status: 'FAILED',
-              failReason: err instanceof Error ? err.message.slice(0, 500) : 'Recording could not be started.',
-              endedAt: new Date(),
-            },
-          }).catch(() => {});
-        }
       }
+      // Auto-record in the BACKGROUND (never blocks the class from starting). It runs on every
+      // /start while the class is LIVE, so a host who rejoins re-triggers a recording that never
+      // started or died — ensureRecording does nothing if one is already RECORDING.
+      ensureRecording(existing.id, existing.roomName, existing.status !== 'LIVE').catch((e) => console.error('[liveClasses] ensureRecording crashed', e));
 
       // Whoever is filling the host slot right now — an active (leftAt null)
       // HOST row — determines whether this caller becomes HOST or CO_TRAINER,
@@ -1128,7 +1253,7 @@ export const liveClassesController = {
     try {
       const existing = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!existing) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, existing.scheduleId))) throw new AppError('You cannot end this class.', 403);
+      if (!(await canManageClass(req, existing))) throw new AppError('You cannot end this class.', 403);
       if (existing.status !== 'LIVE') throw new AppError('This class is not currently live.', 400);
 
       const actualEndAt = new Date();
@@ -1271,7 +1396,7 @@ export const liveClassesController = {
     try {
       const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!liveClass) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, liveClass.scheduleId))) throw new AppError('Only a trainer on this batch can do that.', 403);
+      if (!(await canManageClass(req, liveClass))) throw new AppError('Only a trainer on this batch can do that.', 403);
       if (liveClass.status !== 'COMPLETED') throw new AppError('Attendance can only be synced once the class has ended.', 400);
 
       const rows = await prisma.liveClassAttendance.findMany({ where: { liveClassId: liveClass.id } });
@@ -1303,6 +1428,9 @@ export const liveClassesController = {
       if (!liveClass) throw new AppError('Class not found.', 404);
       await assertCanJoin(req, liveClass);
 
+      const win = await recordingWindow(req, liveClass);
+      if (win.expired) return res.json({ success: true, data: [], expired: true, message: `Recordings are available for ${win.months} months after the class date — this window has ended.` });
+
       const rows = await prisma.liveClassRecording.findMany({
         where: { liveClassId: liveClass.id },
         select: { id: true, status: true, durationSec: true, startedAt: true, endedAt: true, failReason: true },
@@ -1315,6 +1443,37 @@ export const liveClassesController = {
     } catch (err) { next(err); }
   },
 
+  /** Staff only: is this class being recorded RIGHT NOW? RECORDING | STARTING | FAILED (with reason) | READY | NONE. Polled by the classroom. */
+  async recordingStatus(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      if (!(await canManageClass(req, liveClass))) throw new AppError('Only the trainer can see recording status.', 403);
+      const rows = await prisma.liveClassRecording.findMany({
+        where: { liveClassId: liveClass.id }, orderBy: { startedAt: 'desc' }, take: 5,
+        select: { status: true, failReason: true, startedAt: true },
+      });
+      const active = rows.find((r: { status: string }) => r.status === 'RECORDING');
+      const starting = recordingInFlight.has(liveClass.id);
+      const latest = rows[0];
+      const state = active ? 'RECORDING' : starting ? 'STARTING' : latest?.status === 'FAILED' ? 'FAILED' : latest?.status === 'READY' ? 'READY' : liveClass.status === 'LIVE' ? 'NOT_RECORDING' : 'NONE';
+      res.json({ success: true, data: { state, reason: state === 'FAILED' ? latest?.failReason || null : null, startedAt: active?.startedAt || null, classStatus: liveClass.status } });
+    } catch (err) { next(err); }
+  },
+
+  /** Staff only: try to start the recording again for a LIVE class that is not being recorded. */
+  async retryRecording(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
+      if (!liveClass) throw new AppError('Class not found.', 404);
+      if (!(await canManageClass(req, liveClass))) throw new AppError('Only the trainer can do that.', 403);
+      if (liveClass.status !== 'LIVE') throw new AppError('The class is not live.', 400);
+      if (recordingInFlight.has(liveClass.id)) return res.json({ success: true, message: 'Recording is already being started.' });
+      ensureRecording(liveClass.id, liveClass.roomName, false).catch((e) => console.error('[liveClasses] retry recording crashed', e));
+      res.json({ success: true, message: 'Trying to start the recording…' });
+    } catch (err) { next(err); }
+  },
+
   /** Mints a short-lived (1h) presigned R2 URL on request — never stored,
    * never cached, re-generated every time this is called. This is the ONLY
    * place a recording's actual storage location is ever touched. */
@@ -1323,6 +1482,9 @@ export const liveClassesController = {
       const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!liveClass) throw new AppError('Class not found.', 404);
       await assertCanJoin(req, liveClass);
+
+      const win = await recordingWindow(req, liveClass);
+      if (win.expired) throw new AppError(`Recordings are available for ${win.months} months after the class date — this window has ended.`, 403);
 
       const recording = await prisma.liveClassRecording.findFirst({ where: { id: req.params.recordingId, liveClassId: liveClass.id } });
       if (!recording) throw new AppError('Recording not found.', 404);
@@ -1482,7 +1644,7 @@ export const liveClassesController = {
     try {
       const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!liveClass) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, liveClass.scheduleId))) throw new AppError('Only a trainer on this batch can do that.', 403);
+      if (!(await canManageClass(req, liveClass))) throw new AppError('Only a trainer on this batch can do that.', 403);
       const { userId, kind = 'audio', muted = true } = req.body;
       if (!userId) throw new AppError('userId is required.', 400);
       await setParticipantTrackMuted(liveClass.roomName, userId, kind === 'video' ? 'video' : 'audio', !!muted);
@@ -1494,7 +1656,7 @@ export const liveClassesController = {
     try {
       const liveClass = await prisma.liveClass.findUnique({ where: { id: req.params.id } });
       if (!liveClass) throw new AppError('Class not found.', 404);
-      if (!(await canManageSchedule(req, liveClass.scheduleId))) throw new AppError('Only a trainer on this batch can do that.', 403);
+      if (!(await canManageClass(req, liveClass))) throw new AppError('Only a trainer on this batch can do that.', 403);
       const { userId } = req.body;
       if (!userId) throw new AppError('userId is required.', 400);
       await liveKitRemoveParticipant(liveClass.roomName, userId);

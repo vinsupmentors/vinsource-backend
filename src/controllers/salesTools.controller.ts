@@ -296,6 +296,141 @@ export const salesToolsController = {
     } catch (err) { next(err); }
   },
 
+  /**
+   * Dialled Calls: for each salesperson, how many calls they DIALLED (outgoing, incl. manual call entries) and how many
+   * UNIQUE numbers that was (the same number dialled 5 times counts once), per day and for the whole range.
+   * Non-admins only see themselves + the people under them.
+   */
+  async dialledCalls(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const admin = await isAdmin(req);
+      const from = req.query.from ? new Date(`${String(req.query.from)}T00:00:00+05:30`) : new Date(startOfTodayIst().getTime() - 6 * DAY);
+      const to = req.query.to ? new Date(`${String(req.query.to)}T23:59:59.999+05:30`) : new Date();
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid dates', 400);
+      const where: Record<string, unknown> = {
+        calledAt: { gte: from, lte: to },
+        calledById: { not: null },
+        OR: [{ direction: 'OUTBOUND' }, { direction: null }],
+      };
+      if (!admin) { const vis = await visibleEmployeeIds(req.user?.employeeId); where.calledById = vis.length ? { in: vis } : '__none__'; }
+      else if (req.query.employeeId) where.calledById = String(req.query.employeeId);
+
+      const logs = await prisma.leadCallLog.findMany({
+        where,
+        select: { calledById: true, calledAt: true, durationSeconds: true, source: true, activityStatus: true, leadId: true, rawPhoneNumber: true, lead: { select: { phoneKey: true } } },
+        take: 200000,
+      });
+      const emps = await prisma.employee.findMany({ where: { id: { in: Array.from(new Set(logs.map((l) => l.calledById).filter(Boolean) as string[])) } }, select: { id: true, firstName: true, lastName: true } });
+      const names = new Map(emps.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
+
+      type P = { name: string; dialled: number; connected: number; talkSeconds: number; unique: Set<string>; byDay: Map<string, { dialled: number; unique: Set<string> }> };
+      const per = new Map<string, P>();
+      const teamUnique = new Set<string>();
+      const dayTotals = new Map<string, { dialled: number; unique: Set<string> }>();
+      for (const l of logs) {
+        const pid = l.calledById as string;
+        const key = l.lead?.phoneKey || leadPhoneKey(l.rawPhoneNumber) || l.leadId || `row-${pid}-${l.calledAt.getTime()}`;
+        const connected = l.source === 'AUTO' ? (l.durationSeconds || 0) > 0 : l.activityStatus !== 'DNP';
+        const date = istParts(l.calledAt).date;
+        if (!per.has(pid)) per.set(pid, { name: names.get(pid) || 'Unknown', dialled: 0, connected: 0, talkSeconds: 0, unique: new Set(), byDay: new Map() });
+        const p = per.get(pid)!;
+        p.dialled++; if (connected) p.connected++; p.talkSeconds += l.durationSeconds || 0; p.unique.add(key);
+        const d = p.byDay.get(date) || { dialled: 0, unique: new Set<string>() };
+        d.dialled++; d.unique.add(key); p.byDay.set(date, d);
+        teamUnique.add(key);
+        const t = dayTotals.get(date) || { dialled: 0, unique: new Set<string>() };
+        t.dialled++; t.unique.add(key); dayTotals.set(date, t);
+      }
+      const days: string[] = [];
+      for (let t = from.getTime(); t <= to.getTime() && days.length < 400; t += DAY) {
+        const date = istParts(new Date(t)).date;
+        if (!days.length || days[days.length - 1] !== date) days.push(date);
+      }
+      const rows = Array.from(per.entries()).map(([employeeId, p]) => ({
+        employeeId, name: p.name, dialled: p.dialled, unique: p.unique.size, connected: p.connected, talkSeconds: p.talkSeconds,
+        byDay: days.map((date) => ({ date, dialled: p.byDay.get(date)?.dialled || 0, unique: p.byDay.get(date)?.unique.size || 0 })),
+      })).sort((a, b) => b.dialled - a.dialled);
+      res.json({
+        success: true,
+        data: {
+          days,
+          totals: { dialled: logs.length, unique: teamUnique.size, people: rows.length },
+          perDay: days.map((date) => ({ date, dialled: dayTotals.get(date)?.dialled || 0, unique: dayTotals.get(date)?.unique.size || 0 })),
+          perPerson: rows,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Leads Assigned report: how many leads each salesperson was given in the date range (by the day the lead was
+   * handed to them), per day, and where those leads stand now (stage breakdown, contacted vs not yet contacted).
+   */
+  async leadsAssigned(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const admin = await isAdmin(req);
+      const from = req.query.from ? new Date(`${String(req.query.from)}T00:00:00+05:30`) : new Date(startOfTodayIst().getTime() - 6 * DAY);
+      const to = req.query.to ? new Date(`${String(req.query.to)}T23:59:59.999+05:30`) : new Date();
+      if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new AppError('Invalid dates', 400);
+      const range = { gte: from, lte: to };
+      const where: Record<string, unknown> = {
+        deletedAt: null,
+        assignedToId: { not: null },
+        OR: [{ assignedAt: range }, { assignedAt: null, createdAt: range }],
+      };
+      if (!admin) { const vis = await visibleEmployeeIds(req.user?.employeeId); where.assignedToId = vis.length ? { in: vis } : '__none__'; }
+      else if (req.query.employeeId) where.assignedToId = String(req.query.employeeId);
+
+      const leads = await prisma.lead.findMany({
+        where,
+        select: { assignedToId: true, assignedAt: true, createdAt: true, status: true, stageKey: true, lastContactAt: true, batchLabel: true, source: true },
+        take: 200000,
+      });
+      const emps = await prisma.employee.findMany({ where: { id: { in: Array.from(new Set(leads.map((l) => l.assignedToId).filter(Boolean) as string[])) } }, select: { id: true, firstName: true, lastName: true } });
+      const names = new Map(emps.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
+
+      type P = { name: string; total: number; contacted: number; byDay: Map<string, number>; stages: Map<string, number>; batches: Set<string> };
+      const per = new Map<string, P>();
+      const dayTotals = new Map<string, number>();
+      const stageTotals = new Map<string, number>();
+      for (const l of leads) {
+        const pid = l.assignedToId as string;
+        const when = l.assignedAt || l.createdAt;
+        const date = istParts(when).date;
+        const stage = (l.stageKey || l.status || 'NEW').replace(/^CUSTOM_/, '').replace(/_/g, ' ');
+        if (!per.has(pid)) per.set(pid, { name: names.get(pid) || 'Unknown', total: 0, contacted: 0, byDay: new Map(), stages: new Map(), batches: new Set() });
+        const p = per.get(pid)!;
+        p.total++; if (l.lastContactAt) p.contacted++;
+        p.byDay.set(date, (p.byDay.get(date) || 0) + 1);
+        p.stages.set(stage, (p.stages.get(stage) || 0) + 1);
+        if (l.batchLabel) p.batches.add(l.batchLabel);
+        dayTotals.set(date, (dayTotals.get(date) || 0) + 1);
+        stageTotals.set(stage, (stageTotals.get(stage) || 0) + 1);
+      }
+      const days: string[] = [];
+      for (let t = from.getTime(); t <= to.getTime() && days.length < 400; t += DAY) {
+        const date = istParts(new Date(t)).date;
+        if (!days.length || days[days.length - 1] !== date) days.push(date);
+      }
+      const rows = Array.from(per.entries()).map(([employeeId, p]) => ({
+        employeeId, name: p.name, total: p.total, contacted: p.contacted, notContacted: p.total - p.contacted,
+        batches: Array.from(p.batches).join(', '),
+        stages: Object.fromEntries(p.stages),
+        byDay: days.map((date) => ({ date, count: p.byDay.get(date) || 0 })),
+      })).sort((a, b) => b.total - a.total);
+      res.json({
+        success: true,
+        data: {
+          days,
+          totals: { assigned: leads.length, people: rows.length, contacted: leads.filter((l) => l.lastContactAt).length },
+          perDay: days.map((date) => ({ date, count: dayTotals.get(date) || 0 })),
+          stages: Object.fromEntries(stageTotals),
+          perPerson: rows,
+        },
+      });
+    } catch (err) { next(err); }
+  },
+
   /** Demo Reports (Sales Admin): who booked demos on a day, and a month calendar of every demo slot with whether it was taken. */
   async demoReport(req: AuthRequest, res: Response, next: NextFunction) {
     try {

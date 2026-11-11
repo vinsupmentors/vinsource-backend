@@ -45,6 +45,8 @@ router.get('/:id/chat', liveClassesController.listChat);
 router.post('/:id/chat', liveClassesController.postChat);
 router.get('/:id/attendance', liveClassesController.attendance);
 router.get('/:id/report', liveClassesController.report);
+router.get('/:id/recording-status', liveClassesController.recordingStatus);
+router.post('/:id/recording/retry', liveClassesController.retryRecording);
 router.get('/:id/recordings', liveClassesController.recordings);
 router.get('/:id/recordings/:recordingId/play', liveClassesController.playRecording);
 

@@ -1312,7 +1312,26 @@ export const productionController = {
           data: { status: 'APPROVED', reviewedById: req.user?.employeeId || null, reviewedAt: new Date(), reviewNote: req.body?.note || null },
         });
       });
-      res.json({ success: true, message: 'Approved — the student is now enrolled in the second sub-batch.' });
+      // Enrolled in BOTH courses, each with its OWN fee: tell the student's sales advisor (and the requester)
+      // to declare a separate fee plan for the second course so its payments don't mix with the first.
+      try {
+        const [student, schedule] = await Promise.all([
+          prisma.student.findUnique({ where: { id: reqRow.studentId }, select: { firstName: true, lastName: true, studentCode: true, lead: { select: { assignedTo: { select: { user: { select: { id: true } } } } } } } }),
+          prisma.batchCourseSchedule.findUnique({ where: { id: reqRow.scheduleId }, include: { course: { select: { name: true } }, batch: { select: { code: true } } } }),
+        ]);
+        const requester = reqRow.requestedById
+          ? await prisma.employee.findUnique({ where: { id: reqRow.requestedById }, select: { user: { select: { id: true } } } })
+          : null;
+        const userIds = Array.from(new Set([student?.lead?.assignedTo?.user?.id, requester?.user?.id].filter(Boolean) as string[]));
+        const { notificationService } = await import('../services/notification.service');
+        await Promise.all(userIds.map((userId) => notificationService.create({
+          userId,
+          type: 'SYSTEM',
+          title: 'Double enrollment approved — add a separate fee plan',
+          message: `${student?.firstName} ${student?.lastName} (${student?.studentCode}) is now enrolled in both courses. Declare a separate fee plan for ${schedule?.course.name} · ${schedule?.batch.code} — its fee and payments are tracked apart from the first course.`,
+        }).catch(() => undefined)));
+      } catch { /* best effort */ }
+      res.json({ success: true, message: 'Approved — the student is enrolled in both courses. Each course keeps its own fee plan; the advisor has been asked to add the second one.' });
     } catch (err) { next(err); }
   },
 

@@ -2771,6 +2771,7 @@ model BatchCourseSchedule {
 
   trainers        TrainerAssignment[]
   enrollments     StudentBatchEnrollment[]
+  liveClassLinks  LiveClassSchedule[]
   attendances     StudentAttendance[]
   kraEntries      KRAEntry[]
   tests           ModuleTest[]
@@ -4152,6 +4153,11 @@ model LiveClass {
   // plain cancellations are hidden from every list, holidays stay visible.
   isHoliday    Boolean         @default(false)
 
+  // REGULAR = one sub-batch's own class. SOFT_SKILLS = a combined Soft Skills & Aptitude
+  // session clubbing several domain schedules (online + offline) of a batch — only IOP-type
+  // students (not JRP) of the primary schedule + extraSchedules can join, see and be marked.
+  kind String @default("REGULAR")
+
   // Reschedule history — spec asks the original schedule to be preserved,
   // not silently overwritten, whenever a class is moved.
   rescheduledFrom   DateTime?
@@ -4170,10 +4176,24 @@ model LiveClass {
   chatMessages LiveClassChatMessage[]
   attendance   LiveClassAttendance[]
   recordings   LiveClassRecording[]
+  extraSchedules LiveClassSchedule[]
 
   @@index([scheduleId])
   @@index([status])
   @@index([scheduledDate])
+}
+
+/// Additional schedules clubbed into a combined (SOFT_SKILLS) live class, on top of LiveClass.scheduleId.
+model LiveClassSchedule {
+  id          String @id @default(uuid())
+  liveClassId String
+  scheduleId  String
+
+  liveClass LiveClass           @relation(fields: [liveClassId], references: [id], onDelete: Cascade)
+  schedule  BatchCourseSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([liveClassId, scheduleId])
+  @@index([scheduleId])
 }
 
 enum LiveClassStatus {
