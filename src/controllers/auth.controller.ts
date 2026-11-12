@@ -283,13 +283,18 @@ export const authController = {
         return res.json({ success: true, message: 'If that email is registered, you will receive a reset link.' });
       }
 
-      const token = crypto.randomBytes(32).toString('hex');
-      const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { passwordResetToken: token, passwordResetExpiry: expiry },
-      });
+      // If a still-valid link already exists, send THAT same link again instead of replacing it. Each request used
+      // to overwrite the one stored token, so a student who clicked "Forgot password" a few times (slow email) had
+      // every older email's link die instantly with "invalid or expired", even seconds after it was sent.
+      const stillValid = user.passwordResetToken && user.passwordResetExpiry && user.passwordResetExpiry.getTime() > Date.now() + 10 * 60 * 1000;
+      const token = stillValid ? (user.passwordResetToken as string) : crypto.randomBytes(32).toString('hex');
+      if (!stillValid) {
+        const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { passwordResetToken: token, passwordResetExpiry: expiry },
+        });
+      }
 
       // Determine first name for email greeting
       const employee = await prisma.employee.findUnique({ where: { userId: user.id }, select: { firstName: true } });
@@ -319,13 +324,17 @@ export const authController = {
   /** Self-service: set new password using the reset token */
   async resetPasswordWithToken(req: Request, res: Response, next: NextFunction) {
     try {
-      const { token, newPassword } = req.body;
+      const { newPassword } = req.body;
+      const token = String(req.body.token || '').trim(); // copy/paste or line-wrapped links can add stray spaces
       if (!token || !newPassword) throw new AppError('Token and new password are required', 400);
       if (newPassword.length < 6) throw new AppError('Password must be at least 6 characters', 400);
 
       const user = await prisma.user.findUnique({ where: { passwordResetToken: token } });
-      if (!user || !user.passwordResetExpiry || user.passwordResetExpiry < new Date()) {
-        throw new AppError('Reset link is invalid or has expired. Please request a new one.', 400);
+      if (!user) {
+        throw new AppError('This reset link was already used, or a newer reset email was requested after it. Please use the latest email, or request a new link.', 400);
+      }
+      if (!user.passwordResetExpiry || user.passwordResetExpiry < new Date()) {
+        throw new AppError('This reset link has expired (links last 1 hour). Please request a new one.', 400);
       }
 
       const hashed = await hashPassword(newPassword);
