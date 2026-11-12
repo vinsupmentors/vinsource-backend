@@ -745,6 +745,7 @@ model Employee {
   studentFeedbacksGiven TrainerFeedback[]   @relation("FeedbackTrainer")
   moduleFeedbacksGiven  ModuleFeedback[]    @relation("ModuleFeedbackTrainer")
   liveClassesCreated    LiveClass[]         @relation("LiveClassCreator")
+  liveClassesTaught     LiveClass[]         @relation("LiveClassTrainer")
   doubleEnrollRequested DoubleEnrollmentRequest[] @relation("DoubleEnrollRequester")
   doubleEnrollReviewed  DoubleEnrollmentRequest[] @relation("DoubleEnrollReviewer")
 
@@ -4158,6 +4159,11 @@ model LiveClass {
   // students (not JRP) of the primary schedule + extraSchedules can join, see and be marked.
   kind String @default("REGULAR")
 
+  // The trainer chosen for THIS class when it was created (overrides the schedule's assigned trainers on the
+  // card and lets that trainer host it). Null = the schedule's own trainer(s), as before.
+  trainerId String?
+  trainer   Employee? @relation("LiveClassTrainer", fields: [trainerId], references: [id], onDelete: SetNull)
+
   // Reschedule history — spec asks the original schedule to be preserved,
   // not silently overwritten, whenever a class is moved.
   rescheduledFrom   DateTime?
@@ -4178,6 +4184,7 @@ model LiveClass {
   recordings   LiveClassRecording[]
   extraSchedules LiveClassSchedule[]
 
+  @@index([trainerId])
   @@index([scheduleId])
   @@index([status])
   @@index([scheduledDate])

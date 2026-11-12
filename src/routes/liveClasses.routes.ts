@@ -36,6 +36,7 @@ router.post('/:id/host-actions/remove', requireModule('LIVE_CLASSES', 'EDIT'), l
 // TrainerAssignment / active StudentBatchEnrollment rows (or everything, for
 // LIVE_CLASSES=ADMIN), and the rest verify access against one specific class.
 router.get('/dashboard', liveClassesController.dashboard);
+router.get('/trainers', liveClassesController.listTrainers);
 router.get('/', liveClassesController.list);
 router.get('/:id', liveClassesController.get);
 router.post('/:id/join', liveClassesController.join);

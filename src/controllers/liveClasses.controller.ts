@@ -39,6 +39,7 @@ const liveClassInclude = {
     },
   },
   createdBy: { select: employeeSelect },
+  trainer: { select: employeeSelect }, // trainer picked for this class (overrides the schedule's trainers)
   // Extra schedules clubbed into a combined (Soft Skills) class.
   extraSchedules: {
     select: {
@@ -86,17 +87,18 @@ async function allScheduleIds(c: { id: string; scheduleId: string }): Promise<st
 }
 
 /** May start/end/edit/cancel a class: an admin, the class's creator, or a trainer on ANY of its schedules. */
-async function canManageClass(req: AuthRequest, c: { id: string; scheduleId: string; createdById?: string | null }): Promise<boolean> {
+async function canManageClass(req: AuthRequest, c: { id: string; scheduleId: string; createdById?: string | null; trainerId?: string | null }): Promise<boolean> {
   if (await isLiveClassesAdmin(req)) return true;
   if (!req.user?.employeeId) return false;
   if (c.createdById && c.createdById === req.user.employeeId) return true;
+  if (c.trainerId && c.trainerId === req.user.employeeId) return true;
   const ids = await allScheduleIds(c);
   const assignment = await prisma.trainerAssignment.findFirst({ where: { trainerId: req.user.employeeId, scheduleId: { in: ids } }, select: { id: true } });
   return !!assignment;
 }
 
 /** Everyone allowed to be IN the (virtual) room: assigned trainers/admin as staff, actively-enrolled students. Throws if not. */
-async function assertCanJoin(req: AuthRequest, liveClass: { id: string; scheduleId: string; kind?: string | null; createdById?: string | null }): Promise<{ canHost: boolean }> {
+async function assertCanJoin(req: AuthRequest, liveClass: { id: string; scheduleId: string; kind?: string | null; createdById?: string | null; trainerId?: string | null }): Promise<{ canHost: boolean }> {
   const canHost = await canManageClass(req, liveClass);
   if (canHost) return { canHost: true };
 
@@ -189,7 +191,7 @@ async function classScopeClause(req: AuthRequest): Promise<Record<string, unknow
   }
   if (req.user?.employeeId) {
     const mine = { trainers: { some: { trainerId: req.user.employeeId } } };
-    return { OR: [{ schedule: mine }, { extraSchedules: { some: { schedule: mine } } }, { createdById: req.user.employeeId }] };
+    return { OR: [{ schedule: mine }, { extraSchedules: { some: { schedule: mine } } }, { createdById: req.user.employeeId }, { trainerId: req.user.employeeId }] };
   }
   return null;
 }
@@ -365,7 +367,47 @@ function selfScopeWhere(req: AuthRequest): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * Shared by create + bulkCreate: reads the "combined Soft Skills class" option (kind + extra schedules) and the
+ * trainer picked for the class, validates them, and enforces who may create what.
+ *  - SOFT_SKILLS: any staff member may create it (it clubs schedules they may not personally train).
+ *  - REGULAR: caller must be an admin or a trainer of that schedule (unchanged).
+ */
+async function resolveClubAndTrainer(req: AuthRequest, scheduleId: string): Promise<{ kind: 'REGULAR' | 'SOFT_SKILLS'; extraScheduleIds: string[]; trainerId: string | null }> {
+  const kind = req.body.kind === 'SOFT_SKILLS' ? 'SOFT_SKILLS' : 'REGULAR';
+  const extraScheduleIds: string[] = kind === 'SOFT_SKILLS' && Array.isArray(req.body.extraScheduleIds)
+    ? [...new Set<string>(req.body.extraScheduleIds.map(String))].filter((id) => id !== scheduleId)
+    : [];
+  if (kind === 'SOFT_SKILLS') {
+    if (!(await isLiveClassesAdmin(req)) && !req.user?.employeeId) throw new AppError('Only staff can create a Soft Skills class.', 403);
+    if (extraScheduleIds.length) {
+      const found = await prisma.batchCourseSchedule.count({ where: { id: { in: extraScheduleIds } } });
+      if (found !== extraScheduleIds.length) throw new AppError('One of the selected schedules was not found.', 404);
+    }
+  } else if (!(await canManageSchedule(req, scheduleId))) {
+    throw new AppError('You are not assigned to train this batch.', 403);
+  }
+  let trainerId: string | null = null;
+  if (req.body.trainerId) {
+    const emp = await prisma.employee.findUnique({ where: { id: String(req.body.trainerId) }, select: { id: true } });
+    if (!emp) throw new AppError('The selected trainer was not found.', 404);
+    trainerId = emp.id;
+  }
+  return { kind, extraScheduleIds, trainerId };
+}
+
 export const liveClassesController = {
+  /** Employees who can be picked as the trainer of a class: everyone assigned as a trainer on any schedule. */
+  async listTrainers(_req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const rows = await prisma.trainerAssignment.findMany({ select: { trainer: { select: employeeSelect } } });
+      const byId = new Map<string, { id: string; firstName: string; lastName: string; employeeCode: string | null }>();
+      for (const r of rows as { trainer: { id: string; firstName: string; lastName: string; employeeCode: string | null } }[]) byId.set(r.trainer.id, r.trainer);
+      const data = Array.from(byId.values()).sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
   // ── Analytics ────────────────────────────────────────────────────────────────
   /** Rollups over completed/cancelled classes: summary counts, per-trainer and
    * per-batch attendance/volume, and a per-class attendance trend. Attributed
@@ -581,20 +623,8 @@ export const liveClassesController = {
         throw new AppError('scheduleId, title, scheduledDate, startTime, and endTime are required.', 400);
       }
       ({ startTime, endTime } = checkTimes(startTime, endTime));
-      // Combined Soft Skills & Aptitude class: clubs several domain schedules (online + offline); the creator hosts it.
-      const kind = req.body.kind === 'SOFT_SKILLS' ? 'SOFT_SKILLS' : 'REGULAR';
-      const extraScheduleIds: string[] = kind === 'SOFT_SKILLS' && Array.isArray(req.body.extraScheduleIds)
-        ? [...new Set<string>(req.body.extraScheduleIds.map(String))].filter((id) => id !== scheduleId)
-        : [];
-      if (kind === 'SOFT_SKILLS') {
-        if (!(await isLiveClassesAdmin(req)) && !req.user?.employeeId) throw new AppError('Only staff can create a Soft Skills class.', 403);
-        if (extraScheduleIds.length) {
-          const found = await prisma.batchCourseSchedule.count({ where: { id: { in: extraScheduleIds } } });
-          if (found !== extraScheduleIds.length) throw new AppError('One of the selected schedules was not found.', 404);
-        }
-      } else if (!(await canManageSchedule(req, scheduleId))) {
-        throw new AppError('You are not assigned to train this batch.', 403);
-      }
+      // Combined Soft Skills & Aptitude class (clubs several schedules) + the trainer picked for it.
+      const { kind, extraScheduleIds, trainerId } = await resolveClubAndTrainer(req, scheduleId);
 
       const schedule = await prisma.batchCourseSchedule.findUnique({
         where: { id: scheduleId },
@@ -628,6 +658,7 @@ export const liveClassesController = {
           title,
           scheduleId,
           kind,
+          trainerId: trainerId || undefined,
           ...(extraScheduleIds.length ? { extraSchedules: { create: extraScheduleIds.map((id) => ({ scheduleId: id })) } } : {}),
           topic: topic || undefined,
           description: description || undefined,
@@ -671,9 +702,7 @@ export const liveClassesController = {
         throw new AppError('scheduleId, title, startTime, endTime, startDate, and either endDate or numDays are required.', 400);
       }
       ({ startTime, endTime } = checkTimes(startTime, endTime));
-      if (!(await canManageSchedule(req, scheduleId))) {
-        throw new AppError('You are not assigned to train this batch.', 403);
-      }
+      const { kind, extraScheduleIds, trainerId } = await resolveClubAndTrainer(req, scheduleId);
 
       const schedule = await prisma.batchCourseSchedule.findUnique({
         where: { id: scheduleId },
@@ -740,12 +769,15 @@ export const liveClassesController = {
           continue;
         }
 
-        const classCode = await generateClassCode(schedule.batch.code, schedule.course.name, topic, dateCopy); // eslint-disable-line no-await-in-loop
+        const classCode = await generateClassCode(schedule.batch.code, kind === 'SOFT_SKILLS' ? 'Soft Skills' : schedule.course.name, topic, dateCopy); // eslint-disable-line no-await-in-loop
         const roomName = `live-${classCode.toLowerCase()}`;
         const row = await prisma.liveClass.create({ // eslint-disable-line no-await-in-loop
           data: {
             classCode, roomName, title,
             scheduleId,
+            kind,
+            trainerId: trainerId || undefined,
+            ...(extraScheduleIds.length ? { extraSchedules: { create: extraScheduleIds.map((id) => ({ scheduleId: id })) } } : {}),
             topic: topic || undefined,
             description: description || undefined,
             scheduledDate: dateCopy,
@@ -1100,7 +1132,17 @@ export const liveClassesController = {
         include: liveClassInclude,
         orderBy: [{ scheduledDate: 'asc' }, { startTime: 'asc' }],
       });
-      res.json({ success: true, data: classes });
+      // Combined Soft Skills classes: real head-count = distinct ACTIVE IOP-type students across every clubbed schedule.
+      const data = await Promise.all(classes.map(async (c: (typeof classes)[number]) => {
+        if (c.kind !== 'SOFT_SKILLS') return c;
+        const ids = [c.scheduleId, ...(c.extraSchedules || []).map((e: { schedule: { id: string } }) => e.schedule.id)];
+        const rows = await prisma.studentBatchEnrollment.findMany({
+          where: { scheduleId: { in: ids }, status: 'ACTIVE', student: { track: { notIn: [...JRP_TRACKS] } } },
+          select: { studentId: true }, distinct: ['studentId'],
+        });
+        return { ...c, combinedStudents: rows.length };
+      }));
+      res.json({ success: true, data });
     } catch (err) { next(err); }
   },
 
