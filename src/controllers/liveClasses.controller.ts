@@ -77,6 +77,19 @@ async function canManageSchedule(req: AuthRequest, scheduleId: string): Promise<
 const JRP_TRACKS = ['JRP', 'JRP_RECORDED'] as const;
 const isJrpTrack = (track: string | null | undefined) => !!track && (JRP_TRACKS as readonly string[]).includes(track);
 
+const ALL_TRACKS = ['JRP_RECORDED', 'JRP', 'IOP', 'PAP', 'PT', 'ELITE'] as const;
+/** May a student of this track attend this class? Only combined (SOFT_SKILLS) classes restrict by track. */
+function trackAllowed(c: { kind?: string | null; tracks?: string | null }, track: string | null | undefined): boolean {
+  if (c.kind !== 'SOFT_SKILLS') return true;
+  if (c.tracks) return !!track && c.tracks.includes(`,${track},`);
+  return !isJrpTrack(track); // older combined classes: every track except JRP
+}
+/** Prisma `student.track` filter matching the tracks a combined class admits. */
+function trackWhere(c: { tracks?: string | null }) {
+  if (c.tracks) return { in: c.tracks.split(',').filter(Boolean) as (typeof ALL_TRACKS)[number][] };
+  return { notIn: [...JRP_TRACKS] };
+}
+
 /** Recording access window (months) counted from the class date: JRP 3, everyone else (IOP etc.) 6. */
 function recordingMonthsFor(track: string | null | undefined): number { return isJrpTrack(track) ? 3 : 6; }
 
@@ -98,7 +111,7 @@ async function canManageClass(req: AuthRequest, c: { id: string; scheduleId: str
 }
 
 /** Everyone allowed to be IN the (virtual) room: assigned trainers/admin as staff, actively-enrolled students. Throws if not. */
-async function assertCanJoin(req: AuthRequest, liveClass: { id: string; scheduleId: string; kind?: string | null; createdById?: string | null; trainerId?: string | null }): Promise<{ canHost: boolean }> {
+async function assertCanJoin(req: AuthRequest, liveClass: { id: string; scheduleId: string; kind?: string | null; tracks?: string | null; createdById?: string | null; trainerId?: string | null }): Promise<{ canHost: boolean }> {
   const canHost = await canManageClass(req, liveClass);
   if (canHost) return { canHost: true };
 
@@ -111,7 +124,7 @@ async function assertCanJoin(req: AuthRequest, liveClass: { id: string; schedule
     if (enrollment) {
       if (liveClass.kind === 'SOFT_SKILLS') {
         const st = await prisma.student.findUnique({ where: { id: req.user.studentId }, select: { track: true } });
-        if (!st || isJrpTrack(st.track)) throw new AppError('Soft Skills & Aptitude classes are for IOP students only.', 403);
+        if (!st || !trackAllowed(liveClass, st.track)) throw new AppError('This Soft Skills & Aptitude class is not open to your track.', 403);
       }
       return { canHost: false };
     }
@@ -187,7 +200,15 @@ async function classScopeClause(req: AuthRequest): Promise<Record<string, unknow
     const enr = { enrollments: { some: { studentId: req.user.studentId, status: 'ACTIVE' } } };
     const base = { OR: [{ schedule: enr }, { extraSchedules: { some: { schedule: enr } } }] };
     const st = await prisma.student.findUnique({ where: { id: req.user.studentId }, select: { track: true } });
-    return isJrpTrack(st?.track) ? { AND: [base, { kind: { not: 'SOFT_SKILLS' } }] } : base;
+    // Combined classes only reach students whose track the class admits (older ones with no tracks set: not JRP).
+    const trackOk = {
+      OR: [
+        { kind: { not: 'SOFT_SKILLS' } },
+        ...(st?.track ? [{ tracks: { contains: `,${st.track},` } }] : []),
+        ...(!isJrpTrack(st?.track) ? [{ tracks: null }] : []),
+      ],
+    };
+    return { AND: [base, trackOk] };
   }
   if (req.user?.employeeId) {
     const mine = { trainers: { some: { trainerId: req.user.employeeId } } };
@@ -309,14 +330,14 @@ function unionMs(intervals: Array<[number, number]>): number {
 async function computeAttendance(liveClassId: string, scheduleId: string, actualStartAt: Date, actualEndAt: Date): Promise<void> {
   const classMinutes = Math.max(1, Math.round((actualEndAt.getTime() - actualStartAt.getTime()) / 60000));
 
-  const lc = await prisma.liveClass.findUnique({ where: { id: liveClassId }, select: { id: true, scheduleId: true, kind: true } });
+  const lc = await prisma.liveClass.findUnique({ where: { id: liveClassId }, select: { id: true, scheduleId: true, kind: true, tracks: true } });
   const scheduleIds = lc ? await allScheduleIds(lc) : [scheduleId];
   const [enrollments, sessions] = await Promise.all([
     prisma.studentBatchEnrollment.findMany({
       where: {
         scheduleId: { in: scheduleIds },
         status: 'ACTIVE',
-        ...(lc?.kind === 'SOFT_SKILLS' ? { student: { track: { notIn: [...JRP_TRACKS] } } } : {}),
+        ...(lc?.kind === 'SOFT_SKILLS' ? { student: { track: trackWhere(lc) } } : {}),
       },
       select: { studentId: true },
       distinct: ['studentId'],
@@ -373,7 +394,7 @@ function selfScopeWhere(req: AuthRequest): Record<string, unknown> | null {
  *  - SOFT_SKILLS: any staff member may create it (it clubs schedules they may not personally train).
  *  - REGULAR: caller must be an admin or a trainer of that schedule (unchanged).
  */
-async function resolveClubAndTrainer(req: AuthRequest, scheduleId: string): Promise<{ kind: 'REGULAR' | 'SOFT_SKILLS'; extraScheduleIds: string[]; trainerId: string | null }> {
+async function resolveClubAndTrainer(req: AuthRequest, scheduleId: string): Promise<{ kind: 'REGULAR' | 'SOFT_SKILLS'; extraScheduleIds: string[]; trainerId: string | null; tracks: string | null }> {
   const kind = req.body.kind === 'SOFT_SKILLS' ? 'SOFT_SKILLS' : 'REGULAR';
   const extraScheduleIds: string[] = kind === 'SOFT_SKILLS' && Array.isArray(req.body.extraScheduleIds)
     ? [...new Set<string>(req.body.extraScheduleIds.map(String))].filter((id) => id !== scheduleId)
@@ -393,16 +414,33 @@ async function resolveClubAndTrainer(req: AuthRequest, scheduleId: string): Prom
     if (!emp) throw new AppError('The selected trainer was not found.', 404);
     trainerId = emp.id;
   }
-  return { kind, extraScheduleIds, trainerId };
+  // Student tracks allowed into a combined class (default IOP); stored comma-wrapped for exact matching.
+  let tracks: string | null = null;
+  if (kind === 'SOFT_SKILLS') {
+    const asked: string[] = Array.isArray(req.body.tracks) ? req.body.tracks.map(String) : ['IOP'];
+    const valid = [...new Set(asked.filter((t) => (ALL_TRACKS as readonly string[]).includes(t)))];
+    if (!valid.length) throw new AppError('Pick at least one student track for the class.', 400);
+    tracks = `,${valid.join(',')},`;
+  }
+  return { kind, extraScheduleIds, trainerId, tracks };
 }
 
 export const liveClassesController = {
-  /** Employees who can be picked as the trainer of a class: everyone assigned as a trainer on any schedule. */
+  /** Employees who can be picked as the trainer of a class: anyone assigned as a trainer on a schedule, PLUS every
+   * current employee in the Production department (so a newly joined trainer shows up before being assigned). */
   async listTrainers(_req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const rows = await prisma.trainerAssignment.findMany({ select: { trainer: { select: employeeSelect } } });
-      const byId = new Map<string, { id: string; firstName: string; lastName: string; employeeCode: string | null }>();
-      for (const r of rows as { trainer: { id: string; firstName: string; lastName: string; employeeCode: string | null } }[]) byId.set(r.trainer.id, r.trainer);
+      type Emp = { id: string; firstName: string; lastName: string; employeeCode: string | null };
+      const [rows, production] = await Promise.all([
+        prisma.trainerAssignment.findMany({ select: { trainer: { select: employeeSelect } } }),
+        prisma.employee.findMany({
+          where: { isSystemAccount: false, status: { in: ['ACTIVE', 'ON_PROBATION', 'ON_LEAVE'] }, department: { name: { contains: 'production' } } },
+          select: employeeSelect,
+        }),
+      ]);
+      const byId = new Map<string, Emp>();
+      for (const r of rows as { trainer: Emp }[]) byId.set(r.trainer.id, r.trainer);
+      for (const e of production as Emp[]) byId.set(e.id, e);
       const data = Array.from(byId.values()).sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
       res.json({ success: true, data });
     } catch (err) { next(err); }
@@ -624,7 +662,7 @@ export const liveClassesController = {
       }
       ({ startTime, endTime } = checkTimes(startTime, endTime));
       // Combined Soft Skills & Aptitude class (clubs several schedules) + the trainer picked for it.
-      const { kind, extraScheduleIds, trainerId } = await resolveClubAndTrainer(req, scheduleId);
+      const { kind, extraScheduleIds, trainerId, tracks } = await resolveClubAndTrainer(req, scheduleId);
 
       const schedule = await prisma.batchCourseSchedule.findUnique({
         where: { id: scheduleId },
@@ -658,6 +696,7 @@ export const liveClassesController = {
           title,
           scheduleId,
           kind,
+          tracks: tracks || undefined,
           trainerId: trainerId || undefined,
           ...(extraScheduleIds.length ? { extraSchedules: { create: extraScheduleIds.map((id) => ({ scheduleId: id })) } } : {}),
           topic: topic || undefined,
@@ -702,7 +741,7 @@ export const liveClassesController = {
         throw new AppError('scheduleId, title, startTime, endTime, startDate, and either endDate or numDays are required.', 400);
       }
       ({ startTime, endTime } = checkTimes(startTime, endTime));
-      const { kind, extraScheduleIds, trainerId } = await resolveClubAndTrainer(req, scheduleId);
+      const { kind, extraScheduleIds, trainerId, tracks } = await resolveClubAndTrainer(req, scheduleId);
 
       const schedule = await prisma.batchCourseSchedule.findUnique({
         where: { id: scheduleId },
@@ -776,6 +815,7 @@ export const liveClassesController = {
             classCode, roomName, title,
             scheduleId,
             kind,
+            tracks: tracks || undefined,
             trainerId: trainerId || undefined,
             ...(extraScheduleIds.length ? { extraSchedules: { create: extraScheduleIds.map((id) => ({ scheduleId: id })) } } : {}),
             topic: topic || undefined,
@@ -1137,7 +1177,7 @@ export const liveClassesController = {
         if (c.kind !== 'SOFT_SKILLS') return c;
         const ids = [c.scheduleId, ...(c.extraSchedules || []).map((e: { schedule: { id: string } }) => e.schedule.id)];
         const rows = await prisma.studentBatchEnrollment.findMany({
-          where: { scheduleId: { in: ids }, status: 'ACTIVE', student: { track: { notIn: [...JRP_TRACKS] } } },
+          where: { scheduleId: { in: ids }, status: 'ACTIVE', student: { track: trackWhere(c) } },
           select: { studentId: true }, distinct: ['studentId'],
         });
         return { ...c, combinedStudents: rows.length };

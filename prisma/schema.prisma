@@ -4161,6 +4161,10 @@ model LiveClass {
 
   // The trainer chosen for THIS class when it was created (overrides the schedule's assigned trainers on the
   // card and lets that trainer host it). Null = the schedule's own trainer(s), as before.
+  // SOFT_SKILLS only: which student tracks may attend, stored comma-wrapped (",IOP,ELITE,") so a
+  // substring match is exact. Null on older combined classes = every track except JRP / JRP_RECORDED.
+  tracks String?
+
   trainerId String?
   trainer   Employee? @relation("LiveClassTrainer", fields: [trainerId], references: [id], onDelete: SetNull)
 
