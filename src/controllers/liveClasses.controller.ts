@@ -151,7 +151,15 @@ async function ensureRecording(classId: string, roomName: string, justWentLive: 
     if (justWentLive) await sleep(6000); // let the host connect so the room is not empty when recording starts
 
     let lastErr = 'Recording could not be started.';
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // Preflight: make sure the recordings bucket is actually writable BEFORE recording, so a storage problem
+    // (e.g. R2 not enabled) shows up immediately instead of after the class ends.
+    const storageProblem = await storageService.checkBucket(config.R2_RECORDINGS_BUCKET);
+    const attempts = storageProblem ? 0 : 3;
+    if (storageProblem) {
+      lastErr = storageProblem;
+      console.error(`[liveClasses] recording storage preflight failed for ${classId}: ${storageProblem}`);
+    }
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       // The class may have ended while we were waiting.
       // eslint-disable-next-line no-await-in-loop
       const cls = await prisma.liveClass.findUnique({ where: { id: classId }, select: { status: true } });

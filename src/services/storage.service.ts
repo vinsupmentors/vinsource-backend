@@ -72,6 +72,31 @@ export const storageService = {
    * an explicit `bucket` param (rather than always using R2_BUCKET) since
    * this is the one caller in the app reading from a different bucket.
    */
+  /**
+   * Preflight: write + delete a tiny object in `bucket`. Returns null when storage works, otherwise a
+   * human-readable reason (e.g. R2 not enabled on the Cloudflare account, bad keys, missing bucket).
+   */
+  async checkBucket(bucket: string): Promise<string | null> {
+    if (!config.R2_ENDPOINT || !config.R2_ACCESS_KEY_ID || !config.R2_SECRET_ACCESS_KEY) {
+      return 'Recording storage is not configured (R2_ENDPOINT / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY missing on the server).';
+    }
+    if (!bucket) return 'Recording bucket is not configured (R2_RECORDINGS_BUCKET missing on the server).';
+    const key = `_healthcheck/${Date.now()}.txt`;
+    try {
+      await getClient().send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: 'ok', ContentType: 'text/plain' }));
+      await getClient().send(new DeleteObjectCommand({ Bucket: bucket, Key: key })).catch(() => {});
+      return null;
+    } catch (err) {
+      const e = err as { name?: string; Code?: string; message?: string };
+      const code = e.Code || e.name || 'Error';
+      let hint = '';
+      if (code === 'NotEntitled' || /enable R2/i.test(e.message || '')) hint = ' — R2 is not enabled on this Cloudflare account (enable R2 in the Cloudflare dashboard).';
+      else if (code === 'NoSuchBucket') hint = ` — bucket "${bucket}" does not exist.`;
+      else if (code === 'AccessDenied' || code === 'InvalidAccessKeyId' || code === 'SignatureDoesNotMatch') hint = ' — check the R2 access keys and that they have Object Read & Write on this bucket.';
+      return `Recording storage check failed: ${code}${hint}`.slice(0, 450);
+    }
+  },
+
   async getPresignedUrl(bucket: string, key: string, expiresInSeconds = 3600): Promise<string> {
     return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: expiresInSeconds });
   },
