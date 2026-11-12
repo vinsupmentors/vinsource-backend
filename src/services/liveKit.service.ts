@@ -214,7 +214,20 @@ export async function startEgress(roomName: string, liveClassId: string): Promis
         },
       },
     } as any, // EncodedFileOutput's exact protobuf-ts shape can drift by SDK minor version — see note in package README
-    { layout: 'grid' }
+    {
+      layout: 'grid',
+      // Lighter than LiveKit's default (720p @ 30fps): every recording runs its own headless Chrome, and several
+      // classes at once were saturating the server CPU (new recordings then timed out). 15 fps halves the load and
+      // is plenty for slides + talking. Override with RECORDING_FPS / RECORDING_VIDEO_KBPS in .env if needed.
+      encodingOptions: {
+        width: 1280,
+        height: 720,
+        framerate: Number(process.env.RECORDING_FPS) || 15,
+        videoBitrate: Number(process.env.RECORDING_VIDEO_KBPS) || 1500,
+        audioBitrate: 96,
+        keyFrameInterval: 4,
+      },
+    } as any
   );
   return { egressId: info.egressId };
 }
