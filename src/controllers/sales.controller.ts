@@ -228,17 +228,25 @@ export const salesController = {
       // Advanced filter builder (groups of AND/OR conditions) — applied on top of the quick filters.
       const advanced = buildWhereFromFilter(req.query.filter, LEAD_FILTER_FIELDS);
       if (advanced) and.push(advanced);
-      if (and.length) where.AND = and;
-      // "Reminder" column filter — leads whose next-follow-up is overdue or due today.
-      if (followUp === 'none') {
-        // Open leads with no reminder at all.
-        where.nextFollowUpAt = null;
-        where.status = { notIn: ['LOST', 'ENROLLED'] };
-      } else if (followUp === 'overdue' || followUp === 'today') {
+      // DNP count filter (DNP ×1, ×2 …): how many times in a row the lead did not pick.
+      if (req.query.dnp) {
+        const counts = list(req.query.dnp).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+        if (counts.length) and.push({ dnpCount: { in: counts } });
+      }
+      // "Reminder" column filter — can combine: overdue (red), today (amber), upcoming, none.
+      if (followUp) {
         const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
         const endOfToday = new Date(startOfToday); endOfToday.setDate(endOfToday.getDate() + 1);
-        where.nextFollowUpAt = followUp === 'overdue' ? { lt: startOfToday } : { gte: startOfToday, lt: endOfToday };
+        const ors: Record<string, unknown>[] = [];
+        for (const k of list(followUp)) {
+          if (k === 'none') ors.push({ nextFollowUpAt: null, status: { notIn: ['LOST', 'ENROLLED'] } }); // open leads with no reminder
+          else if (k === 'overdue') ors.push({ nextFollowUpAt: { lt: startOfToday } });
+          else if (k === 'today') ors.push({ nextFollowUpAt: { gte: startOfToday, lt: endOfToday } });
+          else if (k === 'upcoming') ors.push({ nextFollowUpAt: { gte: endOfToday } });
+        }
+        if (ors.length) and.push({ OR: ors });
       }
+      if (and.length) where.AND = and;
 
       // A BDA (SALES=EDIT) only ever sees leads assigned to them — this
       // overrides any assignedToId query param so they can't page through
