@@ -142,8 +142,26 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * Now: short delay so the host is in the room, up to 3 attempts with back-off, and EVERY failure
  * (including "not configured") is written as a FAILED row with the reason so staff can see it.
  */
+// Recordings are only kept for this batch number and newer (older batches were cleared to save storage).
+// Batch.code is free text like "Batch 19", so the first number in it is the batch number. Override with RECORD_FROM_BATCH in .env.
+const RECORD_FROM_BATCH = Number(process.env.RECORD_FROM_BATCH) || 19;
+const batchNumber = (code?: string | null): number | null => { const m = (code || '').match(/\d+/); return m ? Number(m[0]) : null; };
+
+/** Is this class in a batch we keep recordings for? A combined class counts if ANY of its batches qualifies. Unknown batch numbers are recorded. */
+async function recordingKeptFor(classId: string): Promise<{ kept: boolean; reason: string }> {
+  const c = await prisma.liveClass.findUnique({
+    where: { id: classId },
+    select: { schedule: { select: { batch: { select: { code: true } } } }, extraSchedules: { select: { schedule: { select: { batch: { select: { code: true } } } } } } },
+  });
+  if (!c) return { kept: true, reason: '' };
+  const nums = [c.schedule?.batch?.code, ...c.extraSchedules.map((e) => e.schedule?.batch?.code)].map(batchNumber).filter((n): n is number => n !== null);
+  if (!nums.length || nums.some((n) => n >= RECORD_FROM_BATCH)) return { kept: true, reason: '' };
+  return { kept: false, reason: `Recordings are only kept for Batch ${RECORD_FROM_BATCH} and newer.` };
+}
+
 async function ensureRecording(classId: string, roomName: string, justWentLive: boolean): Promise<void> {
   if (recordingInFlight.has(classId)) return;
+  if (!(await recordingKeptFor(classId)).kept) return; // older batch — intentionally not recorded
   recordingInFlight.add(classId);
   try {
     const active = await prisma.liveClassRecording.findFirst({ where: { liveClassId: classId, status: 'RECORDING' }, select: { id: true } });
@@ -1546,8 +1564,9 @@ export const liveClassesController = {
       const active = rows.find((r: { status: string }) => r.status === 'RECORDING');
       const starting = recordingInFlight.has(liveClass.id);
       const latest = rows[0];
-      const state = active ? 'RECORDING' : starting ? 'STARTING' : latest?.status === 'FAILED' ? 'FAILED' : latest?.status === 'READY' ? 'READY' : liveClass.status === 'LIVE' ? 'NOT_RECORDING' : 'NONE';
-      res.json({ success: true, data: { state, reason: state === 'FAILED' ? latest?.failReason || null : null, startedAt: active?.startedAt || null, classStatus: liveClass.status } });
+      const keep = await recordingKeptFor(liveClass.id);
+      const state = !keep.kept && !active ? 'NOT_KEPT' : active ? 'RECORDING' : starting ? 'STARTING' : latest?.status === 'FAILED' ? 'FAILED' : latest?.status === 'READY' ? 'READY' : liveClass.status === 'LIVE' ? 'NOT_RECORDING' : 'NONE';
+      res.json({ success: true, data: { state, reason: state === 'FAILED' ? latest?.failReason || null : state === 'NOT_KEPT' ? keep.reason : null, startedAt: active?.startedAt || null, classStatus: liveClass.status } });
     } catch (err) { next(err); }
   },
 
