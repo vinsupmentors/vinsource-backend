@@ -138,6 +138,18 @@ export async function listLiveParticipants(roomName: string): Promise<LivePartic
   }
 }
 
+/** True once anyone in the room has published at least one track (mic, camera or screen share — muted still counts).
+ *  The Egress recorder never gets its "start" signal in an empty/track-less room, so recording is held back until this is true. */
+export async function roomHasPublishedTrack(roomName: string): Promise<boolean> {
+  if (!isConfigured()) return false;
+  try {
+    const participants = await roomService().listParticipants(roomName);
+    return participants.some((p: (typeof participants)[number]) => (p.tracks || []).length > 0);
+  } catch {
+    return false;
+  }
+}
+
 /** Host action: force-mute a participant's mic or camera. Safe no-op if they have no such track published. */
 export async function setParticipantTrackMuted(roomName: string, identity: string, kind: 'audio' | 'video', muted: boolean): Promise<void> {
   const svc = roomService();

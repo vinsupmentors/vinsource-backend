@@ -238,11 +238,14 @@ export const salesController = {
         const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
         const endOfToday = new Date(startOfToday); endOfToday.setDate(endOfToday.getDate() + 1);
         const ors: Record<string, unknown>[] = [];
+        // A reminder is EITHER the lead's follow-up date OR the due date of any open task on the lead
+        // (tasks added from the lead's Tasks / Reminders tab don't touch nextFollowUpAt).
+        const dated = (cond: Record<string, Date>) => [{ nextFollowUpAt: cond }, { tasks: { some: { status: 'OPEN', dueAt: cond } } }];
         for (const k of list(followUp)) {
-          if (k === 'none') ors.push({ nextFollowUpAt: null, status: { notIn: ['LOST', 'ENROLLED'] } }); // open leads with no reminder
-          else if (k === 'overdue') ors.push({ nextFollowUpAt: { lt: startOfToday } });
-          else if (k === 'today') ors.push({ nextFollowUpAt: { gte: startOfToday, lt: endOfToday } });
-          else if (k === 'upcoming') ors.push({ nextFollowUpAt: { gte: endOfToday } });
+          if (k === 'none') ors.push({ nextFollowUpAt: null, status: { notIn: ['LOST', 'ENROLLED'] }, tasks: { none: { status: 'OPEN', dueAt: { not: null } } } }); // open leads with no reminder at all
+          else if (k === 'overdue') ors.push(...dated({ lt: startOfToday }));
+          else if (k === 'today') ors.push(...dated({ gte: startOfToday, lt: endOfToday }));
+          else if (k === 'upcoming') ors.push(...dated({ gte: endOfToday }));
         }
         if (ors.length) and.push({ OR: ors });
       }
@@ -273,7 +276,19 @@ export const salesController = {
         prisma.lead.count({ where }),
       ]);
 
-      const leads = await withCreator(leadsRaw);
+      // The Reminder column = the earliest of the lead's follow-up date and the due date of its open tasks,
+      // so a task added in the lead's Tasks / Reminders tab shows up here too (it used to read "No reminder").
+      const pageIds = leadsRaw.map((x) => x.id);
+      const dueByLead = new Map<string, Date>();
+      if (pageIds.length) {
+        const open = await prisma.salesTask.groupBy({ by: ['leadId'], where: { leadId: { in: pageIds }, status: 'OPEN', dueAt: { not: null } }, _min: { dueAt: true } });
+        for (const o of open) if (o.leadId && o._min.dueAt) dueByLead.set(o.leadId, o._min.dueAt);
+      }
+      const withReminder = leadsRaw.map((x) => {
+        const t = dueByLead.get(x.id);
+        return t && (!x.nextFollowUpAt || t < x.nextFollowUpAt) ? { ...x, nextFollowUpAt: t } : x;
+      });
+      const leads = await withCreator(withReminder);
       res.json({ success: true, data: leads, meta: formatPagination(total, p, l) });
     } catch (err) { next(err); }
   },

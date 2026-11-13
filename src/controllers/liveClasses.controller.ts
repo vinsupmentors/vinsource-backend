@@ -10,6 +10,7 @@ import {
   ensureRoom,
   closeRoom,
   listLiveParticipants,
+  roomHasPublishedTrack,
   setParticipantTrackMuted,
   removeParticipant as liveKitRemoveParticipant,
   isLiveKitConfigured,
@@ -133,6 +134,7 @@ async function assertCanJoin(req: AuthRequest, liveClass: { id: string; schedule
 }
 
 const recordingInFlight = new Set<string>();
+const recordingWaiting = new Set<string>(); // subset of in-flight: waiting for someone to turn on mic/camera
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
@@ -172,10 +174,28 @@ async function ensureRecording(classId: string, roomName: string, justWentLive: 
     // Preflight: make sure the recordings bucket is actually writable BEFORE recording, so a storage problem
     // (e.g. R2 not enabled) shows up immediately instead of after the class ends.
     const storageProblem = await storageService.checkBucket(config.R2_RECORDINGS_BUCKET);
-    const attempts = storageProblem ? 0 : 3;
+    let attempts = storageProblem ? 0 : 3;
     if (storageProblem) {
       lastErr = storageProblem;
       console.error(`[liveClasses] recording storage preflight failed for ${classId}: ${storageProblem}`);
+    } else {
+      // Wait (up to ~10 min) until someone has a mic/camera/screen share on — Egress fails with
+      // "Start signal not received" in a room where nothing is published yet.
+      recordingWaiting.add(classId);
+      let ready = false;
+      try {
+        for (let i = 0; i < 60; i++) {
+          // eslint-disable-next-line no-await-in-loop
+          const cls = await prisma.liveClass.findUnique({ where: { id: classId }, select: { status: true } });
+          if (!cls || cls.status !== 'LIVE') return;
+          // eslint-disable-next-line no-await-in-loop
+          if (await roomHasPublishedTrack(roomName)) { ready = true; break; }
+          // eslint-disable-next-line no-await-in-loop
+          await sleep(10000);
+        }
+      } finally { recordingWaiting.delete(classId); }
+      if (ready) await sleep(2000); // let the track settle before the recorder joins
+      else { attempts = 0; lastErr = 'No one turned on a camera, microphone or screen share for 10 minutes, so there was nothing to record.'; }
     }
     for (let attempt = 1; attempt <= attempts; attempt++) {
       // The class may have ended while we were waiting.
@@ -1565,7 +1585,7 @@ export const liveClassesController = {
       const starting = recordingInFlight.has(liveClass.id);
       const latest = rows[0];
       const keep = await recordingKeptFor(liveClass.id);
-      const state = !keep.kept && !active ? 'NOT_KEPT' : active ? 'RECORDING' : starting ? 'STARTING' : latest?.status === 'FAILED' ? 'FAILED' : latest?.status === 'READY' ? 'READY' : liveClass.status === 'LIVE' ? 'NOT_RECORDING' : 'NONE';
+      const state = !keep.kept && !active ? 'NOT_KEPT' : active ? 'RECORDING' : recordingWaiting.has(liveClass.id) ? 'WAITING' : starting ? 'STARTING' : latest?.status === 'FAILED' ? 'FAILED' : latest?.status === 'READY' ? 'READY' : liveClass.status === 'LIVE' ? 'NOT_RECORDING' : 'NONE';
       res.json({ success: true, data: { state, reason: state === 'FAILED' ? latest?.failReason || null : state === 'NOT_KEPT' ? keep.reason : null, startedAt: active?.startedAt || null, classStatus: liveClass.status } });
     } catch (err) { next(err); }
   },
