@@ -79,21 +79,45 @@ const mismatchNote = (pay: { amountMatched: boolean | null; ocrAmount: number | 
   pay.amountMatched === false ? ` ⚠ screenshot shows ${inr(pay.ocrAmount || 0)}` : '';
 
 export const salesOnboardingController = {
+  /** Sub-batches Production has opened for onboarding, optionally narrowed to one course (?course=Name). */
+  async openBatches(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const course = String(req.query.course || '').trim();
+      const rows = await prisma.batchCourseSchedule.findMany({
+        where: { openForOnboarding: true, status: { in: ['UPCOMING', 'ONGOING'] } },
+        select: {
+          id: true, code: true, timing: true, startTime: true, endTime: true, dayPattern: true, mode: true, startDate: true,
+          batch: { select: { code: true } }, course: { select: { id: true, name: true } },
+        },
+        orderBy: [{ startDate: 'asc' }],
+      });
+      const data = course ? rows.filter((r) => r.course.name.trim().toLowerCase() === course.toLowerCase()) : rows;
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
   /** Onboard a lead: batch preferences + payment method, optionally the registration payment with its screenshot. */
   async onboard(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const lead = await loadLead(req);
       const b = req.body || {};
-      const courseName = String(b.courseName || '').trim();
-      const daysType = String(b.daysType || '').toUpperCase();
-      const timing = String(b.timing || '').toUpperCase();
-      const mode = String(firstVal(b.mode) || '').toUpperCase();
-      const paymentMethod = String(b.paymentMethod || '').toUpperCase();
-      if (!courseName) throw new AppError('Choose the course', 400);
-      if (!['WEEKDAY', 'WEEKEND'].includes(daysType)) throw new AppError('Choose Weekday or Weekend', 400);
-      if (!['MORNING', 'AFTERNOON', 'EVENING'].includes(timing)) throw new AppError('Choose the timing', 400);
-      if (!['OFFLINE', 'ONLINE'].includes(mode)) throw new AppError('Choose Offline or Online', 400);
-      if (!PLAN_TYPE[paymentMethod]) throw new AppError('Choose the payment method', 400);
+      // The batch comes from the list Production has opened for onboarding — course, days, timing and mode all follow from it.
+      const scheduleId = String(b.scheduleId || '').trim();
+      if (!scheduleId) throw new AppError('Choose the batch', 400);
+      const sched = await prisma.batchCourseSchedule.findUnique({
+        where: { id: scheduleId },
+        select: { id: true, code: true, timing: true, mode: true, dayPattern: true, status: true, openForOnboarding: true, course: { select: { name: true } }, batch: { select: { code: true } } },
+      });
+      if (!sched || !sched.openForOnboarding || sched.status === 'COMPLETED' || sched.status === 'CANCELLED') {
+        throw new AppError('That batch is not open for onboarding. Ask Production to open it.', 400);
+      }
+      const courseName = sched.course.name;
+      const daysType = sched.dayPattern === 'SAT_SUN' || sched.dayPattern === 'SUNDAY_ONLY' ? 'WEEKEND' : 'WEEKDAY';
+      const timing = String(sched.timing);
+      const mode = String(sched.mode);
+      // Payment method is optional now — it is set later in the Fees section (stored as NOT_SET; the plan defaults to PART until then).
+      const pmIn = String(b.paymentMethod || '').toUpperCase();
+      const paymentMethod = PLAN_TYPE[pmIn] ? pmIn : 'NOT_SET';
       const registrationPaid = b.registrationPaid === true || b.registrationPaid === 'true';
       const totalFee = b.totalFee !== undefined && b.totalFee !== '' && Number(b.totalFee) > 0 ? Number(b.totalFee) : null;
       if (await prisma.leadOnboarding.findUnique({ where: { leadId: lead.id } })) throw new AppError('This lead is already onboarded', 409);
@@ -126,19 +150,19 @@ export const salesOnboardingController = {
       try {
       const plan = await prisma.feePaymentPlan.create({
         data: {
-          leadId: lead.id, courseName, totalFee: totalFee || 0, planType: PLAN_TYPE[paymentMethod], status: 'ACTIVE', createdById: owner,
+          leadId: lead.id, courseName, totalFee: totalFee || 0, planType: PLAN_TYPE[paymentMethod] || 'PART', status: 'ACTIVE', createdById: owner,
           ...(emi ? { emiMonths: emi.months, downPayment: emi.downPayment, interestRatePct: emi.ratePct, interestAmount: emi.interest } : {}),
         },
       });
       createdPlanId = plan.id;
       const onboarding = await prisma.leadOnboarding.create({
-        data: { leadId: lead.id, courseName, daysType, timing, mode, paymentMethod, totalFee, registrationPaid, planId: plan.id, createdById: owner },
+        data: { leadId: lead.id, courseName, daysType, timing, mode, paymentMethod, scheduleId: sched.id, totalFee, registrationPaid, planId: plan.id, createdById: owner },
       });
       createdObId = onboarding.id;
       await prisma.lead.update({ where: { id: lead.id }, data: { courseInterest: courseName } }).catch(() => {});
 
       let regAmount = 0;
-      let line = `Onboarded for ${courseName} · ${label(daysType)} · ${label(timing)} · ${label(mode)} · ${label(paymentMethod)} payment`;
+      let line = `Onboarded for ${courseName} · ${sched.batch.code}${sched.code ? ` (${sched.code})` : ''} · ${label(daysType)} · ${label(timing)} · ${label(mode)}${paymentMethod === 'NOT_SET' ? '' : ` · ${label(paymentMethod)} payment`}`;
       if (registrationPaid) {
         const { pay } = await addPayment(plan.id, req, emi ? 'DOWN_PAYMENT' : 'REGISTRATION_FEE');
         regAmount = pay.amount;
@@ -181,6 +205,71 @@ export const salesOnboardingController = {
       if (f) fs.unlink(path.join(PAYMENT_PROOF_DIR, f.filename), () => {});
       next(err);
     }
+  },
+
+  /**
+   * Set (or change) the payment plan AFTER onboarding — Full / Part / EMI. Onboarding no longer asks for it.
+   * EMI builds the down-payment + monthly instalments exactly as onboarding used to, counting whatever has already
+   * been collected (e.g. the registration payment) towards the down payment.
+   */
+  async setPlan(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const lead = await loadLead(req);
+      const ob = await prisma.leadOnboarding.findUnique({ where: { leadId: lead.id } });
+      if (!ob || !ob.planId) throw new AppError('Onboard this lead first', 400);
+      const plan = await prisma.feePaymentPlan.findUnique({ where: { id: ob.planId } });
+      if (!plan) throw new AppError('Fee plan not found', 404);
+      const pm = String(req.body.paymentMethod || '').toUpperCase();
+      if (!PLAN_TYPE[pm]) throw new AppError('Choose Full payment, Part payment or EMI', 400);
+      if (plan.planType === 'EMI' && pm !== 'EMI') throw new AppError('This lead is on an EMI plan already. Undo the onboarding if the plan has to change.', 400);
+      if (plan.planType === 'EMI' && pm === 'EMI') throw new AppError('The EMI plan is already set up.', 400);
+      const owner = req.user?.employeeId || undefined;
+
+      if (pm !== 'EMI') {
+        await prisma.feePaymentPlan.update({ where: { id: plan.id }, data: { planType: PLAN_TYPE[pm] } });
+        await prisma.leadOnboarding.update({ where: { id: ob.id }, data: { paymentMethod: pm } });
+        await history(lead.id, owner, 'ONBOARDING', `Payment plan set to ${label(pm)} payment`);
+        return res.json({ success: true, message: `Payment plan set to ${label(pm)} payment.` });
+      }
+
+      const fee = plan.totalFee > 0 ? plan.totalFee : 0;
+      if (!fee) throw new AppError('Set the course fee first (Edit course fee), then set up the EMI.', 400);
+      const months = Number(req.body.emiMonths) || 0;
+      if (!months) throw new AppError('Choose the number of EMI months', 400);
+      const emi = await quoteEmi(fee, months);
+      const collected = await prisma.feeInstallment.findMany({ where: { planId: plan.id, rejectedAt: null, status: { in: ['PAID', 'PENDING_APPROVAL'] } }, select: { amount: true } });
+      const paidSoFar = collected.reduce((s, i) => s + i.amount, 0);
+      if (paidSoFar > emi.downPayment + 0.5) throw new AppError(`${inr(paidSoFar)} has already been collected, which is more than this plan's down payment (${inr(emi.downPayment)}). Choose a different number of months.`, 400);
+
+      // Replace any earlier, still-unpaid scheduled rows so the schedule is never doubled.
+      const oldRows = await prisma.feeInstallment.findMany({ where: { planId: plan.id, status: 'PENDING', scheduled: true }, select: { id: true } });
+      if (oldRows.length) {
+        await prisma.salesTask.deleteMany({ where: { installmentId: { in: oldRows.map((r) => r.id) } } }).catch(() => {});
+        await prisma.feeInstallment.deleteMany({ where: { id: { in: oldRows.map((r) => r.id) } } });
+      }
+      await prisma.feePaymentPlan.update({ where: { id: plan.id }, data: { planType: 'EMI', emiMonths: emi.months, downPayment: emi.downPayment, interestRatePct: emi.ratePct, interestAmount: emi.interest } });
+      await prisma.leadOnboarding.update({ where: { id: ob.id }, data: { paymentMethod: 'EMI' } });
+
+      const now = new Date();
+      const rows: { kind: 'DOWN_PAYMENT' | 'EMI'; amount: number; due: Date; n?: number }[] = [];
+      const dpLeft = Math.round((emi.downPayment - paidSoFar) * 100) / 100;
+      if (dpLeft > 0.5) rows.push({ kind: 'DOWN_PAYMENT', amount: dpLeft, due: new Date(now.getTime() + 7 * 86400000) });
+      emi.monthly.forEach((amt, i) => rows.push({ kind: 'EMI', amount: amt, due: addMonthsKeepDay(now, i + 1), n: i + 1 }));
+      const assignee = lead.assignedToId || owner;
+      for (const r of rows) {
+        // eslint-disable-next-line no-await-in-loop
+        const inst = await prisma.feeInstallment.create({ data: { planId: plan.id, dueDate: r.due, amount: r.amount, status: 'PENDING', kind: r.kind, emiMonthNumber: r.n ?? null, scheduled: true } });
+        if (assignee) {
+          const at = new Date(`${new Date(r.due.getTime() + 5.5 * 3600000).toISOString().slice(0, 10)}T10:00:00+05:30`);
+          // eslint-disable-next-line no-await-in-loop
+          await prisma.salesTask.create({
+            data: { title: `${r.kind === 'EMI' ? `EMI ${r.n}/${emi.months}` : 'Down payment'} ${inr(r.amount)} due — ${lead.name}`, description: 'Collect the payment and submit it with the screenshot from the lead\'s Fees tab.', leadId: lead.id, assignedToId: assignee, createdById: owner || null, dueAt: at, kind: 'MANUAL', installmentId: inst.id },
+          }).catch(() => {});
+        }
+      }
+      await history(lead.id, owner, 'ONBOARDING', `EMI plan set: ${emi.months} months, down payment ${inr(emi.downPayment)}, ${inr(emi.monthly[0])}/month at ${emi.ratePct}% on the balance (total ${inr(emi.totalPayable)})`);
+      res.json({ success: true, message: 'EMI plan set up.' });
+    } catch (err) { next(err); }
   },
 
   /** Sales adds a further payment; it joins Finance's approval queue. */

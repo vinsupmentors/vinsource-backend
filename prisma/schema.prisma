@@ -2644,6 +2644,7 @@ model AcademyCourse {
   certificates     Certificate[]
   courseFeedbacks  CourseFeedback[]
   materials        CourseMaterial[]
+  curriculumDays   CurriculumDay[]
 
   certificateRequests StudentCertificateRequest[]
 
@@ -2670,11 +2671,50 @@ model CourseMaterial {
   url          String // /uploads/materials/... for FILE, external URL for LINK/VIDEO
   notes        String?
   uploadedById String?
+  // Day-wise material: pinned to a CurriculumDay. Unlike the course-wide / module materials, these are hidden from
+  // students until the trainer RELEASES that day for their batch (CurriculumDayRelease).
+  dayId        String?
   createdAt    DateTime     @default(now())
 
   course     AcademyCourse  @relation(fields: [courseId], references: [id])
   module     AcademyModule? @relation(fields: [moduleId], references: [id])
   uploadedBy Employee?      @relation("MaterialUploader", fields: [uploadedById], references: [id])
+  day        CurriculumDay? @relation(fields: [dayId], references: [id], onDelete: SetNull)
+
+  @@index([dayId])
+}
+
+// One teaching day of a course's (corrected) curriculum — "Day 7: SQL joins". Holds the day's topics and its files.
+model CurriculumDay {
+  id        String   @id @default(uuid())
+  courseId  String
+  moduleId  String?
+  dayNumber Int
+  title     String
+  topics    String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course    AcademyCourse          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  materials CourseMaterial[]
+  releases  CurriculumDayRelease[]
+
+  @@unique([courseId, dayNumber])
+  @@index([moduleId])
+}
+
+// The trainer releasing a day's material to one sub-batch (schedule). Students of that schedule see it only after this.
+model CurriculumDayRelease {
+  id           String   @id @default(uuid())
+  dayId        String
+  scheduleId   String
+  releasedById String?
+  releasedAt   DateTime @default(now())
+
+  day CurriculumDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@unique([dayId, scheduleId])
+  @@index([scheduleId])
 }
 
 model AcademyModule {
@@ -2757,6 +2797,8 @@ model BatchCourseSchedule {
   heldSeats        Int? @default(0)
   heldOnlineSeats  Int? @default(0)
   heldOfflineSeats Int? @default(0)
+  // Production ticks this to let Sales pick this sub-batch when onboarding a lead.
+  openForOnboarding Boolean @default(false)
   createdAt DateTime     @default(now())
   // Tracked independently of the parent Batch's status — a Batch can only be
   // marked COMPLETED once all of its (non-cancelled) sub-batches are, since
@@ -4401,7 +4443,8 @@ model LeadOnboarding {
   daysType         String // WEEKDAY | WEEKEND
   timing           String // MORNING | AFTERNOON | EVENING
   mode             String // OFFLINE | ONLINE
-  paymentMethod    String // FULL | PART | EMI
+  paymentMethod    String // FULL | PART | EMI — or NOT_SET when chosen later in the Fees section
+  scheduleId       String? // the sub-batch (BatchCourseSchedule) Sales picked from Production's open list
   totalFee         Float?
   registrationPaid Boolean  @default(false)
   planId           String?

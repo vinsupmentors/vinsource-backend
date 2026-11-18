@@ -30,6 +30,11 @@ router.post('/schedules/:scheduleId/kra', trainerPortalController.createKra);
 router.put('/kra/:id', trainerPortalController.updateKra);
 router.delete('/kra/:id', trainerPortalController.deleteKra);
 
+// Day-wise study material — release each day to the batch
+router.get('/schedules/:scheduleId/curriculum-days', trainerPortalController.curriculumDays);
+router.post('/schedules/:scheduleId/curriculum-days/:dayId/release', trainerPortalController.releaseCurriculumDay);
+router.delete('/schedules/:scheduleId/curriculum-days/:dayId/release', trainerPortalController.unreleaseCurriculumDay);
+
 // Projects / Feedback Forms / Online Tests — release & conduct
 router.get('/schedules/:scheduleId/releasable-content', trainerPortalController.releasableContent);
 router.post('/schedules/:scheduleId/release-project', trainerPortalController.releaseProject);

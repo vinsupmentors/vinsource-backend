@@ -675,6 +675,82 @@ export const trainerPortalController = {
 
   // ── PROJECTS / FEEDBACK FORMS / ONLINE TESTS — release & conduct ───────────
 
+  // ── DAY-WISE STUDY MATERIAL — the trainer releases each day to their sub-batch ──
+
+  /** Every curriculum day of this schedule's course, with its files and whether this trainer has released it to this batch. */
+  async curriculumDays(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId!;
+      const { scheduleId } = req.params;
+      await assertOwnsSchedule(employeeId, scheduleId);
+      const schedule = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, select: { courseId: true } });
+      if (!schedule) throw new AppError('Schedule not found', 404);
+
+      const days = await prisma.curriculumDay.findMany({
+        where: { courseId: schedule.courseId },
+        orderBy: { dayNumber: 'asc' },
+        include: {
+          materials: { select: { id: true, title: true, type: true, url: true }, orderBy: { createdAt: 'asc' } },
+          releases: { where: { scheduleId }, select: { releasedAt: true } },
+        },
+      });
+      res.json({
+        success: true,
+        data: days.map((d) => ({
+          id: d.id, dayNumber: d.dayNumber, title: d.title, topics: d.topics, moduleId: d.moduleId, materials: d.materials,
+          released: d.releases.length > 0, releasedAt: d.releases[0]?.releasedAt ?? null,
+        })),
+      });
+    } catch (err) { next(err); }
+  },
+
+  /** Release one day's material to this sub-batch's students (they get an in-portal notification). */
+  async releaseCurriculumDay(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId!;
+      const { scheduleId, dayId } = req.params;
+      await assertOwnsSchedule(employeeId, scheduleId);
+
+      const [schedule, day] = await Promise.all([
+        prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, include: { course: { select: { name: true } } } }),
+        prisma.curriculumDay.findUnique({ where: { id: dayId }, include: { _count: { select: { materials: true } } } }),
+      ]);
+      if (!schedule) throw new AppError('Schedule not found', 404);
+      if (!day || day.courseId !== schedule.courseId) throw new AppError('This day does not belong to this sub-batch\'s course', 400);
+      if (day._count.materials === 0) throw new AppError('This day has no material uploaded yet.', 400);
+
+      const already = await prisma.curriculumDayRelease.findUnique({ where: { dayId_scheduleId: { dayId, scheduleId } } });
+      if (already) return res.json({ success: true, message: 'Already released.' });
+      await prisma.curriculumDayRelease.create({ data: { dayId, scheduleId, releasedById: employeeId } });
+
+      const enrollments = await prisma.studentBatchEnrollment.findMany({
+        where: { scheduleId, status: 'ACTIVE' },
+        select: { student: { select: { userId: true } } },
+      });
+      await notificationService.bulkCreate(
+        enrollments.map((e) => e.student.userId).filter((id): id is string => id !== null),
+        {
+          type: 'SYSTEM',
+          title: 'New study material',
+          message: `Day ${day.dayNumber} · ${day.title} material is now available for ${schedule.course.name}.`,
+          data: { scheduleId, dayId },
+        }
+      ).catch(() => {});
+      res.status(201).json({ success: true, message: `Day ${day.dayNumber} released.` });
+    } catch (err) { next(err); }
+  },
+
+  /** Take a release back (hides the day from this sub-batch again). */
+  async unreleaseCurriculumDay(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId!;
+      const { scheduleId, dayId } = req.params;
+      await assertOwnsSchedule(employeeId, scheduleId);
+      await prisma.curriculumDayRelease.deleteMany({ where: { dayId, scheduleId } });
+      res.json({ success: true, message: 'Release withdrawn.' });
+    } catch (err) { next(err); }
+  },
+
   /** PM-authored Projects/FeedbackForms/OnlineTests available to release for this schedule's course. */
   async releasableContent(req: AuthRequest, res: Response, next: NextFunction) {
     try {

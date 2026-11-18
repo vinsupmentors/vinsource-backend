@@ -539,6 +539,8 @@ export const studentPortalController = {
                   modules: { orderBy: { order: 'asc' } },
                   // Full material list from day one — never gated by class progress
                   materials: {
+                    // Day-wise files are handled separately below (released per batch) — never in these open lists.
+                    where: { dayId: null },
                     select: { id: true, moduleId: true, title: true, type: true, url: true, notes: true, createdAt: true },
                     orderBy: { createdAt: 'asc' },
                   },
@@ -550,10 +552,32 @@ export const studentPortalController = {
         },
       });
 
+      // Day-wise material: a student only sees the days their trainer has released to THEIR sub-batch.
+      const courseIds = Array.from(new Set(enrollments.map((e) => e.schedule.course.id)));
+      const scheduleIds = enrollments.map((e) => e.scheduleId);
+      const allDays = courseIds.length
+        ? await prisma.curriculumDay.findMany({
+            where: { courseId: { in: courseIds } },
+            orderBy: { dayNumber: 'asc' },
+            include: {
+              materials: { select: { id: true, title: true, type: true, url: true, notes: true }, orderBy: { createdAt: 'asc' } },
+              releases: { where: { scheduleId: { in: scheduleIds } }, select: { scheduleId: true, releasedAt: true } },
+            },
+          })
+        : [];
+
       const data = enrollments.map((e) => {
         const coveredModuleIds = new Set(e.schedule.kraEntries.map((k) => k.moduleId).filter(Boolean));
         const materials = e.schedule.course.materials;
+        const courseDays = allDays.filter((d) => d.courseId === e.schedule.course.id);
+        const releasedDays = courseDays.flatMap((d) => {
+          const rel = d.releases.find((r) => r.scheduleId === e.scheduleId);
+          return rel ? [{ id: d.id, dayNumber: d.dayNumber, title: d.title, topics: d.topics, releasedAt: rel.releasedAt, materials: d.materials }] : [];
+        });
         return {
+          days: releasedDays,
+          totalDays: courseDays.length,
+          lockedDaysCount: courseDays.length - releasedDays.length,
           scheduleId: e.scheduleId,
           courseId: e.schedule.course.id,
           courseName: e.schedule.course.name,

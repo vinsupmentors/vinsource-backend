@@ -604,6 +604,8 @@ export const productionController = {
         // never sends these) is untouched: `undefined` fields are no-ops to
         // Prisma's update().
         startTime, endTime, customWeekdays,
+        // Production's tick: Sales may pick this sub-batch when onboarding a lead.
+        openForOnboarding,
       } = req.body;
       if (dayPattern === 'CUSTOM' && customWeekdays === undefined) {
         throw new AppError('Select at least one weekday for a custom recurrence.', 400);
@@ -634,6 +636,7 @@ export const productionController = {
         where: { id: scheduleId },
         data: {
           timing, dayPattern, mode, status,
+          openForOnboarding: typeof openForOnboarding === 'boolean' ? openForOnboarding : undefined,
           startTime: startTime === '' ? null : startTime,
           endTime: endTime === '' ? null : endTime,
           // Only overwrite customWeekdays when the caller actually sent a
