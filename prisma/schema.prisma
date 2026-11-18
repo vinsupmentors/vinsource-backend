@@ -2725,6 +2725,9 @@ model AcademyModule {
   hours    Int?
   dayRange String?
   topics   String? @db.Text
+  // Which curriculum this module belongs to. "V1" = original syllabus (batches before 19), "V2" = the
+  // 50-day Vinsup 2.0 curriculum (Batch 19 and later). A batch only sees the set that matches its number.
+  curriculum String @default("V1")
 
   course     AcademyCourse @relation(fields: [courseId], references: [id])
   kraEntries KRAEntry[]
@@ -2736,7 +2739,7 @@ model AcademyModule {
   feedbackForm  FeedbackForm?
   onlineTests   OnlineTest[]
 
-  @@unique([courseId, order])
+  @@unique([courseId, curriculum, order])
 }
 
 // "Batch 14" — a cohort container. Holds several courses, each running on

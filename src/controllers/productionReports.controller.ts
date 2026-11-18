@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { pickModules } from '../utils/curriculum';
 
 const employeeSelect = { id: true, firstName: true, lastName: true, employeeCode: true };
 const studentSelect = { id: true, firstName: true, lastName: true, studentCode: true, track: true, status: true, phone: true, email: true };
@@ -272,8 +273,8 @@ export const productionReportsController = {
         }),
         prisma.academyModule.findMany({
           where: { courseId: { in: courseIds } },
-          select: { id: true, courseId: true, order: true, title: true },
-          orderBy: [{ courseId: 'asc' }, { order: 'asc' }],
+          select: { id: true, courseId: true, order: true, title: true, curriculum: true },
+          orderBy: [{ courseId: 'asc' }, { curriculum: 'asc' }, { order: 'asc' }],
         }),
         prisma.trainerFeedback.findMany({
           where: { studentId: { in: studentIds }, courseId: { in: courseIds } },
@@ -333,6 +334,7 @@ export const productionReportsController = {
         return map[studentStatus] ?? studentStatus;
       };
 
+      const usedModuleIds = new Set<string>(); // only the modules these batches actually follow (V1 vs V2)
       const rows = enrollments.map((e) => {
         const sid = e.studentId;
         const sch = e.schedule;
@@ -343,7 +345,8 @@ export const productionReportsController = {
 
         const moduleMarks: Record<string, { got: number; max: number } | null> = {};
         let gotSum = 0; let maxSum = 0; let done = 0;
-        for (const m of modules.filter((x) => x.courseId === sch.courseId)) {
+        for (const m of pickModules(modules.filter((x) => x.courseId === sch.courseId), sch.batch.code)) {
+          usedModuleIds.add(m.id);
           const s = modScore.get(`${sid}|${sch.id}|${m.id}`);
           moduleMarks[m.id] = s && s.max > 0 ? s : null;
           if (s && s.max > 0) { gotSum += s.got; maxSum += s.max; done++; }
@@ -389,7 +392,7 @@ export const productionReportsController = {
       });
 
       // Module columns: each course's modules in order (de-duplicated by course+order).
-      const moduleCols = modules.map((m) => ({ id: m.id, courseId: m.courseId, order: m.order, title: m.title }));
+      const moduleCols = modules.filter((m) => usedModuleIds.has(m.id)).map((m) => ({ id: m.id, courseId: m.courseId, order: m.order, title: m.title }));
 
       res.json({ success: true, data: { modules: moduleCols, rows } });
     } catch (err) { next(err); }

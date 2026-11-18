@@ -4,6 +4,7 @@ import fs from 'fs';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { pickModules, usesDayWiseMaterial } from '../utils/curriculum';
 import { computeGamification } from '../services/gamification.service';
 import { resolveIpLocation } from '../utils/ipGeolocation';
 import { getOnboardingStatus } from '../utils/onboardingStatus';
@@ -547,6 +548,7 @@ export const studentPortalController = {
                 },
               },
               kraEntries: { select: { moduleId: true } },
+              batch: { select: { code: true } },
             },
           },
         },
@@ -569,7 +571,8 @@ export const studentPortalController = {
       const data = enrollments.map((e) => {
         const coveredModuleIds = new Set(e.schedule.kraEntries.map((k) => k.moduleId).filter(Boolean));
         const materials = e.schedule.course.materials;
-        const courseDays = allDays.filter((d) => d.courseId === e.schedule.course.id);
+        // Day-wise material belongs to the Vinsup 2.0 curriculum (Batch 19+); older batches never see it.
+        const courseDays = usesDayWiseMaterial(e.schedule.batch?.code) ? allDays.filter((d) => d.courseId === e.schedule.course.id) : [];
         const releasedDays = courseDays.flatMap((d) => {
           const rel = d.releases.find((r) => r.scheduleId === e.scheduleId);
           return rel ? [{ id: d.id, dayNumber: d.dayNumber, title: d.title, topics: d.topics, releasedAt: rel.releasedAt, materials: d.materials }] : [];
@@ -583,7 +586,7 @@ export const studentPortalController = {
           courseName: e.schedule.course.name,
           // General (course-wide) materials are visible from enrollment
           generalMaterials: materials.filter((m) => !m.moduleId),
-          modules: e.schedule.course.modules.map((m) => {
+          modules: pickModules(e.schedule.course.modules, e.schedule.batch?.code).map((m) => {
             const covered = coveredModuleIds.has(m.id);
             const moduleMaterials = materials.filter((mat) => mat.moduleId === m.id);
             return {

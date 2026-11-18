@@ -3,6 +3,7 @@ import { salesAdvisorReportService } from '../services/salesAdvisorReport.servic
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
+import { pickModules, usesDayWiseMaterial } from '../utils/curriculum';
 import { notificationService } from '../services/notification.service';
 import { emailService } from '../services/email.service';
 import { ensureCourseCompletionCertRequest } from '../utils/certificateRequests';
@@ -97,6 +98,11 @@ export const trainerPortalController = {
         },
         orderBy: { assignedAt: 'desc' },
       });
+      // Each batch sees only its own curriculum's modules (Batch 19+ → Vinsup 2.0; earlier batches keep the original syllabus).
+      for (const a of assignments) {
+        const c = a.schedule.course;
+        c.modules = pickModules(c.modules, a.schedule.batch?.code);
+      }
       // TEMP DEBUG: remove `meta` once trainer-assignment visibility is confirmed working.
       res.json({ success: true, data: assignments, meta: { employeeId } });
     } catch (err) { next(err); }
@@ -526,8 +532,8 @@ export const trainerPortalController = {
           where: { scheduleId, status: 'ACTIVE' },
           include: { student: { select: { id: true, studentCode: true, firstName: true, lastName: true } } },
         }),
-        prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId } }).then((s) =>
-          s ? prisma.academyModule.findMany({ where: { courseId: s.courseId }, orderBy: { order: 'asc' } }) : []
+        prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, include: { batch: { select: { code: true } } } }).then(async (s) =>
+          s ? pickModules(await prisma.academyModule.findMany({ where: { courseId: s.courseId }, orderBy: { order: 'asc' } }), s.batch.code) : []
         ),
         prisma.moduleFeedback.findMany({ where: { scheduleId } }),
       ]);
@@ -683,8 +689,10 @@ export const trainerPortalController = {
       const employeeId = req.user!.employeeId!;
       const { scheduleId } = req.params;
       await assertOwnsSchedule(employeeId, scheduleId);
-      const schedule = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, select: { courseId: true } });
+      const schedule = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, select: { courseId: true, batch: { select: { code: true } } } });
       if (!schedule) throw new AppError('Schedule not found', 404);
+      // Day-wise material is part of the Vinsup 2.0 curriculum — Batch 19 and later only.
+      if (!usesDayWiseMaterial(schedule.batch.code)) return res.json({ success: true, data: [] });
 
       const days = await prisma.curriculumDay.findMany({
         where: { courseId: schedule.courseId },
