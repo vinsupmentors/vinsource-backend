@@ -66,8 +66,16 @@ async function main() {
   if (!fs.existsSync(daysFile)) { console.error(`days.csv not found in ${dir}`); process.exit(1); }
 
   const courses = await prisma.academyCourse.findMany({ select: { id: true, name: true } });
-  const courseByName = new Map(courses.map((c) => [c.name.trim().toLowerCase(), c]));
-  const findCourse = (name: string) => courseByName.get(name.trim().toLowerCase());
+  // Exact name first; otherwise a name that contains / is contained in the given one, but only if that picks exactly one course.
+  const findCourse = (name: string) => {
+    const n = name.trim().toLowerCase();
+    if (!n) return undefined;
+    const exact = courses.filter((c) => c.name.trim().toLowerCase() === n);
+    if (exact.length === 1) return exact[0];
+    const loose = courses.filter((c) => { const cn = c.name.trim().toLowerCase(); return cn.includes(n) || n.includes(cn); });
+    return loose.length === 1 ? loose[0] : undefined;
+  };
+  const knownCourses = `portal courses: ${courses.map((c) => `"${c.name}"`).join(', ')}`;
   const problems: string[] = [];
   let modUpserts = 0, dayUpserts = 0, filesAdded = 0, filesSkipped = 0, linksAdded = 0;
 
@@ -77,11 +85,11 @@ async function main() {
     for (const r of readCsv(modFile)) {
       const course = findCourse(r.course || '');
       const order = Number(r.order);
-      if (!course) { problems.push(`modules.csv: unknown course "${r.course}"`); continue; }
+      if (!course) { problems.push(`modules.csv: unknown course "${r.course}" (${knownCourses})`); continue; }
       if (!Number.isInteger(order) || order < 1 || !r.title) { problems.push(`modules.csv: bad row for ${r.course} (order "${r.order}", title "${r.title}")`); continue; }
       modUpserts++;
       if (execute) {
-        const data = { title: r.title, hours: r.hours ? Number(r.hours) : null, dayRange: r.dayrange || null, topics: r.topics || null };
+        const data = { title: r.title, hours: r.hours ? Math.round(Number(r.hours)) : null, dayRange: r.dayrange || null, topics: r.topics || null };
         // eslint-disable-next-line no-await-in-loop
         await prisma.academyModule.upsert({ where: { courseId_order: { courseId: course.id, order } }, update: data, create: { courseId: course.id, order, ...data } });
       }
@@ -92,7 +100,7 @@ async function main() {
   for (const r of readCsv(daysFile)) {
     const course = findCourse(r.course || '');
     const dayNo = Number(r.day);
-    if (!course) { problems.push(`days.csv: unknown course "${r.course}"`); continue; }
+    if (!course) { problems.push(`days.csv: unknown course "${r.course}" (${knownCourses})`); continue; }
     if (!Number.isInteger(dayNo) || dayNo < 1 || !r.title) { problems.push(`days.csv: bad row for ${r.course} (day "${r.day}", title "${r.title}")`); continue; }
 
     let moduleId: string | null = null;
@@ -117,7 +125,7 @@ async function main() {
     }
 
     // Files for this day: <dir>/<Course name>/<folder whose number == day>/
-    const courseDir = fs.readdirSync(dir, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.trim().toLowerCase() === course.name.trim().toLowerCase());
+    const courseDir = fs.readdirSync(dir, { withFileTypes: true }).find((e) => e.isDirectory() && findCourse(e.name)?.id === course.id);
     if (!courseDir) continue;
     const dayDir = fs.readdirSync(path.join(dir, courseDir.name), { withFileTypes: true }).find((e) => e.isDirectory() && dayNumberOf(e.name) === dayNo);
     if (!dayDir) continue;
