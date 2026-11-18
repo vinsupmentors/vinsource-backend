@@ -114,7 +114,12 @@ async function main() {
       for (const m of old) {
         const used = Object.entries(m._count).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
         if (m.feedbackForm) used.push('a feedback form');
-        if (used.length) { removedKept++; problems.push(`${cname}: old module ${m.order} "${m.title}" kept — in use (${used.join(', ')})`); continue; }
+        if (used.length) {
+          removedKept++;
+          problems.push(`${cname}: old module ${m.order} "${m.title.trim()}" kept — in use (${used.join(', ')}); ${execute ? 'renamed' : 'will be renamed'} "[Old] …"`);
+          if (execute && !m.title.trim().startsWith('[Old]')) await prisma.academyModule.update({ where: { id: m.id }, data: { title: `[Old] ${m.title.trim()}` } });
+          continue;
+        }
         removed++;
         console.log(`${execute ? 'deleting' : 'would delete'} ${cname} module ${m.order} "${m.title}"`);
         if (execute) await prisma.academyModule.delete({ where: { id: m.id } });
