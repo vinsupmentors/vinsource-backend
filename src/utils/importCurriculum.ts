@@ -7,6 +7,9 @@
  *   REALLY IMPORT:
  *     npx ts-node src/utils/importCurriculum.ts --dir=/opt/hrms/curriculum --execute
  *
+ *   Add --replace-modules (to either) to also remove each course's old modules that are not in modules.csv
+ *   (a module that KRA entries, tests, feedback, projects or materials still point to is kept and reported).
+ *
  * Folder layout (course names must match the portal's course names, case-insensitive):
  *
  *   <dir>/
@@ -27,6 +30,7 @@ import prisma from '../config/database';
 
 const arg = (n: string) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
 const execute = process.argv.includes('--execute');
+const replaceModules = process.argv.includes('--replace-modules');
 const dir = arg('dir');
 const ALLOWED = ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv', '.txt', '.md', '.jpg', '.jpeg', '.png', '.webp', '.zip'];
 const UPLOADS = path.join(process.cwd(), 'uploads', 'materials');
@@ -77,6 +81,8 @@ async function main() {
   };
   const knownCourses = `portal courses: ${courses.map((c) => `"${c.name}"`).join(', ')}`;
   const problems: string[] = [];
+  const ordersByCourse = new Map<string, Set<number>>();
+  let removed = 0, removedKept = 0;
   let modUpserts = 0, dayUpserts = 0, filesAdded = 0, filesSkipped = 0, linksAdded = 0;
 
   // 1. Modules (corrected curriculum)
@@ -88,10 +94,30 @@ async function main() {
       if (!course) { problems.push(`modules.csv: unknown course "${r.course}" (${knownCourses})`); continue; }
       if (!Number.isInteger(order) || order < 1 || !r.title) { problems.push(`modules.csv: bad row for ${r.course} (order "${r.order}", title "${r.title}")`); continue; }
       modUpserts++;
+      (ordersByCourse.get(course.id) ?? ordersByCourse.set(course.id, new Set()).get(course.id)!).add(order);
       if (execute) {
         const data = { title: r.title, hours: r.hours ? Math.round(Number(r.hours)) : null, dayRange: r.dayrange || null, topics: r.topics || null };
         // eslint-disable-next-line no-await-in-loop
         await prisma.academyModule.upsert({ where: { courseId_order: { courseId: course.id, order } }, update: data, create: { courseId: course.id, order, ...data } });
+      }
+    }
+  }
+
+  // 1b. --replace-modules: drop the course's OLD modules that aren't in modules.csv — only if nothing uses them
+  if (replaceModules) {
+    for (const [courseId, keep] of ordersByCourse) {
+      const cname = courses.find((c) => c.id === courseId)?.name;
+      const old = await prisma.academyModule.findMany({
+        where: { courseId, order: { notIn: [...keep] } },
+        select: { id: true, order: true, title: true, _count: { select: { kraEntries: true, tests: true, moduleFeedbacks: true, materials: true, projects: true, onlineTests: true } }, feedbackForm: { select: { id: true } } },
+      });
+      for (const m of old) {
+        const used = Object.entries(m._count).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`);
+        if (m.feedbackForm) used.push('a feedback form');
+        if (used.length) { removedKept++; problems.push(`${cname}: old module ${m.order} "${m.title}" kept — in use (${used.join(', ')})`); continue; }
+        removed++;
+        console.log(`${execute ? 'deleting' : 'would delete'} ${cname} module ${m.order} "${m.title}"`);
+        if (execute) await prisma.academyModule.delete({ where: { id: m.id } });
       }
     }
   }
@@ -167,7 +193,7 @@ async function main() {
     }
   }
 
-  console.log(`${execute ? 'IMPORTED' : 'DRY RUN — would import'}: ${modUpserts} module(s), ${dayUpserts} day(s), ${filesAdded} file(s), ${linksAdded} link(s); ${filesSkipped} already present.`);
+  console.log(`${execute ? 'IMPORTED' : 'DRY RUN — would import'}: ${modUpserts} module(s), ${dayUpserts} day(s), ${filesAdded} file(s), ${linksAdded} link(s); ${filesSkipped} already present.${replaceModules ? ` Old modules: ${removed} ${execute ? 'deleted' : 'to delete'}, ${removedKept} kept (in use).` : ''}`);
   if (problems.length) { console.log(`\n${problems.length} thing(s) to check:`); problems.slice(0, 60).forEach((p) => console.log('  - ' + p)); }
   if (!execute) console.log('\nNothing was changed. Re-run with --execute to import. Days are NOT released to students — trainers release them from My Training.');
 }
