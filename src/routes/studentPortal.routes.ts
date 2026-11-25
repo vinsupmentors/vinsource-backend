@@ -22,6 +22,7 @@ router.get('/certificates', studentPortalController.myCertificates);
 router.get('/certificates/:id/render-data', studentPortalController.myCertificateRenderData);
 router.get('/placements', studentPortalController.myPlacements);
 router.get('/course-content', studentPortalController.courseContent);
+router.get('/day-material/:id/file', studentPortalController.dayMaterialFile);
 router.get('/rank-card', studentPortalController.rankCard);
 router.get('/gamification', studentPortalController.gamification);
 router.get('/feedback', studentPortalController.listFeedback);

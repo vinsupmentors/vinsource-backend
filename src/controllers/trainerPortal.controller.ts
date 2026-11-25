@@ -679,6 +679,108 @@ export const trainerPortalController = {
     } catch (err) { next(err); }
   },
 
+  // ── BATCH KRA (after completion) + OTHER WORK ──────────────────────────────
+
+  /** My sub-batches that are marked completed, each with my KRA entry (if any). */
+  async myBatchKras(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      if (!employeeId) return res.json({ success: true, data: [] });
+      const assignments = await prisma.trainerAssignment.findMany({
+        where: { trainerId: employeeId, schedule: { status: 'COMPLETED' } },
+        select: {
+          schedule: {
+            select: {
+              id: true, code: true, timing: true, classesCompletedAt: true, projectPresentationDate: true,
+              course: { select: { name: true } },
+              batch: { select: { code: true } },
+              _count: { select: { enrollments: true } },
+            },
+          },
+        },
+      });
+      const kras = await prisma.trainerBatchKra.findMany({ where: { trainerId: employeeId } });
+      const byId = new Map(kras.map((k) => [k.scheduleId, k]));
+      const data = assignments
+        .map((a) => ({ schedule: a.schedule, kra: byId.get(a.schedule.id) ?? null }))
+        .sort((a, b) => +new Date(b.schedule.classesCompletedAt ?? 0) - +new Date(a.schedule.classesCompletedAt ?? 0));
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /** Save (create/update) my KRA for a completed sub-batch. Body: { summary, achievements?, notes? } */
+  async saveBatchKra(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId!;
+      const { scheduleId } = req.params;
+      const { summary, achievements, notes } = req.body;
+      if (!summary || !String(summary).trim()) throw new AppError('Summary is required', 400);
+      await assertOwnsSchedule(employeeId, scheduleId);
+      const sched = await prisma.batchCourseSchedule.findUnique({ where: { id: scheduleId }, select: { status: true } });
+      if (!sched || sched.status !== 'COMPLETED') throw new AppError('KRA can be entered only after the batch is marked completed.', 400);
+      const data = { summary: String(summary).trim(), achievements: achievements?.trim() || null, notes: notes?.trim() || null };
+      const row = await prisma.trainerBatchKra.upsert({
+        where: { scheduleId_trainerId: { scheduleId, trainerId: employeeId } },
+        update: data,
+        create: { scheduleId, trainerId: employeeId, ...data },
+      });
+      res.json({ success: true, data: row });
+    } catch (err) { next(err); }
+  },
+
+  /** My non-class work entries. */
+  async listOtherWork(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      if (!employeeId) return res.json({ success: true, data: [] });
+      const rows = await prisma.trainerOtherWork.findMany({ where: { trainerId: employeeId }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }] });
+      res.json({ success: true, data: rows });
+    } catch (err) { next(err); }
+  },
+
+  /** Body: { date, category, description, notes? } */
+  async createOtherWork(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      if (!employeeId) throw new AppError('No trainer profile is linked to this account', 403);
+      const { date, category, description, notes } = req.body;
+      if (!date || !category || !description || !String(description).trim()) throw new AppError('date, category and description are required', 400);
+      const row = await prisma.trainerOtherWork.create({
+        data: { trainerId: employeeId, date: new Date(date), category: String(category).trim(), description: String(description).trim(), notes: notes?.trim() || null },
+      });
+      res.json({ success: true, data: row });
+    } catch (err) { next(err); }
+  },
+
+  async updateOtherWork(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const existing = await prisma.trainerOtherWork.findUnique({ where: { id: req.params.id } });
+      if (!existing || existing.trainerId !== employeeId) throw new AppError('Entry not found', 404);
+      const { date, category, description, notes } = req.body;
+      const row = await prisma.trainerOtherWork.update({
+        where: { id: existing.id },
+        data: {
+          date: date ? new Date(date) : undefined,
+          category: category ? String(category).trim() : undefined,
+          description: description ? String(description).trim() : undefined,
+          notes: notes === undefined ? undefined : (notes?.trim() || null),
+        },
+      });
+      res.json({ success: true, data: row });
+    } catch (err) { next(err); }
+  },
+
+  async deleteOtherWork(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const employeeId = req.user!.employeeId;
+      const existing = await prisma.trainerOtherWork.findUnique({ where: { id: req.params.id } });
+      if (!existing || existing.trainerId !== employeeId) throw new AppError('Entry not found', 404);
+      await prisma.trainerOtherWork.delete({ where: { id: existing.id } });
+      res.json({ success: true });
+    } catch (err) { next(err); }
+  },
+
   // ── PROJECTS / FEEDBACK FORMS / ONLINE TESTS — release & conduct ───────────
 
   // ── DAY-WISE STUDY MATERIAL — the trainer releases each day to their sub-batch ──

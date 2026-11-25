@@ -575,7 +575,9 @@ export const studentPortalController = {
         const courseDays = usesDayWiseMaterial(e.schedule.batch?.code) ? allDays.filter((d) => d.courseId === e.schedule.course.id) : [];
         const releasedDays = courseDays.flatMap((d) => {
           const rel = d.releases.find((r) => r.scheduleId === e.scheduleId);
-          return rel ? [{ id: d.id, dayNumber: d.dayNumber, title: d.title, topics: d.topics, releasedAt: rel.releasedAt, materials: d.materials }] : [];
+          // Files are never linked directly: the portal's protected viewer fetches them by id from dayMaterialFile.
+          const mats = d.materials.map((m) => (m.type === 'FILE' ? { id: m.id, title: m.title, type: m.type, notes: m.notes, protected: true } : m));
+          return rel ? [{ id: d.id, dayNumber: d.dayNumber, title: d.title, topics: d.topics, releasedAt: rel.releasedAt, materials: mats }] : [];
         });
         return {
           days: releasedDays,
@@ -601,6 +603,38 @@ export const studentPortalController = {
         };
       });
       res.json({ success: true, data });
+    } catch (err) { next(err); }
+  },
+
+  /**
+   * Streams ONE day-wise study file to a student who is allowed to see it (enrolled in a Batch 19+ sub-batch of the
+   * course AND the trainer has released that day to their sub-batch). Served inline, never cached, so the portal's
+   * viewer can show it without exposing a downloadable link.
+   */
+  async dayMaterialFile(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const studentId = getStudentId(req);
+      const mat = await prisma.courseMaterial.findUnique({ where: { id: req.params.id }, select: { id: true, dayId: true, url: true, type: true, courseId: true, title: true } });
+      if (!mat || !mat.dayId || mat.type !== 'FILE') throw new AppError('File not found', 404);
+
+      const enrollments = await prisma.studentBatchEnrollment.findMany({
+        where: { studentId, status: { not: 'DROPPED' }, schedule: { courseId: mat.courseId } },
+        select: { scheduleId: true, schedule: { select: { batch: { select: { code: true } } } } },
+      });
+      const eligible = enrollments.filter((e) => usesDayWiseMaterial(e.schedule.batch?.code)).map((e) => e.scheduleId);
+      const released = eligible.length
+        ? await prisma.curriculumDayRelease.findFirst({ where: { dayId: mat.dayId, scheduleId: { in: eligible } }, select: { id: true } })
+        : null;
+      if (!released) throw new AppError('This material has not been released to you yet', 403);
+
+      const file = path.join(process.cwd(), 'uploads', 'materials', path.basename(mat.url));
+      if (!fs.existsSync(file)) throw new AppError('File not found', 404);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline');
+      res.setHeader('Cache-Control', 'no-store, private');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      fs.createReadStream(file).on('error', next).pipe(res);
     } catch (err) { next(err); }
   },
 

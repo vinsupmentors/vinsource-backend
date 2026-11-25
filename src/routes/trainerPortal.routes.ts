@@ -30,6 +30,14 @@ router.post('/schedules/:scheduleId/kra', trainerPortalController.createKra);
 router.put('/kra/:id', trainerPortalController.updateKra);
 router.delete('/kra/:id', trainerPortalController.deleteKra);
 
+// Batch KRA (completed sub-batches only) + other (non-class) work
+router.get('/batch-kra', trainerPortalController.myBatchKras);
+router.put('/schedules/:scheduleId/batch-kra', trainerPortalController.saveBatchKra);
+router.get('/other-work', trainerPortalController.listOtherWork);
+router.post('/other-work', trainerPortalController.createOtherWork);
+router.put('/other-work/:id', trainerPortalController.updateOtherWork);
+router.delete('/other-work/:id', trainerPortalController.deleteOtherWork);
+
 // Day-wise study material — release each day to the batch
 router.get('/schedules/:scheduleId/curriculum-days', trainerPortalController.curriculumDays);
 router.post('/schedules/:scheduleId/curriculum-days/:dayId/release', trainerPortalController.releaseCurriculumDay);

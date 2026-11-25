@@ -742,6 +742,8 @@ model Employee {
   trainerAssignments   TrainerAssignment[]  @relation("TrainerAssignments")
   attendanceMarked     StudentAttendance[]  @relation("AttendanceMarker")
   kraEntriesLogged     KRAEntry[]           @relation("KRATrainer")
+  batchKras            TrainerBatchKra[]    @relation("TrainerBatchKra")
+  otherWorks           TrainerOtherWork[]   @relation("TrainerOtherWork")
   studentFeedbacksGiven TrainerFeedback[]   @relation("FeedbackTrainer")
   moduleFeedbacksGiven  ModuleFeedback[]    @relation("ModuleFeedbackTrainer")
   liveClassesCreated    LiveClass[]         @relation("LiveClassCreator")
@@ -2820,6 +2822,7 @@ model BatchCourseSchedule {
   liveClassLinks  LiveClassSchedule[]
   attendances     StudentAttendance[]
   kraEntries      KRAEntry[]
+  batchKras       TrainerBatchKra[]
   tests           ModuleTest[]
   courseFeedbacks CourseFeedback[]
   moduleFeedbacks ModuleFeedback[]
@@ -2938,6 +2941,40 @@ model KRAEntry {
   trainer  Employee?           @relation("KRATrainer", fields: [trainerId], references: [id])
 
   @@unique([scheduleId, track, date, moduleId])
+}
+
+// Trainer's KRA for a whole sub-batch — entered once the batch is marked completed.
+model TrainerBatchKra {
+  id           String   @id @default(uuid())
+  scheduleId   String
+  trainerId    String
+  summary      String   @db.Text
+  achievements String?  @db.Text
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  schedule BatchCourseSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  trainer  Employee            @relation("TrainerBatchKra", fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, trainerId])
+  @@index([trainerId])
+}
+
+// Trainer's non-class work (interview prep, content creation, meetings, ...).
+model TrainerOtherWork {
+  id          String   @id @default(uuid())
+  trainerId   String
+  date        DateTime
+  category    String
+  description String   @db.Text
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  trainer Employee @relation("TrainerOtherWork", fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([trainerId, date])
 }
 
 model ModuleTest {
