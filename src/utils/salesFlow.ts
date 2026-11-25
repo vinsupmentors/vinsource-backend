@@ -1,6 +1,7 @@
 import { LeadStatus, LeadLostReason, LeadActivityStatus } from '@prisma/client';
 import prisma from '../config/database';
 import { resolveStage } from './leadConfig';
+import { markFirstContact } from './leadContact';
 import { closeRoom } from '../services/liveKit.service';
 
 /**
@@ -110,6 +111,7 @@ export async function applyDemoOutcome(leadId: string, outcome: string, actorId?
       lastContactAt: new Date(),
     },
   });
+  await markFirstContact(leadId);
   await syncFollowUpTask(leadId, lost ? null : lead.assignedToId, lost ? null : next, actorId, `After demo — ${plan.label}`);
   const before = lead.stageKey || lead.status;
   await history(leadId, actorId, 'DEMO', `Demo outcome: ${plan.label} → stage ${stage.label}${next && !lost ? `, follow-up ${fmtIST(next)}` : ''}`, before, stage.stageKey || stage.status);

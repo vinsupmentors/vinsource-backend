@@ -24,6 +24,7 @@ import { ensureReminderForStage, moveDemoReminder, syncFollowUpTask, moveOpenTas
 // SALES=ADMIN sees everything, same as before.
 import { visibleEmployeeIds, isPresales } from '../utils/salesScope';
 import { emailAdvisorNewLeads } from '../utils/leadAssignEmail';
+import { markFirstContact } from '../utils/leadContact';
 
 async function isSalesAdmin(req: AuthRequest): Promise<boolean> {
   if (!req.user) return false;
@@ -150,7 +151,7 @@ async function listStudentsSummary(studentWhere: Record<string, unknown>) {
 function leadOrderBy(sortBy: unknown, sortDir: unknown) {
   const dir = String(sortDir) === 'asc' ? 'asc' : 'desc';
   const col = String(sortBy || '');
-  const plain = ['name', 'phone', 'email', 'status', 'source', 'courseInterest', 'scoutKey', 'createdAt', 'nextFollowUpAt', 'lastContactAt'];
+  const plain = ['name', 'phone', 'email', 'status', 'source', 'courseInterest', 'scoutKey', 'createdAt', 'nextFollowUpAt', 'lastContactAt', 'firstContactedAt', 'assignedAt'];
   if (plain.includes(col)) return [{ [col]: dir }, { createdAt: 'desc' as const }] as never;
   if (col === 'assignedTo') return [{ assignedTo: { firstName: dir } }, { createdAt: 'desc' as const }] as never;
   return { createdAt: 'desc' as const } as never;
@@ -455,6 +456,7 @@ export const salesController = {
               stageKey,
               lostReason,
               lastContactAt,
+              firstContactedAt: lastContactAt,
               nextFollowUpAt,
               ...(createdAt ? { createdAt } : {}),
             },
@@ -540,7 +542,7 @@ export const salesController = {
       await ensureSource(source);
 
       const lead = await prisma.lead.create({
-        data: { name, phone, phoneKey: leadPhoneKey(phone), email, source, courseInterest, city: city || null, assignedToId, campaignId, notes, scoutKey: scoutKey || null, createdById: req.user?.employeeId },
+        data: { name, phone, phoneKey: leadPhoneKey(phone), email, source, courseInterest, city: city || null, assignedToId, assignedAt: assignedToId ? new Date() : undefined, campaignId, notes, scoutKey: scoutKey || null, createdById: req.user?.employeeId },
         include: { assignedTo: { select: employeeSelect } },
       });
       const assignee = lead.assignedTo ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}` : 'nobody';
@@ -579,6 +581,7 @@ export const salesController = {
         where: { id: req.params.id },
         data: {
           name, phone, phoneKey: phone ? leadPhoneKey(phone) : undefined, email, source, courseInterest, assignedToId, campaignId, notes,
+          ...(assignedToId !== undefined && (assignedToId || null) !== before.assignedToId ? { assignedAt: assignedToId ? new Date() : null } : {}),
           status: newStage ? (newStage.status as LeadStatus) : undefined,
           stageKey: newStage ? newStage.stageKey : undefined,
           ...(newStage && newStage.stageKey !== 'CUSTOM_UNRESPONSIVE' ? { dnpCount: 0 } : {}),
@@ -870,6 +873,8 @@ export const salesController = {
         await prisma.lead.update({ where: { id: leadId }, data: leadData });
         if (noteText) await prisma.leadNote.create({ data: { leadId, authorId: req.user?.employeeId || null, body: noteText } }).catch(() => {});
       }
+
+      await markFirstContact(leadId, touched);
 
       const actor = req.user?.employeeId;
       const fmt = (d: Date | null) => (d ? d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'none');

@@ -1487,6 +1487,7 @@ model Lead {
   // call log entry refreshes lastContactAt, and carries the BDA's chosen
   // next-follow-up date forward into nextFollowUpAt ("Reminder" column).
   lastContactAt  DateTime?
+  firstContactedAt DateTime? // first time anyone reached out (call / activity) — set once, never moved
   dnpCount       Int        @default(0) // consecutive DNP updates; resets when the lead is reached
   nextFollowUpAt DateTime?
   // Latest "Update Status" from Log Activity (DNP / Follow-up / ...). `status`

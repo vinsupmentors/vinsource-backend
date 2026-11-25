@@ -8,6 +8,7 @@ import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
 import { DeviceRequest } from '../middleware/deviceAuth';
 import { normalizePhone } from '../utils/phone';
+import { markFirstContact } from '../utils/leadContact';
 import { getEffectiveAccess } from '../utils/moduleAccess';
 import { CALL_RECORDING_DIR } from '../middleware/upload';
 import { enqueueCallTranscript } from '../services/transcription.service';
@@ -122,6 +123,7 @@ export const callTrackingController = {
 
       if (matchedLeadId) {
         await prisma.lead.update({ where: { id: matchedLeadId }, data: { lastContactAt: calledAt } });
+        await markFirstContact(matchedLeadId, calledAt);
       }
 
       res.status(201).json({ success: true, data: { id: log.id, matched: !!matchedLeadId } });
@@ -261,6 +263,7 @@ export const callTrackingController = {
 
       const updated = await prisma.leadCallLog.update({ where: { id: call.id }, data: { leadId } });
       await prisma.lead.update({ where: { id: leadId }, data: { lastContactAt: call.calledAt } });
+      await markFirstContact(leadId, call.calledAt);
       res.json({ success: true, data: updated });
     } catch (err) { next(err); }
   },
@@ -283,6 +286,8 @@ export const callTrackingController = {
             source: 'Inbound Call',
             assignedToId: call.calledById,
             lastContactAt: call.calledAt,
+            firstContactedAt: call.calledAt,
+            assignedAt: new Date(),
           },
         });
         await tx.leadCallLog.update({ where: { id: call.id }, data: { leadId: newLead.id } });

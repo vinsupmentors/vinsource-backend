@@ -23,6 +23,8 @@ export const LEAD_FILTER_FIELDS: FieldMap = {
   scoutKey: { type: 'select', path: ['scoutKey'], nullable: true },
   createdAt: { type: 'date', path: ['createdAt'] },
   lastContactAt: { type: 'date', path: ['lastContactAt'], nullable: true },
+  firstContactedAt: { type: 'date', path: ['firstContactedAt'], nullable: true },
+  assignedAt: { type: 'date', path: ['assignedAt'], nullable: true },
   nextFollowUpAt: { type: 'date', path: ['nextFollowUpAt'], nullable: true },
   // Any demo of the lead matches (to-many relation).
   demoMode: { type: 'select', path: ['mode'], enumValues: ['ONLINE', 'OFFLINE'], wrap: (f) => ({ demos: { some: f } }) },

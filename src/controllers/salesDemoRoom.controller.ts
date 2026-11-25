@@ -12,6 +12,7 @@ import { transcriptionEnabled } from '../services/transcription.service';
 import { closeDemoTask, applyDemoOutcome, OUTCOME_PLAN, fmtIST } from '../utils/salesFlow';
 import { resolveStage } from '../utils/leadConfig';
 import { isPresales } from '../utils/salesScope';
+import { markFirstContact } from '../utils/leadContact';
 
 /**
  * Sales online demos hosted inside the portal. The BDA hosts the room, the
@@ -176,6 +177,7 @@ export const salesDemoRoomController = {
       await closeDemoTask(d.id, 'DONE');
       const stage = await resolveStage('DEMO_DONE');
       await prisma.lead.update({ where: { id: d.leadId }, data: { status: stage.status as never, stageKey: stage.stageKey, activityStatus: 'DEMO_OVER', statusKey: null, lastContactAt: new Date() } });
+      await markFirstContact(d.leadId);
       await prisma.leadHistory.create({ data: { leadId: d.leadId, actorId: req.user?.employeeId || null, type: 'DEMO', summary: `Online demo ${d.bookingNumber} ended by host` } }).catch(() => {});
       if (outcome) await applyDemoOutcome(d.leadId, String(outcome), req.user?.employeeId, followUpAt ? new Date(followUpAt) : null);
       res.json({ success: true });
