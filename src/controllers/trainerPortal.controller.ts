@@ -738,15 +738,15 @@ export const trainerPortalController = {
     } catch (err) { next(err); }
   },
 
-  /** Body: { date, category, description, notes? } */
+  /** Body: { date, description, notes? } */
   async createOtherWork(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const employeeId = req.user!.employeeId;
       if (!employeeId) throw new AppError('No trainer profile is linked to this account', 403);
-      const { date, category, description, notes } = req.body;
-      if (!date || !category || !description || !String(description).trim()) throw new AppError('date, category and description are required', 400);
+      const { date, description, notes } = req.body;
+      if (!date || !description || !String(description).trim()) throw new AppError('date and description are required', 400);
       const row = await prisma.trainerOtherWork.create({
-        data: { trainerId: employeeId, date: new Date(date), category: String(category).trim(), description: String(description).trim(), notes: notes?.trim() || null },
+        data: { trainerId: employeeId, date: new Date(date), description: String(description).trim(), notes: notes?.trim() || null },
       });
       res.json({ success: true, data: row });
     } catch (err) { next(err); }
@@ -757,12 +757,11 @@ export const trainerPortalController = {
       const employeeId = req.user!.employeeId;
       const existing = await prisma.trainerOtherWork.findUnique({ where: { id: req.params.id } });
       if (!existing || existing.trainerId !== employeeId) throw new AppError('Entry not found', 404);
-      const { date, category, description, notes } = req.body;
+      const { date, description, notes } = req.body;
       const row = await prisma.trainerOtherWork.update({
         where: { id: existing.id },
         data: {
           date: date ? new Date(date) : undefined,
-          category: category ? String(category).trim() : undefined,
           description: description ? String(description).trim() : undefined,
           notes: notes === undefined ? undefined : (notes?.trim() || null),
         },

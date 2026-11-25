@@ -2966,7 +2966,7 @@ model TrainerOtherWork {
   id          String   @id @default(uuid())
   trainerId   String
   date        DateTime
-  category    String
+  category    String?
   description String   @db.Text
   notes       String?  @db.Text
   createdAt   DateTime @default(now())
